@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  color: #1f2937;
+  background: #f4f6f8;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 1180px; background: #f4f6f8; }
+button, input, textarea, select { font: inherit; }
+
+.page-shell { display: flex; flex-direction: column; gap: 18px; }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.page-title { margin: 0; color: #172033; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; }
+.page-subtitle { margin: 6px 0 0; color: #7a8495; font-size: 13px; }
+.surface { border: 1px solid #e8ebef; border-radius: 16px; background: #fff; box-shadow: 0 8px 28px rgba(31, 41, 55, 0.045); }
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; }
+.table-card { padding: 6px 16px 16px; }
+.table-footer { display: flex; justify-content: flex-end; padding-top: 16px; }
+.muted { color: #8a94a6; }
+.status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #94a3b8; }
+.status-dot.active { background: #28a06a; }
+
+.el-button { border-radius: 9px; }
+.el-input__wrapper, .el-select__wrapper, .el-textarea__inner { border-radius: 9px; box-shadow: 0 0 0 1px #e1e5ea inset; }
+.el-table { --el-table-border-color: #eef0f3; --el-table-header-bg-color: #fafbfc; --el-table-row-hover-bg-color: #f7f9fc; }
+.el-dialog { border-radius: 18px; overflow: hidden; }
+
