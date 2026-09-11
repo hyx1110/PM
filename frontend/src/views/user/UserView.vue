@@ -22,7 +22,18 @@ const roles = ref<Role[]>([])
 const dialogVisible = ref(false)
 const editingId = ref<number>()
 const formRef = ref<FormInstance>()
-const emptyForm = (): UserPayload => ({ username: '', password: '', name: '', email: '', phone: '', status: 'active', role_ids: [] })
+const emptyForm = (): UserPayload => ({
+  username: '',
+  password: '',
+  name: '',
+  email: '',
+  phone: '',
+  department_id: null,
+  organization_id: null,
+  supervisor_id: null,
+  status: 'active',
+  role_ids: [],
+})
 const form = reactive<UserPayload>(emptyForm())
 const rules: FormRules = {
   username: [
@@ -85,18 +96,40 @@ function openEdit(row: User) {
     name: row.name,
     email: row.email || '',
     phone: row.phone || '',
-    department_id: row.department_id,
-    organization_id: row.organization_id,
-    supervisor_id: row.supervisor_id,
+    department_id: row.department_id ?? null,
+    organization_id: row.organization_id ?? null,
+    supervisor_id: row.supervisor_id ?? null,
     status: row.status,
     role_ids: [...row.role_ids],
   })
   dialogVisible.value = true
 }
 
+function clearToNull() {
+  return null
+}
+
+function handleDepartmentChange(departmentId: number | null | undefined) {
+  form.department_id = departmentId ?? null
+  if (
+    form.organization_id
+    && !flatOrganizations.value.some(
+      (organization) => organization.id === form.organization_id && organization.department_id === form.department_id,
+    )
+  ) {
+    form.organization_id = null
+  }
+}
+
 async function save() {
+  if (!editingId.value && form.username) form.username = form.username.normalize('NFKC').trim()
   if (!(await formRef.value?.validate())) return
-  const payload = { ...form }
+  const payload = {
+    ...form,
+    department_id: form.department_id ?? null,
+    organization_id: form.organization_id ?? null,
+    supervisor_id: form.supervisor_id ?? null,
+  }
   if (!payload.password) delete payload.password
   try {
     if (editingId.value) {
@@ -151,15 +184,15 @@ onMounted(async () => { await loadOptions(); await load() })
     <el-dialog v-model="dialogVisible" :title="editingId?'编辑用户':'新增用户'" width="620px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
-          <el-form-item label="用户名" prop="username"><el-input v-model="form.username" :disabled="Boolean(editingId)" /></el-form-item>
+          <el-form-item label="用户名" prop="username"><el-input v-model.trim="form.username" :disabled="Boolean(editingId)" /></el-form-item>
           <el-form-item :label="editingId?'重置密码（留空不修改）':'初始密码'" prop="password"><el-input v-model="form.password" type="password" show-password /></el-form-item>
           <el-form-item label="姓名" prop="name"><el-input v-model="form.name" /></el-form-item>
           <el-form-item label="邮箱" prop="email"><el-input v-model="form.email" /></el-form-item>
           <el-form-item label="手机号"><el-input v-model="form.phone" /></el-form-item>
           <el-form-item label="状态"><el-select v-model="form.status" style="width:100%"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select></el-form-item>
-          <el-form-item label="所属部门"><el-select v-model="form.department_id" clearable style="width:100%"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
-          <el-form-item label="所属组织"><el-select v-model="form.organization_id" clearable filterable style="width:100%"><el-option v-for="item in flatOrganizations.filter(v=>!form.department_id||v.department_id===form.department_id)" :key="item.id" :label="item.label" :value="item.id" /></el-select></el-form-item>
-          <el-form-item label="直属主管"><el-select v-model="form.supervisor_id" clearable filterable style="width:100%"><el-option v-for="item in users.filter(v=>v.id!==editingId)" :key="item.id" :label="`${item.name} (${item.username})`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="所属部门"><el-select v-model="form.department_id" clearable :value-on-clear="clearToNull" style="width:100%" @change="handleDepartmentChange"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="所属组织"><el-select v-model="form.organization_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in flatOrganizations.filter(v=>!form.department_id||v.department_id===form.department_id)" :key="item.id" :label="item.label" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="直属主管"><el-select v-model="form.supervisor_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in users.filter(v=>v.id!==editingId)" :key="item.id" :label="`${item.name} (${item.username})`" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="系统角色"><el-select v-model="form.role_ids" multiple style="width:100%"><el-option v-for="item in roles" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
         </div>
       </el-form>

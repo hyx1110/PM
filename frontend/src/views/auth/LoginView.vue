@@ -10,6 +10,7 @@ const router = useRouter()
 const userStore = useUserStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const isComposing = ref(false)
 const form = reactive({ username: '', password: '' })
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -17,6 +18,10 @@ const rules: FormRules = {
 }
 
 async function submit() {
+  if (loading.value) return
+  // The API performs Unicode normalization and retains a fallback for legacy
+  // usernames, so the UI only removes accidental surrounding whitespace.
+  form.username = form.username.trim()
   if (!(await formRef.value?.validate())) return
   loading.value = true
   try {
@@ -26,6 +31,13 @@ async function submit() {
   } finally {
     loading.value = false
   }
+}
+
+function handleEnter(event: KeyboardEvent) {
+  // Enter is also used to confirm a Chinese IME candidate. In that state the
+  // input value has not necessarily been committed yet, so it must not submit.
+  if (isComposing.value || event.isComposing || event.keyCode === 229) return
+  void submit()
 }
 </script>
 
@@ -42,8 +54,8 @@ async function submit() {
         <div class="logo">协</div>
         <h2>欢迎回来</h2>
         <p>登录项目任务与人力协同管理系统</p>
-        <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @keyup.enter="submit">
-          <el-form-item label="用户名" prop="username"><el-input v-model="form.username" size="large" placeholder="请输入用户名" /></el-form-item>
+        <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @compositionstart="isComposing=true" @compositionend="isComposing=false" @keydown.enter="handleEnter">
+          <el-form-item label="用户名" prop="username"><el-input v-model.trim="form.username" size="large" placeholder="请输入用户名" /></el-form-item>
           <el-form-item label="密码" prop="password"><el-input v-model="form.password" size="large" type="password" show-password placeholder="请输入密码" /></el-form-item>
           <el-button type="primary" size="large" :loading="loading" class="submit" @click="submit">登录</el-button>
         </el-form>
@@ -69,4 +81,3 @@ async function submit() {
 .submit { width: 100%; margin-top: 8px; border-radius: 10px; background: #355f8d; }
 .hint { margin-top: 22px; color: #a2aab6; font-size: 11px; line-height: 1.6; }
 </style>
-

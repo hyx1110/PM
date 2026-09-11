@@ -4,13 +4,13 @@ export interface User {
   id: number
   username: string
   name: string
-  email?: string
-  phone?: string
-  department_id?: number
+  email?: string | null
+  phone?: string | null
+  department_id?: number | null
   department_name?: string
-  organization_id?: number
+  organization_id?: number | null
   organization_name?: string
-  supervisor_id?: number
+  supervisor_id?: number | null
   supervisor_name?: string
   status: string
   roles: string[]
@@ -23,8 +23,8 @@ export interface UserOption {
   id: number
   username: string
   name: string
-  department_id?: number
-  organization_id?: number
+  department_id?: number | null
+  organization_id?: number | null
 }
 
 export interface UserQuery extends PageQuery {
@@ -39,9 +39,9 @@ export interface UserPayload {
   name: string
   email?: string
   phone?: string
-  department_id?: number
-  organization_id?: number
-  supervisor_id?: number
+  department_id?: number | null
+  organization_id?: number | null
+  supervisor_id?: number | null
   status: string
   role_ids?: number[]
 }
