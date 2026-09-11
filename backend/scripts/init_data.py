@@ -25,6 +25,12 @@ PERMISSIONS = {
     "process_report:view": ("查看项目过程报表", "report"),
     "evaluation:edit": ("维护达成评价", "evaluation"),
     "operation_log:view": ("查看操作日志", "operation_log"),
+    "risk:view": ("查看风险中心", "risk"),
+    "risk:handle": ("处理风险", "risk"),
+    "notification:view": ("查看站内通知", "notification"),
+    "import:manage": ("管理数据导入", "data_exchange"),
+    "export:download": ("下载业务报表", "data_exchange"),
+    "analytics:view": ("查看经营分析", "analytics"),
 }
 
 ROLES = {
@@ -35,6 +41,8 @@ ROLES = {
             "dashboard:view", "user:view", "organization:view", "role:view", "project:view", "project:edit",
             "task:view", "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit",
             "process_report:view", "evaluation:edit", "operation_log:view",
+            "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
+            "analytics:view",
         },
     ),
     "functional_manager": (
@@ -43,6 +51,8 @@ ROLES = {
             "dashboard:view", "user:view", "organization:view", "project:view", "project:edit", "task:view",
             "task:edit", "schedule:view", "schedule:edit", "execution:view", "process_report:view",
             "evaluation:edit",
+            "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
+            "analytics:view",
         },
     ),
     "project_manager": (
@@ -51,11 +61,15 @@ ROLES = {
             "dashboard:view", "project:view", "project:edit", "task:view", "task:edit",
             "schedule:view", "schedule:edit", "execution:view", "execution:edit", "process_report:view",
             "evaluation:edit",
+            "risk:view", "risk:handle", "notification:view", "export:download", "analytics:view",
         },
     ),
     "project_member": (
         "项目成员",
-        {"dashboard:view", "project:view", "task:view", "schedule:view", "execution:view", "execution:edit"},
+        {
+            "dashboard:view", "project:view", "task:view", "schedule:view", "execution:view",
+            "execution:edit", "risk:view", "notification:view",
+        },
     ),
 }
 

@@ -56,4 +56,8 @@ export const api = {
   delete<T>(url: string, config?: AxiosRequestConfig) {
     return unwrap<T>(client.delete(url, config))
   },
+  async download(url: string, config?: AxiosRequestConfig) {
+    const response = await client.get<Blob>(url, { ...config, responseType: 'blob' })
+    return response.data
+  },
 }

@@ -1,4 +1,11 @@
 services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
   mysql:
     image: mysql:8.4
     restart: unless-stopped
@@ -19,6 +26,16 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-project_user}:${MYSQL_PASSWORD:-change_me}@mysql:3306/${MYSQL_DATABASE:-project_management}?charset=utf8mb4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && python -m scripts.init_data"]
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -26,11 +43,43 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-project_user}:${MYSQL_PASSWORD:-change_me}@mysql:3306/${MYSQL_DATABASE:-project_management}?charset=utf8mb4
     depends_on:
-      mysql:
-        condition: service_healthy
-    command: ["sh", "-c", "alembic upgrade head && python -m scripts.init_data && gunicorn app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --workers 2"]
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    command: ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--workers", "2"]
     volumes:
       - backend_logs:/app/logs
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-project_user}:${MYSQL_PASSWORD:-change_me}@mysql:3306/${MYSQL_DATABASE:-project_management}?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    volumes:
+      - backend_logs:/app/logs
+
+  beat:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-project_user}:${MYSQL_PASSWORD:-change_me}@mysql:3306/${MYSQL_DATABASE:-project_management}?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    command: ["celery", "-A", "app.tasks.celery_app:celery_app", "beat", "--loglevel=INFO"]
 
   frontend:
     build:
@@ -44,4 +93,5 @@ services:
 
 volumes:
   mysql_data:
+  redis_data:
   backend_logs:

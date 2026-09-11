@@ -1,19 +1,17 @@
-# V1.0 后端
+# V2.0 后端
 
-FastAPI 后端按照 `Router → Service → Repository → Model` 分层。Router 只负责 HTTP 参数与依赖注入，Service 管理业务规则和事务，Repository 封装查询，Pydantic Schema 与 SQLAlchemy Model 分离。
+FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并在 V2.0 增加 Celery 后台任务层和 Excel 数据交换服务。
 
-## 配置
+## 主要模块
 
-复制 `.env.example` 为 `.env`，重点配置：
+- `app/api/v1`：认证、基础主数据、项目/任务/排期/执行，以及 V2 风险、通知、数据交换和分析接口。
+- `app/services/risk_service.py`：风险发现、指纹去重、数据范围和处理闭环。
+- `app/services/notification_service.py`：站内信、偏好与邮件/机器人投递。
+- `app/services/import_export_service.py`：标准模板、逐行导入和业务报表导出。
+- `app/tasks`：风险扫描、临期提醒和外部通知的 Celery 任务。
+- `alembic/versions/20260910_0002_v2_features.py`：V1.0 到 V2.0 增量迁移。
 
-- `DATABASE_URL`：MySQL SQLAlchemy 连接字符串。
-- `SECRET_KEY`：JWT 签名密钥。
-- `ACCESS_TOKEN_EXPIRE_MINUTES`：访问令牌有效期。
-- `CORS_ORIGINS`：逗号分隔的前端来源。
-- `STANDARD_WORK_HOURS`：每日标准可用工时。
-- `INITIAL_ADMIN_*`：首次初始化管理员信息。
-
-## 维护者执行命令
+## 维护者执行
 
 ```powershell
 python -m venv .venv
@@ -24,24 +22,29 @@ python -m scripts.init_data
 uvicorn app.main:app --reload
 ```
 
-生产环境建议从 `backend` 目录运行：
-
-```bash
-gunicorn app.main:app -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --workers 2
-```
-
-## 数据库迁移
-
-首版迁移位于 `alembic/versions/20260909_0001_initial_schema.py`。后续修改模型后创建新的 revision：
+后台任务：
 
 ```powershell
-alembic revision --autogenerate -m "describe change"
-alembic upgrade head
+celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO
+celery -A app.tasks.celery_app:celery_app beat --loglevel=INFO
 ```
 
-不要重写已经进入共享环境的迁移文件。
+## 配置重点
 
-## 测试
+除 V1 配置外，V2 新增 `REDIS_URL`、`RISK_STALE_DAYS`、`IMPORT_MAX_MB`、`IMPORT_DEFAULT_PASSWORD`、`SMTP_*`、`WECOM_WEBHOOK_URL` 和 `DINGTALK_WEBHOOK_URL`。外部通知均为可选，未配置时站内通知可正常独立工作。
 
-测试文件已经归档在 `tests/`，本次交付未执行。维护者可在配置好独立测试数据库后运行 `pytest`。排期冲突公式的边界样例位于 `tests/test_schedule_overlap_rules.py`。
+## 数据迁移
+
+不要修改已经归档的 `20260909_0001_initial_schema.py`。从 V1 升级时执行：
+
+```powershell
+alembic upgrade head
+python -m scripts.init_data
+```
+
+第二条命令会补齐 V2 权限和系统角色默认授权，且可重复执行。
+
+## 测试说明
+
+本次 V2.0 文件交付没有安装依赖、执行迁移或运行测试。维护者配置独立测试数据库后，可自行运行 `pytest`，并按照根目录 `docs/V2_SCOPE.md` 增补/执行 V2 验收。
 

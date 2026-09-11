@@ -51,6 +51,8 @@ class ScheduleResponse(ORMModel):
     remark: str | None
     rejection_reason: str | None
     created_by: int
+    source_booking_id: int | None = None
+    version: int = 1
     has_conflict: bool = False
     created_at: datetime
     updated_at: datetime
@@ -71,3 +73,48 @@ class ScheduleConflict(ORMModel):
     start_time: datetime
     end_time: datetime
 
+
+class ScheduleMove(ORMModel):
+    start_time: datetime
+    end_time: datetime
+    expected_version: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_time(self):
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be later than start_time")
+        return self
+
+
+class ScheduleBatchCreate(ORMModel):
+    user_ids: list[int] = Field(min_length=1, max_length=100)
+    project_id: int
+    task_id: int
+    start_time: datetime
+    end_time: datetime
+    planned_hours: Decimal | None = Field(default=None, ge=0)
+    remark: str | None = None
+
+    @model_validator(mode="after")
+    def validate_batch(self):
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be later than start_time")
+        if len(set(self.user_ids)) != len(self.user_ids):
+            raise ValueError("user_ids must not contain duplicates")
+        return self
+
+
+class ScheduleCopyWeek(ORMModel):
+    source_week_start: datetime
+    target_week_start: datetime
+    user_ids: list[int] = []
+    include_statuses: list[str] = ["draft", "pending", "confirmed"]
+
+    @model_validator(mode="after")
+    def validate_weeks(self):
+        if self.source_week_start == self.target_week_start:
+            raise ValueError("source and target week must be different")
+        invalid = set(self.include_statuses) - SCHEDULE_STATUSES
+        if invalid:
+            raise ValueError(f"invalid statuses: {', '.join(sorted(invalid))}")
+        return self

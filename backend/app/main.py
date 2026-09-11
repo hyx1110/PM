@@ -18,7 +18,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title=settings.app_name,
-    version="1.0.0",
+    version="2.0.0",
     debug=settings.debug,
     lifespan=lifespan,
     docs_url="/docs",
@@ -39,4 +39,4 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 @app.get("/health", tags=["系统"])
 def health_check():
-    return success({"status": "healthy", "version": "1.0.0"})
+    return success({"status": "healthy", "version": "2.0.0"})

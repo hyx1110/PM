@@ -1,5 +1,7 @@
 from app.models.evaluation import TaskEvaluation
 from app.models.execution import ExecutionRecord
+from app.models.import_job import ImportJob
+from app.models.notification import Notification, NotificationPreference
 from app.models.operation_log import OperationLog
 from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
@@ -12,6 +14,9 @@ from app.models.user import User
 __all__ = [
     "Department",
     "ExecutionRecord",
+    "ImportJob",
+    "Notification",
+    "NotificationPreference",
     "OperationLog",
     "Organization",
     "Permission",
@@ -26,4 +31,3 @@ __all__ = [
     "User",
     "UserRole",
 ]
-

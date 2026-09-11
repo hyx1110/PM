@@ -26,4 +26,7 @@ class ScheduleBooking(TimestampMixin, Base):
     remark: Mapped[str | None] = mapped_column(Text)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
-
+    source_booking_id: Mapped[int | None] = mapped_column(
+        ForeignKey("schedule_bookings.id", ondelete="SET NULL"), index=True
+    )
+    version: Mapped[int] = mapped_column(nullable=False, default=1)

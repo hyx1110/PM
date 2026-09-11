@@ -7,7 +7,14 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user, require_permission
 from app.core.responses import success
 from app.models.user import User
-from app.schemas.schedule import ScheduleCreate, ScheduleDecision, ScheduleUpdate
+from app.schemas.schedule import (
+    ScheduleBatchCreate,
+    ScheduleCopyWeek,
+    ScheduleCreate,
+    ScheduleDecision,
+    ScheduleMove,
+    ScheduleUpdate,
+)
 from app.services import schedule_service
 
 router = APIRouter(prefix="/schedules", tags=["人力预约"])
@@ -54,6 +61,24 @@ def create_schedule(
     return success(schedule_service.schedule_detail(db, item.id, current_user))
 
 
+@router.post("/batch")
+def batch_create_schedules(
+    payload: ScheduleBatchCreate,
+    current_user: User = Depends(require_permission("schedule:edit")),
+    db: Session = Depends(get_db),
+):
+    return success(schedule_service.batch_create_schedules(db, payload, current_user))
+
+
+@router.post("/copy-week")
+def copy_week(
+    payload: ScheduleCopyWeek,
+    current_user: User = Depends(require_permission("schedule:edit")),
+    db: Session = Depends(get_db),
+):
+    return success(schedule_service.copy_week(db, payload, current_user))
+
+
 @router.get("/{schedule_id}")
 def get_schedule(
     schedule_id: int,
@@ -71,6 +96,17 @@ def update_schedule(
     db: Session = Depends(get_db),
 ):
     schedule_service.update_schedule(db, schedule_id, payload, current_user)
+    return success(schedule_service.schedule_detail(db, schedule_id, current_user))
+
+
+@router.post("/{schedule_id}/move")
+def move_schedule(
+    schedule_id: int,
+    payload: ScheduleMove,
+    current_user: User = Depends(require_permission("schedule:edit")),
+    db: Session = Depends(get_db),
+):
+    schedule_service.move_schedule(db, schedule_id, payload, current_user)
     return success(schedule_service.schedule_detail(db, schedule_id, current_user))
 
 
@@ -114,4 +150,3 @@ def reject_schedule(
 ):
     schedule_service.reject_schedule(db, schedule_id, payload, current_user)
     return success(schedule_service.schedule_detail(db, schedule_id, current_user))
-

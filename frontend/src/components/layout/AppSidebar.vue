@@ -3,12 +3,16 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Calendar,
+  Bell,
   Collection,
   DataAnalysis,
   Document,
   HomeFilled,
   OfficeBuilding,
   Tickets,
+  TrendCharts,
+  UploadFilled,
+  WarningFilled,
   User,
   UserFilled,
 } from '@element-plus/icons-vue'
@@ -25,8 +29,13 @@ const menuItems = computed(() => [
   { path: '/projects', label: '项目管理', icon: Collection, permission: 'project:view' },
   { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:view' },
   { path: '/schedules', label: '任务共享看板', icon: Calendar, permission: 'schedule:view' },
+  { path: '/workload', label: '人员负载分析', icon: TrendCharts, permission: 'analytics:view' },
+  { path: '/risks', label: '风险中心', icon: WarningFilled, permission: 'risk:view' },
   { path: '/executions', label: '任务执行', icon: Document, permission: 'execution:view' },
   { path: '/reports/process', label: '项目过程报表', icon: DataAnalysis, permission: 'process_report:view' },
+  { path: '/reports/analytics', label: '经营分析报表', icon: DataAnalysis, permission: 'analytics:view' },
+  { path: '/data-exchange', label: '数据导入导出', icon: UploadFilled, permission: 'export:download' },
+  { path: '/notifications', label: '通知中心', icon: Bell, permission: 'notification:view' },
   { path: '/operation-logs', label: '操作日志', icon: Document, permission: 'operation_log:view' },
 ].filter((item) => userStore.hasPermission(item.permission)))
 
@@ -42,7 +51,7 @@ const activePath = computed(() => {
       <div class="brand-mark">协</div>
       <div>
         <strong>项目协同</strong>
-        <span>V1.0</span>
+        <span>V2.0</span>
       </div>
     </div>
     <el-menu :default-active="activePath" router class="menu">
@@ -61,9 +70,8 @@ const activePath = computed(() => {
 .brand-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 11px; background: #355f8d; color: white; font-weight: 700; box-shadow: 0 6px 15px rgba(53,95,141,.2); }
 .brand strong { display: block; color: #172033; font-size: 15px; }
 .brand span { color: #a0a8b5; font-size: 11px; }
-.menu { flex: 1; border-right: 0; padding: 8px 12px; }
+.menu { flex: 1; overflow-y: auto; border-right: 0; padding: 8px 12px; }
 .el-menu-item { height: 45px; margin-bottom: 4px; border-radius: 10px; color: #657083; }
 .el-menu-item.is-active { background: #edf3f9; color: #315f8e; font-weight: 600; }
 .sidebar-foot { padding: 20px 24px; color: #b0b7c1; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 </style>
-

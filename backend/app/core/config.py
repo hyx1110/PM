@@ -15,7 +15,19 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 480
     cors_origins: str = "http://localhost:5173"
     timezone: str = "Asia/Shanghai"
-    standard_work_hours: float = 8.0
+    standard_work_hours: float = Field(default=8.0, gt=0)
+    risk_stale_days: int = Field(default=7, ge=1)
+    import_max_mb: int = Field(default=10, ge=1, le=100)
+    import_default_password: str = Field(default="ChangeMe123!", min_length=8)
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    smtp_use_tls: bool = True
+    wecom_webhook_url: str | None = None
+    dingtalk_webhook_url: str | None = None
     initial_admin_username: str = "admin"
     initial_admin_password: str = "ChangeMe123!"
     initial_admin_name: str = "系统管理员"

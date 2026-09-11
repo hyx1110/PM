@@ -1,40 +1,36 @@
-# V1.0 前端
+# V2.0 前端
 
-前端使用 Vue 3 Composition API、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、Tailwind CSS 和 Day.js。
+前端使用 Vue 3 Composition API、TypeScript、Vite、Vue Router、Pinia、Axios、Element Plus、Tailwind CSS 和 Day.js。V2.0 不新增图表依赖，驾驶舱和分析页使用原生 CSS 图形，避免扩大前端依赖面。
 
-## 环境变量
+## V2 页面
 
-复制 `.env.example` 为 `.env`：
+- `views/dashboard`：管理驾驶舱。
+- `views/schedule`：日/周/月共享看板、拖动、批量排期、复制上周。
+- `views/workload`：人员负载与项目占比。
+- `views/risk`：风险筛选、扫描和处理。
+- `views/notification`：站内通知与多渠道偏好。
+- `views/data-exchange`：Excel 模板、导入任务、错误明细和报表导出。
+- `views/analytics`：经营分析报表。
 
-```text
-VITE_API_BASE_URL=/api/v1
-VITE_APP_TITLE=项目任务与人力协同管理系统
-```
-
-## 维护者执行命令
+## 维护者执行
 
 ```powershell
 npm install
 npm run dev
 ```
 
-类型检查和生产构建：
+维护者自行检查和构建：
 
 ```powershell
 npm run type-check
 npm run build
 ```
 
-本次交付没有执行上述命令。
+本次 V2.0 文件交付没有运行上述命令。
 
-## 目录约定
+## 交互约定
 
-- `src/api`：统一 Axios 客户端和领域 API。
-- `src/types`：与后端请求、响应对应的 TypeScript 类型。
-- `src/stores`：登录态、当前用户与权限判断。
-- `src/router`：路由、登录守卫和页面权限。
-- `src/components/schedule`：共享看板时间轴、人员行、预约和冲突组件。
-- `src/views`：按业务领域划分页面。
-
-401 响应会清理本地 Token 并跳转登录；其他普通接口错误统一提示；409 排期冲突由共享看板展示结构化冲突详情。
-
+- 共享看板拖动排期时提交当前 `version`；服务端发现并发变更返回 `40903`，前端提示刷新。
+- 排期冲突沿用 `40901` 和结构化 `conflicts`，批量排期保持原子冲突检查，复制周排期则跳过冲突项并返回明细。
+- 文件下载使用 Blob；上传只接受 `.xlsx`。
+- 通知角标在主框架加载时读取未读数，完整阅读和偏好设置在通知中心完成。

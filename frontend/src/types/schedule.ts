@@ -17,6 +17,8 @@ export interface Schedule {
   remark?: string
   rejection_reason?: string
   created_by: number
+  source_booking_id?: number
+  version: number
   has_conflict: boolean
 }
 
@@ -52,3 +54,26 @@ export interface ScheduleConflict {
   end_time: string
 }
 
+export interface ScheduleBatchPayload {
+  user_ids: number[]
+  project_id: number
+  task_id: number
+  start_time: string
+  end_time: string
+  planned_hours?: number
+  remark?: string
+}
+
+export interface ScheduleCopyWeekPayload {
+  source_week_start: string
+  target_week_start: string
+  user_ids?: number[]
+  include_statuses?: string[]
+}
+
+export interface ScheduleCopyResult {
+  source_count: number
+  created: number
+  schedule_ids: number[]
+  skipped: Array<{ source_schedule_id: number; reason: string; conflicts: ScheduleConflict[] }>
+}

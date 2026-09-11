@@ -16,8 +16,13 @@ const routes: RouteRecordRaw[] = [
       { path: 'projects/:id', component: () => import('@/views/project/ProjectDetailView.vue'), meta: { title: '项目详情', permission: 'project:view' } },
       { path: 'tasks', component: () => import('@/views/task/TaskView.vue'), meta: { title: '任务管理', permission: 'task:view' } },
       { path: 'schedules', component: () => import('@/views/schedule/ScheduleBoardView.vue'), meta: { title: '任务共享看板', permission: 'schedule:view' } },
+      { path: 'workload', component: () => import('@/views/workload/WorkloadAnalysisView.vue'), meta: { title: '人员负载分析', permission: 'analytics:view' } },
+      { path: 'risks', component: () => import('@/views/risk/RiskCenterView.vue'), meta: { title: '风险中心', permission: 'risk:view' } },
       { path: 'executions', component: () => import('@/views/execution/ExecutionView.vue'), meta: { title: '任务执行', permission: 'execution:view' } },
       { path: 'reports/process', component: () => import('@/views/report/ProcessReportView.vue'), meta: { title: '项目过程报表', permission: 'process_report:view' } },
+      { path: 'reports/analytics', component: () => import('@/views/analytics/AnalyticsView.vue'), meta: { title: '经营分析报表', permission: 'analytics:view' } },
+      { path: 'data-exchange', component: () => import('@/views/data-exchange/DataExchangeView.vue'), meta: { title: '数据导入导出', permission: 'export:download' } },
+      { path: 'notifications', component: () => import('@/views/notification/NotificationCenterView.vue'), meta: { title: '通知中心', permission: 'notification:view' } },
       { path: 'operation-logs', component: () => import('@/views/operation-log/OperationLogView.vue'), meta: { title: '操作日志', permission: 'operation_log:view' } },
       { path: '403', component: () => import('@/views/error/ForbiddenView.vue'), meta: { title: '无权限' } },
     ],
@@ -45,4 +50,3 @@ router.beforeEach(async (to) => {
 })
 
 export default router
-
