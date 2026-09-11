@@ -6,6 +6,7 @@ from app.core.exceptions import unauthorized
 from app.core.security import create_access_token, verify_password
 from app.models.user import User
 from app.schemas.auth import LoginRequest
+from app.utils.username import normalize_username
 
 
 def user_profile(db: Session, user: User) -> dict:
@@ -23,7 +24,12 @@ def user_profile(db: Session, user: User) -> dict:
 
 
 def login(db: Session, payload: LoginRequest) -> dict:
-    user = db.scalar(select(User).where(User.username == payload.username))
+    normalized_username = normalize_username(payload.username)
+    user = db.scalar(select(User).where(User.username == normalized_username))
+    # Fall back to the original value for accounts created before username
+    # normalization was introduced.
+    if not user and normalized_username != payload.username:
+        user = db.scalar(select(User).where(User.username == payload.username))
     if not user or not verify_password(payload.password, user.password_hash):
         raise unauthorized("invalid username or password")
     if user.status != "active":
@@ -33,4 +39,3 @@ def login(db: Session, payload: LoginRequest) -> dict:
         "token_type": "bearer",
         "user": user_profile(db, user),
     }
-

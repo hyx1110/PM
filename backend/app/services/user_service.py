@@ -75,6 +75,19 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
     values = payload.model_dump(exclude_unset=True)
     role_ids = values.pop("role_ids", None)
     password = values.pop("password", None)
+
+    # A department change invalidates an old organization assignment when the
+    # client does not explicitly send organization_id. This also keeps API
+    # clients other than the web UI from leaving a stale cross-department link.
+    if "department_id" in values and "organization_id" not in values and user.organization_id:
+        current_organization = db.get(Organization, user.organization_id)
+        if (
+            not values["department_id"]
+            or not current_organization
+            or current_organization.department_id != values["department_id"]
+        ):
+            values["organization_id"] = None
+
     department_id = values.get("department_id", user.department_id)
     organization_id = values.get("organization_id", user.organization_id)
     supervisor_id = values.get("supervisor_id", user.supervisor_id)
