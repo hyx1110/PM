@@ -17,6 +17,7 @@ from app.api.v1 import (
     schedules,
     tasks,
     users,
+    work_calendar,
 )
 
 api_router = APIRouter()
@@ -30,6 +31,7 @@ api_router.include_router(roles.router)
 api_router.include_router(projects.router)
 api_router.include_router(tasks.router)
 api_router.include_router(schedules.router)
+api_router.include_router(work_calendar.router)
 api_router.include_router(executions.router)
 api_router.include_router(evaluations.router)
 api_router.include_router(reports.router)

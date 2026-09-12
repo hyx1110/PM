@@ -5,7 +5,13 @@ from app.core.database import get_db
 from app.core.dependencies import require_permission
 from app.core.responses import success
 from app.models.user import User
-from app.schemas.project import ProjectCreate, ProjectMemberCreate, ProjectUpdate
+from app.schemas.project import (
+    ProjectCreate,
+    ProjectDecision,
+    ProjectHourRequestCreate,
+    ProjectMemberCreate,
+    ProjectUpdate,
+)
 from app.services import project_service
 from app.utils.model import model_to_dict
 
@@ -56,6 +62,76 @@ def update_project(
     return success(project_service.project_detail(db, project_id, current_user))
 
 
+@router.post("/{project_id}/approve")
+def approve_project(
+    project_id: int,
+    payload: ProjectDecision,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    project_service.decide_project(db, project_id, payload, current_user, approved=True)
+    return success(project_service.project_detail(db, project_id, current_user))
+
+
+@router.post("/{project_id}/reject")
+def reject_project(
+    project_id: int,
+    payload: ProjectDecision,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    project_service.decide_project(db, project_id, payload, current_user, approved=False)
+    return success(project_service.project_detail(db, project_id, current_user))
+
+
+@router.get("/{project_id}/hour-requests")
+def list_hour_requests(
+    project_id: int,
+    current_user: User = Depends(require_permission("project:view")),
+    db: Session = Depends(get_db),
+):
+    return success(project_service.list_hour_requests(db, project_id, current_user))
+
+
+@router.post("/{project_id}/hour-requests")
+def create_hour_request(
+    project_id: int,
+    payload: ProjectHourRequestCreate,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    item = project_service.create_hour_request(db, project_id, payload, current_user)
+    return success(model_to_dict(item))
+
+
+@router.post("/{project_id}/hour-requests/{request_id}/approve")
+def approve_hour_request(
+    project_id: int,
+    request_id: int,
+    payload: ProjectDecision,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    item = project_service.decide_hour_request(
+        db, project_id, request_id, payload, current_user, approved=True
+    )
+    return success(model_to_dict(item))
+
+
+@router.post("/{project_id}/hour-requests/{request_id}/reject")
+def reject_hour_request(
+    project_id: int,
+    request_id: int,
+    payload: ProjectDecision,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    item = project_service.decide_hour_request(
+        db, project_id, request_id, payload, current_user, approved=False
+    )
+    return success(model_to_dict(item))
+
+
 @router.delete("/{project_id}")
 def delete_project(
     project_id: int,
@@ -95,4 +171,3 @@ def remove_member(
 ):
     project_service.remove_member(db, project_id, user_id, current_user)
     return success(None)
-

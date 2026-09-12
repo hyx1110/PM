@@ -77,7 +77,12 @@ def dashboard_summary(db: Session, user: User) -> dict:
             Task.status.notin_({"completed", "cancelled"}),
         )
     ) or 0
-    pending = db.scalar(select(func.count(ScheduleBooking.id)).where(*schedule_filters, ScheduleBooking.status.in_({"pending", "changed"}))) or 0
+    pending = db.scalar(
+        select(func.count(ScheduleBooking.id)).where(
+            ScheduleBooking.user_id == user.id,
+            ScheduleBooking.status.in_({"pending", "changed"}),
+        )
+    ) or 0
     today_count = db.scalar(
         select(func.count(ScheduleBooking.id)).where(
             *schedule_filters,
@@ -116,7 +121,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
             ScheduleBooking.start_time < datetime.combine(next_month_start, datetime.min.time()),
         )
     ) or 0
-    active_user_filters = [User.status == "active"]
+    active_user_filters = [User.status == "active", User.is_deleted.is_(False)]
     if scope is not None:
         member_ids = select(ProjectMember.user_id).where(
             ProjectMember.project_id.in_(scope or {-1}), ProjectMember.left_at.is_(None)
@@ -335,7 +340,7 @@ def workload_summary(db: Session, user: User, start_date: date, end_date: date, 
         user_bucket["planned_hours"] += hours
         project_bucket = project_totals.setdefault(item.project_id, {"project_id": item.project_id, "project_name": project_name, "planned_hours": 0.0})
         project_bucket["planned_hours"] += hours
-    eligible_user_filters = [User.status == "active"]
+    eligible_user_filters = [User.status == "active", User.is_deleted.is_(False)]
     if scope is not None:
         member_ids = select(ProjectMember.user_id).where(
             ProjectMember.project_id.in_(scope or {-1}), ProjectMember.left_at.is_(None)

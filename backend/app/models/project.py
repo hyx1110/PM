@@ -26,6 +26,12 @@ class Project(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     remark: Mapped[str | None] = mapped_column(Text)
     is_deleted: Mapped[bool] = mapped_column(nullable=False, default=False, index=True)
+    budget_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    approval_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    approval_note: Mapped[str | None] = mapped_column(Text)
 
 
 class ProjectMember(TimestampMixin, Base):
@@ -40,3 +46,16 @@ class ProjectMember(TimestampMixin, Base):
     joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     left_at: Mapped[datetime | None] = mapped_column(DateTime)
 
+
+class ProjectHourRequest(TimestampMixin, Base):
+    __tablename__ = "project_hour_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    requested_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    review_note: Mapped[str | None] = mapped_column(Text)

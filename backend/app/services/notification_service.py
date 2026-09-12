@@ -3,7 +3,7 @@ from datetime import datetime
 from email.message import EmailMessage
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -102,6 +102,30 @@ def mark_all_read(db: Session, user_id: int) -> int:
         update(Notification)
         .where(Notification.recipient_id == user_id, Notification.status == "unread")
         .values(status="read", read_at=datetime.now())
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
+def delete_notification(db: Session, notification_id: int, user_id: int) -> None:
+    item = db.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.recipient_id == user_id,
+        )
+    )
+    if not item:
+        raise not_found("notification not found")
+    db.delete(item)
+    db.commit()
+
+
+def delete_read_notifications(db: Session, user_id: int) -> int:
+    result = db.execute(
+        delete(Notification).where(
+            Notification.recipient_id == user_id,
+            Notification.status == "read",
+        )
     )
     db.commit()
     return result.rowcount or 0

@@ -54,6 +54,16 @@ def update_user(
     return success(user_service.user_detail(db, user_id))
 
 
+@router.delete("/{user_id}")
+def delete_user(
+    user_id: int,
+    current_user: User = Depends(require_permission("user:edit")),
+    db: Session = Depends(get_db),
+):
+    user_service.delete_user(db, user_id, current_user)
+    return success(None)
+
+
 @router.put("/{user_id}/roles")
 def assign_roles(
     user_id: int,
@@ -63,4 +73,3 @@ def assign_roles(
 ):
     rbac_service.assign_user_roles(db, user_id, payload.role_ids, current_user.id)
     return success(user_service.user_detail(db, user_id))
-

@@ -52,7 +52,8 @@ def create_execution(db: Session, payload: ExecutionCreate, user: User) -> Execu
         raise not_found("task not found")
     assert_project_visible(db, task.project_id, user)
     target_user_id = payload.user_id or user.id
-    if not db.get(User, target_user_id):
+    target_user = db.get(User, target_user_id)
+    if not target_user or target_user.is_deleted:
         raise not_found("execution user not found")
     if target_user_id != user.id and not _can_edit_other_users(db, user):
         raise forbidden("users may only create their own execution records")
@@ -92,3 +93,26 @@ def update_execution(db: Session, execution_id: int, payload: ExecutionUpdate, u
     db.commit()
     db.refresh(record)
     return record
+
+
+def delete_execution(db: Session, execution_id: int, user: User) -> None:
+    record = execution_repository.get(db, execution_id)
+    if not record:
+        raise not_found("execution record not found")
+    task = db.get(Task, record.task_id)
+    assert_project_visible(db, task.project_id, user)
+    if record.user_id != user.id and not _can_edit_other_users(db, user):
+        raise forbidden("users may only delete their own execution records")
+    before = model_to_dict(record)
+    db.delete(record)
+    db.flush()
+    log_operation(
+        db,
+        operator_id=user.id,
+        module="execution",
+        action="delete",
+        object_type="execution_record",
+        object_id=execution_id,
+        before_data=before,
+    )
+    db.commit()

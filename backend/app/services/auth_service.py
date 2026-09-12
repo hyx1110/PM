@@ -25,11 +25,15 @@ def user_profile(db: Session, user: User) -> dict:
 
 def login(db: Session, payload: LoginRequest) -> dict:
     normalized_username = normalize_username(payload.username)
-    user = db.scalar(select(User).where(User.username == normalized_username))
+    user = db.scalar(
+        select(User).where(User.username == normalized_username, User.is_deleted.is_(False))
+    )
     # Fall back to the original value for accounts created before username
     # normalization was introduced.
     if not user and normalized_username != payload.username:
-        user = db.scalar(select(User).where(User.username == payload.username))
+        user = db.scalar(
+            select(User).where(User.username == payload.username, User.is_deleted.is_(False))
+        )
     if not user or not verify_password(payload.password, user.password_hash):
         raise unauthorized("invalid username or password")
     if user.status != "active":

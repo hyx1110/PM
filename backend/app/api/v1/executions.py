@@ -71,3 +71,12 @@ def update_execution(
     execution_service.update_execution(db, execution_id, payload, current_user)
     return success(execution_service.execution_detail(db, execution_id, current_user))
 
+
+@router.delete("/{execution_id}")
+def delete_execution(
+    execution_id: int,
+    current_user: User = Depends(require_permission("execution:edit")),
+    db: Session = Depends(get_db),
+):
+    execution_service.delete_execution(db, execution_id, current_user)
+    return success(None)

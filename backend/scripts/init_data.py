@@ -20,6 +20,7 @@ PERMISSIONS = {
     "task:edit": ("维护任务", "task"),
     "schedule:view": ("查看共享看板", "schedule"),
     "schedule:edit": ("维护人力预约", "schedule"),
+    "calendar:manage": ("维护工作日历", "schedule"),
     "execution:view": ("查看任务执行", "execution"),
     "execution:edit": ("填写任务执行", "execution"),
     "process_report:view": ("查看项目过程报表", "report"),
@@ -36,17 +37,17 @@ PERMISSIONS = {
 ROLES = {
     "super_admin": ("超级管理员", set(PERMISSIONS)),
     "department_manager": (
-        "部门主管",
+        "L3",
         {
             "dashboard:view", "user:view", "organization:view", "role:view", "project:view", "project:edit",
             "task:view", "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit",
             "process_report:view", "evaluation:edit", "operation_log:view",
             "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
-            "analytics:view",
+            "analytics:view", "calendar:manage",
         },
     ),
     "functional_manager": (
-        "职能主管",
+        "L4",
         {
             "dashboard:view", "user:view", "organization:view", "project:view", "project:edit", "task:view",
             "task:edit", "schedule:view", "schedule:edit", "execution:view", "process_report:view",
@@ -92,6 +93,9 @@ def initialize() -> None:
                 role = Role(code=code, name=name, is_system=True)
                 db.add(role)
                 db.flush()
+            else:
+                role.name = name
+                role.is_system = True
             role_map[code] = role
             db.query(RolePermission).filter(RolePermission.role_id == role.id).delete(synchronize_session=False)
             db.add_all(

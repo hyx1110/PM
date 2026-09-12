@@ -1,15 +1,24 @@
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import bad_request, not_found
+from app.core.exceptions import bad_request, conflict, not_found
+from app.models.evaluation import TaskEvaluation
+from app.models.execution import ExecutionRecord
 from app.models.project import ProjectMember
+from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
 from app.repositories.task_repository import task_repository
 from app.schemas.task import TASK_STATUSES, TASK_TYPES, TaskCreate, TaskUpdate
 from app.services.operation_log_service import log_operation
-from app.services.project_service import assert_project_manageable, assert_project_visible, visible_project_ids
+from app.services.project_service import (
+    assert_project_approved,
+    assert_project_manageable,
+    assert_project_visible,
+    visible_project_ids,
+)
 from app.utils.model import model_to_dict
 
 
@@ -22,7 +31,7 @@ def effective_status(task_status: str, planned_end: datetime, now: datetime | No
 
 def _validate_owner(db: Session, project_id: int, owner_id: int) -> None:
     owner = db.get(User, owner_id)
-    if not owner:
+    if not owner or owner.is_deleted:
         raise not_found("task owner not found")
     project = assert_project_visible(db, project_id, owner)
     if project.manager_id == owner_id:
@@ -68,6 +77,7 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
 
 def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
     assert_project_manageable(db, payload.project_id, user)
+    assert_project_approved(db, payload.project_id)
     _validate_owner(db, payload.project_id, payload.owner_id)
     _validate_parent(db, payload.project_id, payload.parent_id)
     task = Task(**payload.model_dump())
@@ -104,3 +114,42 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
     db.commit()
     db.refresh(task)
     return task
+
+
+def delete_task(db: Session, task_id: int, user: User) -> None:
+    task = task_repository.get(db, task_id)
+    if not task:
+        raise not_found("task not found")
+    assert_project_manageable(db, task.project_id, user)
+    if task.status not in {"not_started", "cancelled"}:
+        raise bad_request("only not-started or cancelled tasks can be deleted")
+    if db.scalar(select(Task.id).where(Task.parent_id == task_id).limit(1)):
+        raise conflict("delete child tasks before deleting this task", 40931)
+
+    dependencies: list[str] = []
+    if db.scalar(select(ScheduleBooking.id).where(ScheduleBooking.task_id == task_id).limit(1)):
+        dependencies.append("schedules")
+    if db.scalar(select(ExecutionRecord.id).where(ExecutionRecord.task_id == task_id).limit(1)):
+        dependencies.append("execution records")
+    if db.scalar(select(TaskEvaluation.id).where(TaskEvaluation.task_id == task_id).limit(1)):
+        dependencies.append("evaluation")
+    if dependencies:
+        raise conflict(
+            f"delete the task's {', '.join(dependencies)} before deleting it",
+            40932,
+            {"dependencies": dependencies},
+        )
+
+    before = model_to_dict(task)
+    db.delete(task)
+    db.flush()
+    log_operation(
+        db,
+        operator_id=user.id,
+        module="task",
+        action="delete",
+        object_type="task",
+        object_id=task_id,
+        before_data=before,
+    )
+    db.commit()

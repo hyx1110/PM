@@ -22,7 +22,7 @@ class ScheduleBooking(TimestampMixin, Base):
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     end_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     planned_hours: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft", index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending", index=True)
     remark: Mapped[str | None] = mapped_column(Text)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)

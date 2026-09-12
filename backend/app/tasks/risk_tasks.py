@@ -14,10 +14,13 @@ def scan_project_risks() -> dict:
             select(User)
             .join(UserRole, UserRole.user_id == User.id)
             .join(Role, Role.id == UserRole.role_id)
-            .where(Role.code == "super_admin", User.status == "active")
+            .where(
+                Role.code == "super_admin",
+                User.status == "active",
+                User.is_deleted.is_(False),
+            )
             .order_by(User.id)
         )
         if not system_user:
             return {"skipped": True, "reason": "no active super administrator"}
         return sync_risks(db, system_user)
-

@@ -8,9 +8,11 @@ from app.models.user import User
 
 class UserRepository:
     def get(self, db: Session, user_id: int) -> User | None:
-        return db.get(User, user_id)
+        return db.scalar(select(User).where(User.id == user_id, User.is_deleted.is_(False)))
 
     def get_by_username(self, db: Session, username: str) -> User | None:
+        # Deleted usernames remain reserved so historical records cannot be
+        # confused with a newly created identity using the same login name.
         return db.scalar(select(User).where(User.username == username))
 
     def detail(self, db: Session, user_id: int) -> dict | None:
@@ -25,7 +27,7 @@ class UserRepository:
             .outerjoin(Department, Department.id == User.department_id)
             .outerjoin(Organization, Organization.id == User.organization_id)
             .outerjoin(supervisor, supervisor.id == User.supervisor_id)
-            .where(User.id == user_id)
+            .where(User.id == user_id, User.is_deleted.is_(False))
         ).first()
         if not row:
             return None
@@ -35,7 +37,11 @@ class UserRepository:
             .join(UserRole, UserRole.role_id == Role.id)
             .where(UserRole.user_id == user.id)
         ).all()
-        data = {column.name: getattr(user, column.name) for column in User.__table__.columns if column.name != "password_hash"}
+        data = {
+            column.name: getattr(user, column.name)
+            for column in User.__table__.columns
+            if column.name not in {"password_hash", "is_deleted"}
+        }
         data.update(
             department_name=department_name,
             organization_name=organization_name,
@@ -55,7 +61,7 @@ class UserRepository:
         status: str | None = None,
     ) -> tuple[list[dict], int]:
         supervisor = aliased(User)
-        filters = []
+        filters = [User.is_deleted.is_(False)]
         if keyword:
             filters.append(or_(User.name.like(f"%{keyword}%"), User.username.like(f"%{keyword}%")))
         if department_id:
@@ -85,7 +91,11 @@ class UserRepository:
                 .join(UserRole, UserRole.role_id == Role.id)
                 .where(UserRole.user_id == user.id)
             ).all()
-            data = {column.name: getattr(user, column.name) for column in User.__table__.columns if column.name != "password_hash"}
+            data = {
+                column.name: getattr(user, column.name)
+                for column in User.__table__.columns
+                if column.name not in {"password_hash", "is_deleted"}
+            }
             data.update(
                 department_name=department_name,
                 organization_name=organization_name,

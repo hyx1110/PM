@@ -29,6 +29,7 @@ from app.schemas.project import ProjectCreate
 from app.schemas.task import TaskCreate
 from app.schemas.user import UserCreate
 from app.services.operation_log_service import log_operation
+from app.services.notification_service import create_notification
 from app.services.project_service import visible_project_ids
 
 RESOURCE_HEADERS = {
@@ -49,8 +50,8 @@ RESOURCE_HEADERS = {
         ("name", "项目名称*"),
         ("project_type", "项目类型"),
         ("manager_username", "项目经理用户名*"),
-        ("department_code", "部门编码"),
-        ("status", "状态"),
+        ("department_code", "部门编码*"),
+        ("budget_hours", "项目总工时*"),
         ("planned_start", "计划开始*"),
         ("planned_end", "计划结束*"),
         ("priority", "优先级"),
@@ -75,7 +76,7 @@ RESOURCE_HEADERS = {
 
 EXAMPLES = {
     "users": ["zhangsan", "张三", "", "zhangsan@example.com", "13800000000", "", "", "", "project_member", "active"],
-    "projects": ["P-2026-001", "示例项目", "General", "admin", "", "Planned", date(2026, 10, 1), date(2026, 12, 31), "high", "", ""],
+    "projects": ["P-2026-001", "示例项目", "General", "zhangsan", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "high", "", ""],
     "tasks": ["P-2026-001", "", "需求分析", "Project", "admin", datetime(2026, 10, 1, 9), datetime(2026, 10, 3, 18), 24, "not_started", "high", "", ""],
 }
 
@@ -173,7 +174,10 @@ def _to_date(value: Any, field: str) -> date:
 def _lookup(db: Session, model, column, value: Any, message: str):
     if value in (None, ""):
         return None
-    item = db.scalar(select(model).where(column == value))
+    statement = select(model).where(column == value)
+    if model is User:
+        statement = statement.where(User.is_deleted.is_(False))
+    item = db.scalar(statement)
     if not item:
         raise ValueError(message)
     return item
@@ -188,7 +192,7 @@ def _required_lookup(db: Session, model, column, value: Any, message: str):
     return item
 
 
-def _import_user(db: Session, row: dict[str, Any]) -> User:
+def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
     department = _lookup(db, Department, Department.code, row.get("department_code"), "部门编码不存在")
     organization = None
     if row.get("organization_code"):
@@ -228,16 +232,32 @@ def _import_user(db: Session, row: dict[str, Any]) -> User:
     return item
 
 
-def _import_project(db: Session, row: dict[str, Any]) -> Project:
+def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project:
     manager = _required_lookup(db, User, User.username, row.get("manager_username"), "项目经理用户名不能为空且必须存在")
-    department = _lookup(db, Department, Department.code, row.get("department_code"), "部门编码不存在")
+    department = _required_lookup(db, Department, Department.code, row.get("department_code"), "部门编码不能为空且必须存在")
+    if manager.id != operator.id or "project_manager" not in get_role_codes(db, operator.id):
+        raise ValueError("项目只能由项目经理本人导入，项目经理用户名必须是当前用户")
+    if manager.department_id != department.id:
+        raise ValueError("项目经理必须属于项目所属部门")
+    if not department.manager_id:
+        raise ValueError("请先为项目所属部门设置 L3（部门主管）")
+    l3 = db.get(User, department.manager_id)
+    if (
+        not l3
+        or l3.is_deleted
+        or l3.status != "active"
+        or l3.department_id != department.id
+        or "department_manager" not in get_role_codes(db, l3.id)
+    ):
+        raise ValueError("部门负责人必须是有效的 L3（部门主管）用户")
     payload = ProjectCreate(
         code=row.get("code"),
         name=row.get("name"),
         project_type=row.get("project_type") or "General",
         manager_id=manager.id,
-        department_id=department.id if department else None,
-        status=row.get("status") or "Draft",
+        department_id=department.id,
+        budget_hours=Decimal(str(row.get("budget_hours") or 0)),
+        status="Draft",
         planned_start=_to_date(row.get("planned_start"), "计划开始"),
         planned_end=_to_date(row.get("planned_end"), "计划结束"),
         priority=row.get("priority") or "medium",
@@ -246,14 +266,31 @@ def _import_project(db: Session, row: dict[str, Any]) -> Project:
     )
     if db.scalar(select(Project.id).where(Project.code == payload.code)):
         raise ValueError("项目编号已存在")
-    item = Project(**payload.model_dump())
+    item = Project(
+        **payload.model_dump(exclude={"status"}),
+        status="Draft",
+        approval_status="pending",
+        created_by=operator.id,
+    )
     db.add(item)
     db.flush()
+    create_notification(
+        db,
+        l3.id,
+        "project_approval_required",
+        "导入项目待 L3 审批",
+        f"项目 {item.code} - {item.name} 已导入，请审核项目与 {item.budget_hours} 小时工时额度。",
+        level="warning",
+        related_type="project",
+        related_id=item.id,
+    )
     return item
 
 
-def _import_task(db: Session, row: dict[str, Any]) -> Task:
+def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     project = _required_lookup(db, Project, Project.code, row.get("project_code"), "项目编号不能为空且必须存在")
+    if project.approval_status != "approved":
+        raise ValueError("项目尚未通过 L3 审批，不能导入任务")
     owner = _required_lookup(db, User, User.username, row.get("owner_username"), "负责人用户名不能为空且必须存在")
     parent = None
     if row.get("parent_task_name"):
@@ -284,7 +321,7 @@ def _import_task(db: Session, row: dict[str, Any]) -> Task:
     return item
 
 
-IMPORT_HANDLERS: dict[str, Callable[[Session, dict[str, Any]], Any]] = {
+IMPORT_HANDLERS: dict[str, Callable[[Session, dict[str, Any], User], Any]] = {
     "users": _import_user,
     "projects": _import_project,
     "tasks": _import_task,
@@ -354,7 +391,7 @@ def import_workbook(
         try:
             with db.begin_nested():
                 _assert_import_scope(db, resource_type, row, operator)
-                handler(db, row)
+                handler(db, row, operator)
             success_rows += 1
         except ValidationError as exc:
             failed_rows += 1

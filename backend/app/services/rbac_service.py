@@ -44,7 +44,8 @@ def update_role_permissions(db: Session, role_id: int, permission_ids: list[int]
 
 
 def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_id: int) -> None:
-    if not db.get(User, user_id):
+    target_user = db.get(User, user_id)
+    if not target_user or target_user.is_deleted:
         raise not_found("user not found")
     existing_count = db.scalar(select(func.count(Role.id)).where(Role.id.in_(role_ids or {-1}))) or 0
     if existing_count != len(set(role_ids)):

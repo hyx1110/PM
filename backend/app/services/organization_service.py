@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, conflict, not_found
 from app.models.organization import Department, Organization
 from app.models.user import User
@@ -11,8 +12,21 @@ from app.utils.model import model_to_dict
 
 
 def _validate_manager(db: Session, manager_id: int | None) -> None:
-    if manager_id and not db.get(User, manager_id):
+    manager = db.get(User, manager_id) if manager_id else None
+    if manager_id and (not manager or manager.is_deleted or manager.status != "active"):
         raise not_found("manager not found")
+
+
+def _validate_department_l3(
+    db: Session, manager_id: int | None, department_id: int | None = None
+) -> None:
+    _validate_manager(db, manager_id)
+    if manager_id:
+        manager = db.get(User, manager_id)
+        if "department_manager" not in get_role_codes(db, manager_id):
+            raise bad_request("部门负责人必须具有 L3 角色")
+        if department_id and manager.department_id != department_id:
+            raise bad_request("L3 必须属于其负责的部门")
 
 
 def list_departments(db: Session):
@@ -22,7 +36,7 @@ def list_departments(db: Session):
 def create_department(db: Session, payload: DepartmentCreate, operator_id: int) -> Department:
     if db.scalar(select(Department).where(Department.code == payload.code)):
         raise conflict("department code already exists", 40911)
-    _validate_manager(db, payload.manager_id)
+    _validate_department_l3(db, payload.manager_id)
     item = Department(**payload.model_dump())
     db.add(item)
     db.flush()
@@ -38,7 +52,8 @@ def update_department(db: Session, department_id: int, payload: DepartmentUpdate
         raise not_found("department not found")
     before = model_to_dict(item)
     values = payload.model_dump(exclude_unset=True)
-    _validate_manager(db, values.get("manager_id"))
+    if "manager_id" in values:
+        _validate_department_l3(db, values.get("manager_id"), department_id)
     for key, value in values.items():
         setattr(item, key, value)
     db.flush()
@@ -46,6 +61,27 @@ def update_department(db: Session, department_id: int, payload: DepartmentUpdate
     db.commit()
     db.refresh(item)
     return item
+
+
+def delete_department(db: Session, department_id: int, operator_id: int) -> None:
+    item = db.get(Department, department_id)
+    if not item:
+        raise not_found("department not found")
+    if db.scalar(select(Organization.id).where(Organization.department_id == department_id).limit(1)):
+        raise conflict("delete all organizations in the department before deleting it", 40913)
+    before = model_to_dict(item)
+    db.delete(item)
+    db.flush()
+    log_operation(
+        db,
+        operator_id=operator_id,
+        module="organization",
+        action="delete_department",
+        object_type="department",
+        object_id=department_id,
+        before_data=before,
+    )
+    db.commit()
 
 
 def organization_tree(db: Session, department_id: int | None = None) -> list[dict]:
@@ -105,3 +141,23 @@ def update_organization(db: Session, organization_id: int, payload: Organization
     db.refresh(item)
     return item
 
+
+def delete_organization(db: Session, organization_id: int, operator_id: int) -> None:
+    item = db.get(Organization, organization_id)
+    if not item:
+        raise not_found("organization not found")
+    if organization_repository.has_children(db, organization_id):
+        raise conflict("delete child organizations before deleting this organization", 40914)
+    before = model_to_dict(item)
+    db.delete(item)
+    db.flush()
+    log_operation(
+        db,
+        operator_id=operator_id,
+        module="organization",
+        action="delete_organization",
+        object_type="organization",
+        object_id=organization_id,
+        before_data=before,
+    )
+    db.commit()

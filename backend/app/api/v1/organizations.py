@@ -41,6 +41,16 @@ def update_department(
     return success(model_to_dict(item))
 
 
+@router.delete("/departments/{department_id}")
+def delete_department(
+    department_id: int,
+    current_user: User = Depends(require_permission("organization:edit")),
+    db: Session = Depends(get_db),
+):
+    organization_service.delete_department(db, department_id, current_user.id)
+    return success(None)
+
+
 @router.get("/organizations/tree")
 def organizations_tree(
     department_id: int | None = None,
@@ -70,3 +80,12 @@ def update_organization(
     item = organization_service.update_organization(db, organization_id, payload, current_user.id)
     return success(model_to_dict(item))
 
+
+@router.delete("/organizations/{organization_id}")
+def delete_organization(
+    organization_id: int,
+    current_user: User = Depends(require_permission("organization:edit")),
+    db: Session = Depends(get_db),
+):
+    organization_service.delete_organization(db, organization_id, current_user.id)
+    return success(None)

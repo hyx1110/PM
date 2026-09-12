@@ -7,13 +7,16 @@ from app.schemas.common import ORMModel
 
 
 PROJECT_STATUSES = {"Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"}
+PROJECT_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
+HOUR_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 
 
 class ProjectBase(ORMModel):
     name: str = Field(min_length=1, max_length=200)
     project_type: str = Field(default="General", max_length=50)
     manager_id: int
-    department_id: int | None = None
+    department_id: int
+    budget_hours: Decimal = Field(gt=0, decimal_places=2)
     status: str = "Draft"
     planned_start: date
     planned_end: date
@@ -43,6 +46,7 @@ class ProjectUpdate(ORMModel):
     project_type: str | None = None
     manager_id: int | None = None
     department_id: int | None = None
+    budget_hours: Decimal | None = Field(default=None, gt=0, decimal_places=2)
     status: str | None = None
     planned_start: date | None = None
     planned_end: date | None = None
@@ -58,6 +62,15 @@ class ProjectResponse(ProjectBase):
     code: str
     manager_name: str | None = None
     department_name: str | None = None
+    approval_status: str
+    created_by: int | None = None
+    creator_name: str | None = None
+    approved_by: int | None = None
+    approver_name: str | None = None
+    approved_at: datetime | None = None
+    approval_note: str | None = None
+    booked_hours: Decimal = Decimal("0")
+    remaining_hours: Decimal = Decimal("0")
     created_at: datetime
     updated_at: datetime
 
@@ -81,3 +94,27 @@ class ProjectMemberResponse(ORMModel):
     created_at: datetime
     updated_at: datetime
 
+
+class ProjectDecision(ORMModel):
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class ProjectHourRequestCreate(ORMModel):
+    requested_hours: Decimal = Field(gt=0, decimal_places=2)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ProjectHourRequestResponse(ORMModel):
+    id: int
+    project_id: int
+    requested_hours: Decimal
+    reason: str
+    status: str
+    requested_by: int
+    requester_name: str | None = None
+    reviewed_by: int | None = None
+    reviewer_name: str | None = None
+    reviewed_at: datetime | None = None
+    review_note: str | None = None
+    created_at: datetime
+    updated_at: datetime

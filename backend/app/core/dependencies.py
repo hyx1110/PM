@@ -20,7 +20,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     except ValueError as exc:
         raise unauthorized("token is invalid or expired") from exc
     user = db.get(User, user_id)
-    if not user or user.status != "active":
+    if not user or user.is_deleted or user.status != "active":
         raise unauthorized("user is disabled or does not exist")
     return user
 
@@ -58,4 +58,3 @@ def require_permission(permission_code: str) -> Callable:
         return current_user
 
     return dependency
-

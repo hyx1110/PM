@@ -21,7 +21,7 @@ def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_
             User.department_id,
             User.organization_id,
         )
-        .where(User.status == "active")
+        .where(User.status == "active", User.is_deleted.is_(False))
         .order_by(User.name)
     ).all()
     return success([dict(row._mapping) for row in rows])
@@ -30,9 +30,8 @@ def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_
 @router.get("/departments")
 def department_options(_: User = Depends(get_current_user), db: Session = Depends(get_db)):
     rows = db.execute(
-        select(Department.id, Department.code, Department.name)
+        select(Department.id, Department.code, Department.name, Department.manager_id)
         .where(Department.status == "active")
         .order_by(Department.code)
     ).all()
     return success([dict(row._mapping) for row in rows])
-

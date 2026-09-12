@@ -53,3 +53,12 @@ def update_task(
     task_service.update_task(db, task_id, payload, current_user)
     return success(task_service.task_detail(db, task_id, current_user))
 
+
+@router.delete("/{task_id}")
+def delete_task(
+    task_id: int,
+    current_user: User = Depends(require_permission("task:edit")),
+    db: Session = Depends(get_db),
+):
+    task_service.delete_task(db, task_id, current_user)
+    return success(None)

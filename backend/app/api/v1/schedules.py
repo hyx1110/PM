@@ -79,6 +79,17 @@ def copy_week(
     return success(schedule_service.copy_week(db, payload, current_user))
 
 
+@router.get("/my-pending")
+def list_my_pending_schedules(
+    limit: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return success(
+        schedule_service.list_my_pending_schedules(db, current_user, limit)
+    )
+
+
 @router.get("/{schedule_id}")
 def get_schedule(
     schedule_id: int,
@@ -127,6 +138,16 @@ def submit_schedule(
     db: Session = Depends(get_db),
 ):
     schedule_service.submit_schedule(db, schedule_id, current_user)
+    return success(schedule_service.schedule_detail(db, schedule_id, current_user))
+
+
+@router.post("/{schedule_id}/withdraw")
+def withdraw_schedule(
+    schedule_id: int,
+    current_user: User = Depends(require_permission("schedule:edit")),
+    db: Session = Depends(get_db),
+):
+    schedule_service.withdraw_schedule(db, schedule_id, current_user)
     return success(schedule_service.schedule_detail(db, schedule_id, current_user))
 
 

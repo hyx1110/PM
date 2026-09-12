@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import EmailStr, Field, field_validator
 
 from app.schemas.common import ORMModel
-from app.utils.username import normalize_username
+from app.utils.username import USERNAME_ERROR, is_valid_username, normalize_username
 
 
 class UserCreate(ORMModel):
@@ -22,6 +22,13 @@ class UserCreate(ORMModel):
     @classmethod
     def normalize_new_username(cls, value):
         return normalize_username(value) if isinstance(value, str) else value
+
+    @field_validator("username")
+    @classmethod
+    def validate_new_username(cls, value: str) -> str:
+        if not is_valid_username(value):
+            raise ValueError(USERNAME_ERROR)
+        return value
 
     @field_validator("email", "phone", mode="before")
     @classmethod

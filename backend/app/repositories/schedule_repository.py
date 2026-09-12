@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.models.organization import Department
 from app.models.project import Project
@@ -44,6 +44,60 @@ class ScheduleRepository:
             has_conflict=False,
         )
         return data
+
+    def list_pending_for_user(
+        self,
+        db: Session,
+        user_id: int,
+        limit: int = 10,
+    ) -> list[dict]:
+        creator = aliased(User)
+        rows = db.execute(
+            select(
+                ScheduleBooking,
+                User.name.label("user_name"),
+                User.department_id,
+                Project.name.label("project_name"),
+                Task.name.label("task_name"),
+                Task.task_type,
+                creator.name.label("created_by_name"),
+            )
+            .join(User, User.id == ScheduleBooking.user_id)
+            .join(Project, Project.id == ScheduleBooking.project_id)
+            .join(Task, Task.id == ScheduleBooking.task_id)
+            .outerjoin(creator, creator.id == ScheduleBooking.created_by)
+            .where(
+                ScheduleBooking.user_id == user_id,
+                ScheduleBooking.status.in_({"pending", "changed"}),
+            )
+            .order_by(ScheduleBooking.start_time, ScheduleBooking.id)
+            .limit(limit)
+        ).all()
+        items = []
+        for (
+            item,
+            user_name,
+            dept_id,
+            project_name,
+            task_name,
+            task_type,
+            created_by_name,
+        ) in rows:
+            data = {
+                column.name: getattr(item, column.name)
+                for column in ScheduleBooking.__table__.columns
+            }
+            data.update(
+                user_name=user_name,
+                department_id=dept_id,
+                project_name=project_name,
+                task_name=task_name,
+                task_type=task_type,
+                created_by_name=created_by_name,
+                has_conflict=False,
+            )
+            items.append(data)
+        return items
 
     def find_conflicts(
         self,
@@ -101,6 +155,7 @@ class ScheduleRepository:
         department_id: int | None = None,
         status: str | None = None,
         visible_project_ids: set[int] | None = None,
+        viewer_user_id: int | None = None,
     ) -> tuple[list[dict], int]:
         filters = []
         if start_date:
@@ -118,7 +173,13 @@ class ScheduleRepository:
         if status:
             filters.append(ScheduleBooking.status == status)
         if visible_project_ids is not None:
-            filters.append(ScheduleBooking.project_id.in_(visible_project_ids or {-1}))
+            filters.append(
+                or_(
+                    ScheduleBooking.project_id.in_(visible_project_ids or {-1}),
+                    ScheduleBooking.user_id == viewer_user_id,
+                    ScheduleBooking.created_by == viewer_user_id,
+                )
+            )
         base = (
             select(ScheduleBooking)
             .join(User, User.id == ScheduleBooking.user_id)

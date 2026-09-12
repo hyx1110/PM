@@ -1,10 +1,13 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import bad_request, conflict, not_found
 from app.core.security import hash_password
 from app.models.organization import Department, Organization
-from app.models.rbac import Role
+from app.models.project import Project, ProjectMember
+from app.models.rbac import Role, UserRole
+from app.models.schedule import ScheduleBooking
+from app.models.task import Task
 from app.models.user import User
 from app.repositories.rbac_repository import rbac_repository
 from app.repositories.user_repository import user_repository
@@ -21,7 +24,8 @@ def _validate_relations(db: Session, department_id: int | None, organization_id:
         raise not_found("organization not found")
     if organization and department_id and organization.department_id != department_id:
         raise bad_request("organization does not belong to the selected department")
-    if supervisor_id and not db.get(User, supervisor_id):
+    supervisor = db.get(User, supervisor_id) if supervisor_id else None
+    if supervisor_id and (not supervisor or supervisor.is_deleted):
         raise not_found("supervisor not found")
 
 
@@ -69,7 +73,7 @@ def create_user(db: Session, payload: UserCreate, operator_id: int) -> User:
 
 def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int) -> User:
     user = db.get(User, user_id)
-    if not user:
+    if not user or user.is_deleted:
         raise not_found("user not found")
     before = {key: value for key, value in model_to_dict(user).items() if key != "password_hash"}
     values = payload.model_dump(exclude_unset=True)
@@ -116,3 +120,110 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
     db.commit()
     db.refresh(user)
     return user
+
+
+def delete_user(db: Session, user_id: int, operator: User) -> None:
+    user = db.get(User, user_id)
+    if not user or user.is_deleted:
+        raise not_found("user not found")
+    if user.id == operator.id:
+        raise bad_request("users cannot delete their own account")
+
+    is_super_admin = db.scalar(
+        select(UserRole.id)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(UserRole.user_id == user_id, Role.code == "super_admin")
+        .limit(1)
+    )
+    if is_super_admin:
+        another_super_admin = db.scalar(
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                Role.code == "super_admin",
+                User.id != user_id,
+                User.status == "active",
+                User.is_deleted.is_(False),
+            )
+            .limit(1)
+        )
+        if not another_super_admin:
+            raise bad_request("the last active super administrator cannot be deleted")
+
+    dependencies: list[str] = []
+    if db.scalar(
+        select(Project.id)
+        .where(
+            Project.manager_id == user_id,
+            Project.is_deleted.is_(False),
+            Project.status.notin_({"Completed", "Cancelled"}),
+        )
+        .limit(1)
+    ):
+        dependencies.append("active projects")
+    if db.scalar(
+        select(Task.id)
+        .join(Project, Project.id == Task.project_id)
+        .where(
+            Task.owner_id == user_id,
+            Task.status.notin_({"completed", "cancelled"}),
+            Project.is_deleted.is_(False),
+            Project.status.notin_({"Completed", "Cancelled"}),
+        )
+        .limit(1)
+    ):
+        dependencies.append("active tasks")
+    if db.scalar(
+        select(ScheduleBooking.id)
+        .join(Project, Project.id == ScheduleBooking.project_id)
+        .where(
+            ScheduleBooking.user_id == user_id,
+            ScheduleBooking.status.in_({"draft", "pending", "confirmed", "changed", "running"}),
+            Project.is_deleted.is_(False),
+            Project.status.notin_({"Completed", "Cancelled"}),
+        )
+        .limit(1)
+    ):
+        dependencies.append("active schedules")
+    if db.scalar(
+        select(ProjectMember.id)
+        .join(Project, Project.id == ProjectMember.project_id)
+        .where(
+            ProjectMember.user_id == user_id,
+            ProjectMember.left_at.is_(None),
+            Project.is_deleted.is_(False),
+            Project.status.notin_({"Completed", "Cancelled"}),
+        )
+        .limit(1)
+    ):
+        dependencies.append("active project memberships")
+    if dependencies:
+        raise conflict(
+            f"reassign or close the user's {', '.join(dependencies)} before deleting",
+            40904,
+            {"dependencies": dependencies},
+        )
+
+    before = {key: value for key, value in model_to_dict(user).items() if key != "password_hash"}
+    db.execute(update(Department).where(Department.manager_id == user_id).values(manager_id=None))
+    db.execute(update(Organization).where(Organization.manager_id == user_id).values(manager_id=None))
+    db.execute(update(User).where(User.supervisor_id == user_id).values(supervisor_id=None))
+    rbac_repository.replace_user_roles(db, user_id, [])
+    user.status = "disabled"
+    user.is_deleted = True
+    user.department_id = None
+    user.organization_id = None
+    user.supervisor_id = None
+    db.flush()
+    log_operation(
+        db,
+        operator_id=operator.id,
+        module="user",
+        action="delete",
+        object_type="user",
+        object_id=user.id,
+        before_data=before,
+        after_data={"status": user.status, "is_deleted": user.is_deleted},
+    )
+    db.commit()

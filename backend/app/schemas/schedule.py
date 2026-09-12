@@ -5,7 +5,17 @@ from pydantic import Field, model_validator
 
 from app.schemas.common import ORMModel
 
-SCHEDULE_STATUSES = {"draft", "pending", "confirmed", "rejected", "changed", "running", "completed", "cancelled"}
+SCHEDULE_STATUSES = {
+    "draft",
+    "pending",
+    "confirmed",
+    "rejected",
+    "changed",
+    "running",
+    "completed",
+    "cancelled",
+    "withdrawn",
+}
 
 
 class ScheduleCreate(ORMModel):
@@ -108,7 +118,7 @@ class ScheduleCopyWeek(ORMModel):
     source_week_start: datetime
     target_week_start: datetime
     user_ids: list[int] = []
-    include_statuses: list[str] = ["draft", "pending", "confirmed"]
+    include_statuses: list[str] = ["pending", "confirmed"]
 
     @model_validator(mode="after")
     def validate_weeks(self):

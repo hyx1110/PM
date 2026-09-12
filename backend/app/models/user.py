@@ -18,4 +18,4 @@ class User(TimestampMixin, Base):
     organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id", ondelete="SET NULL"), index=True)
     supervisor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
-
+    is_deleted: Mapped[bool] = mapped_column(nullable=False, default=False, index=True)

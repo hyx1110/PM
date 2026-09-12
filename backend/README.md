@@ -10,6 +10,9 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 - `app/services/import_export_service.py`：标准模板、逐行导入和业务报表导出。
 - `app/tasks`：风险扫描、临期提醒和外部通知的 Celery 任务。
 - `alembic/versions/20260910_0002_v2_features.py`：V1.0 到 V2.0 增量迁移。
+- `app/services/project_service.py`：项目/L3 审批、项目额度和追加工时审批。
+- `app/services/work_calendar_service.py`：工作日、法定节假日、上午/下午时段与自动工时校验。
+- `alembic/versions/20260911_0004_project_approval_and_work_calendar.py`：项目审批、额度、工作日历及 L3/L4 增量迁移。
 
 ## 维护者执行
 
@@ -44,7 +47,15 @@ python -m scripts.init_data
 
 第二条命令会补齐 V2 权限和系统角色默认授权，且可重复执行。
 
+## 项目与预约状态规则
+
+- 只有项目经理本人可以提交由自己负责的项目；所属部门必须先设置具有 `department_manager` 角色的有效 L3。
+- 项目经 L3 批准后才能添加成员、创建任务和预约人力；总预约工时不得突破项目额度。
+- 额度不足由项目经理创建 `project_hour_requests`，仍由项目所属部门当前 L3 审批。
+- 新预约直接为 `pending`，仅 `user_id` 对应本人可确认或拒绝；原提交人可在确认前撤回为 `withdrawn`。
+- 所有预约写接口都在服务端重新计算工时，并强制工作日、半小时粒度、`08:30-12:00`/`13:00-17:30` 边界。
+- `work_calendar_days` 覆盖普通星期判断；迁移已内置 2026 年法定安排，后续年度由 L3/超级管理员维护。
+
 ## 测试说明
 
 本次 V2.0 文件交付没有安装依赖、执行迁移或运行测试。维护者配置独立测试数据库后，可自行运行 `pytest`，并按照根目录 `docs/V2_SCOPE.md` 增补/执行 V2 验收。
-
