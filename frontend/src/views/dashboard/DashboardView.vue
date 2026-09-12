@@ -2,12 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import { Calendar, Collection, Timer, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDashboardSummary } from '@/api/report'
+import { confirmSchedule, getMyPendingSchedules, rejectSchedule } from '@/api/schedule'
 import type { DashboardSummary } from '@/types/report'
+import type { Schedule } from '@/types/schedule'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const loading = ref(false)
+const decisionState = ref<{ id: number; action: 'approve' | 'reject' }>()
+const pendingBookings = ref<Schedule[]>([])
 const data = ref<DashboardSummary>({
   projects_total: 0, projects_running: 0, projects_completed: 0, projects_delayed: 0,
   delayed_tasks: 0, pending_schedules: 0, today_schedules: 0, open_risks: 0,
@@ -17,15 +22,70 @@ const data = ref<DashboardSummary>({
 const cards = computed(() => [
   { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
   { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#4b7b6b' },
-  { value: data.value.pending_schedules, label: '待确认排期', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
+  { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
   { value: data.value.open_risks, label: '未关闭风险', note: `今日 ${data.value.today_risks} / 严重 ${data.value.critical_risks}`, icon: WarningFilled, color: '#a75858' },
 ])
 const maxHours = computed(() => Math.max(...data.value.schedule_trend.map(item => item.planned_hours), 1))
 
-onMounted(async () => {
+async function loadDashboard() {
   loading.value = true
-  try { data.value = await getDashboardSummary() } finally { loading.value = false }
-})
+  try {
+    const [summary, pending] = await Promise.all([
+      getDashboardSummary(),
+      getMyPendingSchedules(8),
+    ])
+    data.value = summary
+    pendingBookings.value = pending
+  } finally {
+    loading.value = false
+  }
+}
+
+async function approveBooking(item: Schedule) {
+  try {
+    await ElMessageBox.confirm(
+      `确认接受 ${dayjs(item.start_time).format('MM月DD日 HH:mm')} 至 ${dayjs(item.end_time).format('HH:mm')} 的预约吗？`,
+      '确认人力预约',
+      { type: 'success', confirmButtonText: '确认接受' },
+    )
+  } catch {
+    return
+  }
+  decisionState.value = { id: item.id, action: 'approve' }
+  try {
+    await confirmSchedule(item.id)
+    ElMessage.success('预约已确认')
+    await loadDashboard()
+  } finally {
+    decisionState.value = undefined
+  }
+}
+
+async function declineBooking(item: Schedule) {
+  let reason = ''
+  try {
+    const result = await ElMessageBox.prompt('请填写拒绝原因，项目经理将收到通知。', '拒绝人力预约', {
+      inputPattern: /\S+/,
+      inputErrorMessage: '拒绝原因不能为空',
+      confirmButtonText: '确认拒绝',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    reason = result.value.trim()
+  } catch {
+    return
+  }
+  decisionState.value = { id: item.id, action: 'reject' }
+  try {
+    await rejectSchedule(item.id, reason)
+    ElMessage.success('预约已拒绝')
+    await loadDashboard()
+  } finally {
+    decisionState.value = undefined
+  }
+}
+
+onMounted(loadDashboard)
 </script>
 
 <template>
@@ -39,6 +99,35 @@ onMounted(async () => {
         <div class="metric-icon" :style="{ color: card.color, backgroundColor: `${card.color}14` }"><el-icon><component :is="card.icon" /></el-icon></div>
         <div><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></div>
       </article>
+    </section>
+    <section class="surface decision-card">
+      <div class="decision-header">
+        <div>
+          <span class="overline">MY APPROVALS</span>
+          <h2>待我确认的人力预约</h2>
+          <p>这里只展示预约到你本人的待办，可以直接接受或拒绝。</p>
+        </div>
+        <el-button text type="primary" @click="$router.push('/schedules')">进入共享看板</el-button>
+      </div>
+      <el-empty v-if="!pendingBookings.length" :image-size="54" description="当前没有需要你确认的预约" />
+      <div v-else class="decision-list">
+        <article v-for="item in pendingBookings" :key="item.id" class="decision-item">
+          <div class="decision-date">
+            <strong>{{ dayjs(item.start_time).format('MM/DD') }}</strong>
+            <span>{{ dayjs(item.start_time).format('HH:mm') }}–{{ dayjs(item.end_time).format('HH:mm') }}</span>
+          </div>
+          <div class="decision-info">
+            <strong>{{ item.project_name }}</strong>
+            <span>{{ item.task_name }} · {{ item.planned_hours }}h{{ item.created_by_name ? ` · 来自 ${item.created_by_name}` : '' }}</span>
+          </div>
+          <el-tag v-if="item.status==='changed'" type="warning" effect="plain">时间有变更</el-tag>
+          <el-tag v-else type="info" effect="plain">新预约</el-tag>
+          <div class="decision-actions">
+            <el-button :disabled="decisionState!==undefined" :loading="decisionState?.id===item.id&&decisionState?.action==='reject'" @click="declineBooking(item)">拒绝</el-button>
+            <el-button type="success" :disabled="decisionState!==undefined" :loading="decisionState?.id===item.id&&decisionState?.action==='approve'" @click="approveBooking(item)">确认预约</el-button>
+          </div>
+        </article>
+      </div>
     </section>
     <section class="dashboard-grid">
       <article class="surface trend-card">
@@ -66,4 +155,5 @@ onMounted(async () => {
 
 <style scoped>
 .header-actions{display:flex;gap:10px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.metric{display:flex;align-items:center;gap:15px;padding:20px}.metric-icon{display:grid;width:44px;height:44px;place-items:center;border-radius:13px;font-size:20px}.metric span,.metric small{display:block;color:#8993a1;font-size:11px}.metric strong{display:block;margin:3px 0;color:#202b3d;font-size:26px;font-weight:650}.dashboard-grid{display:grid;grid-template-columns:1.7fr 1fr;gap:16px}.trend-card,.health-card{padding:24px}.section-title{display:flex;align-items:start;justify-content:space-between}.overline{color:#7890aa;font-size:10px;font-weight:700;letter-spacing:.16em}.section-title h2,.health-card h2{margin:8px 0 0;color:#26364a;font-size:17px}.week-total{display:flex;align-items:center;gap:6px;border-radius:9px;background:#f3f6f9;padding:8px 11px;color:#64758a;font-size:12px}.trend-chart{display:flex;height:178px;align-items:end;gap:9px;margin-top:18px;border-bottom:1px solid #e9edf1}.trend-column{display:flex;min-width:0;flex:1;flex-direction:column;align-items:center}.bar-value{height:17px;color:#8792a2;font-size:9px}.bar{width:70%;max-width:28px;border-radius:5px 5px 0 0;background:linear-gradient(#6e91b5,#b7cadb)}.trend-column small{padding:8px 0;color:#9aa3af;font-size:9px;white-space:nowrap}.health-card h2{margin-bottom:18px}.health-row{display:flex;justify-content:space-between;border-bottom:1px solid #f0f2f4;padding:12px 0;color:#667386;font-size:13px}.health-row strong{color:#26364a}.health-row.danger strong{color:#b45252}.health-card .el-progress{margin-top:20px}.health-card p{margin:9px 0 0;color:#98a1ad;font-size:11px;line-height:1.6}
+.decision-card{padding:20px 22px}.decision-header{display:flex;align-items:flex-start;justify-content:space-between}.decision-header h2{margin:7px 0 0;color:#26364a;font-size:17px}.decision-header p{margin:6px 0 0;color:#929baa;font-size:11px}.decision-card :deep(.el-empty){padding:15px 0 4px}.decision-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:17px}.decision-item{display:flex;min-width:0;align-items:center;gap:12px;border:1px solid #e8edf1;border-radius:11px;background:#fbfcfd;padding:12px}.decision-date{display:flex;width:78px;flex:0 0 78px;flex-direction:column;border-right:1px solid #e7eaee}.decision-date strong{color:#334a61;font-size:14px}.decision-date span,.decision-info span{margin-top:3px;color:#8994a3;font-size:10px}.decision-info{display:flex;min-width:0;flex:1;flex-direction:column}.decision-info strong,.decision-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.decision-info strong{color:#3d4c5f;font-size:12px}.decision-actions{display:flex;flex:0 0 auto;gap:6px}.decision-actions .el-button+.el-button{margin-left:0}
 </style>

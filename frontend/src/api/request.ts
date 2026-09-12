@@ -21,7 +21,7 @@ client.interceptors.response.use(
     const status = error.response?.status
     const responseData = error.response?.data as {
       message?: string
-      data?: { errors?: Array<{ field?: string; message?: string }> }
+      data?: { errors?: Array<{ field?: string; message?: string }>; conflicts?: unknown[] }
     } | undefined
     const validationError = responseData?.data?.errors?.[0]
     const message = validationError?.message
@@ -30,7 +30,7 @@ client.interceptors.response.use(
     if (status === 401) {
       localStorage.removeItem(TOKEN_KEY)
       if (window.location.pathname !== '/login') window.location.assign('/login')
-    } else if (status !== 409) {
+    } else if (status !== 409 || !responseData?.data?.conflicts) {
       ElMessage.error(message)
     }
     return Promise.reject(error)

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import { ElMessage } from 'element-plus'
-import { createUser, getUsers, updateUser } from '@/api/user'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { createUser, deleteUser, getUsers, updateUser } from '@/api/user'
 import { getDepartments, getOrganizationTree } from '@/api/organization'
 import { getRoles } from '@/api/role'
 import type { Department, OrganizationNode } from '@/types/organization'
@@ -35,10 +35,20 @@ const emptyForm = (): UserPayload => ({
   role_ids: [],
 })
 const form = reactive<UserPayload>(emptyForm())
+const usernamePattern = /^(?=.*[A-Za-z0-9])[\x21-\x7E]+$/
 const rules: FormRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 2, max: 50, message: '用户名长度应为 2–50 个字符', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (value && !usernamePattern.test(value)) {
+          return callback(new Error('用户名只能包含英文字母、数字和英文符号，不能包含中文或空格'))
+        }
+        callback()
+      },
+      trigger: ['blur', 'change'],
+    },
   ],
   name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   password: [{
@@ -153,6 +163,17 @@ async function toggleStatus(row: User) {
   await load()
 }
 
+async function remove(row: User) {
+  await ElMessageBox.confirm(
+    `确认删除用户“${row.name}（${row.username}）”吗？用户将无法登录，但历史业务记录会保留。`,
+    '删除用户',
+    { type: 'warning', confirmButtonText: '确认删除' },
+  )
+  await deleteUser(row.id)
+  ElMessage.success('用户已删除')
+  await load()
+}
+
 onMounted(async () => { await loadOptions(); await load() })
 </script>
 
@@ -176,7 +197,7 @@ onMounted(async () => { await loadOptions(); await load() })
         <el-table-column label="角色" min-width="190"><template #default="{ row }"><el-tag v-for="role in row.roles" :key="role" size="small" effect="plain" class="role-tag">{{ role }}</el-tag></template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><span><i class="status-dot" :class="{active:row.status==='active'}"></i>{{ row.status==='active'?'启用':'禁用' }}</span></template></el-table-column>
         <el-table-column label="创建时间" width="155"><template #default="{ row }">{{ formatDateTime(row.created_at) }}</template></el-table-column>
-        <el-table-column v-if="userStore.hasPermission('user:edit')" label="操作" fixed="right" width="155"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link :type="row.status==='active'?'danger':'success'" @click="toggleStatus(row)">{{ row.status==='active'?'禁用':'启用' }}</el-button></template></el-table-column>
+        <el-table-column v-if="userStore.hasPermission('user:edit')" label="操作" fixed="right" width="205"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link :type="row.status==='active'?'danger':'success'" @click="toggleStatus(row)">{{ row.status==='active'?'禁用':'启用' }}</el-button><el-button v-if="row.id!==userStore.profile?.id" link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" layout="total, sizes, prev, pager, next" @change="load" /></div>
     </section>
@@ -184,7 +205,7 @@ onMounted(async () => { await loadOptions(); await load() })
     <el-dialog v-model="dialogVisible" :title="editingId?'编辑用户':'新增用户'" width="620px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
-          <el-form-item label="用户名" prop="username"><el-input v-model.trim="form.username" :disabled="Boolean(editingId)" /></el-form-item>
+          <el-form-item label="用户名" prop="username"><el-input v-model.trim="form.username" :disabled="Boolean(editingId)" placeholder="英文、数字或英文符号，不能含空格" /></el-form-item>
           <el-form-item :label="editingId?'重置密码（留空不修改）':'初始密码'" prop="password"><el-input v-model="form.password" type="password" show-password /></el-form-item>
           <el-form-item label="姓名" prop="name"><el-input v-model="form.name" /></el-form-item>
           <el-form-item label="邮箱" prop="email"><el-input v-model="form.email" /></el-form-item>

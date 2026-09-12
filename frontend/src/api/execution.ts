@@ -6,4 +6,4 @@ export const getExecutions = (params: ExecutionQuery = {}) => api.get<PageData<E
 export const getExecution = (id: number) => api.get<Execution>(`/executions/${id}`)
 export const createExecution = (payload: ExecutionPayload) => api.post<Execution>('/executions', payload)
 export const updateExecution = (id: number, payload: Partial<ExecutionPayload>) => api.put<Execution>(`/executions/${id}`, payload)
-
+export const deleteExecution = (id: number) => api.delete<void>(`/executions/${id}`)

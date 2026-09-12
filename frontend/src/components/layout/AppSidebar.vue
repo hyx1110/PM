@@ -29,6 +29,7 @@ const menuItems = computed(() => [
   { path: '/projects', label: '项目管理', icon: Collection, permission: 'project:view' },
   { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:view' },
   { path: '/schedules', label: '任务共享看板', icon: Calendar, permission: 'schedule:view' },
+  { path: '/work-calendar', label: '工作日历', icon: Calendar, permission: 'calendar:manage' },
   { path: '/workload', label: '人员负载分析', icon: TrendCharts, permission: 'analytics:view' },
   { path: '/risks', label: '风险中心', icon: WarningFilled, permission: 'risk:view' },
   { path: '/executions', label: '任务执行', icon: Document, permission: 'execution:view' },

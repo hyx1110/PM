@@ -17,6 +17,7 @@ export interface Schedule {
   remark?: string
   rejection_reason?: string
   created_by: number
+  created_by_name?: string
   source_booking_id?: number
   version: number
   has_conflict: boolean
@@ -75,5 +76,5 @@ export interface ScheduleCopyResult {
   source_count: number
   created: number
   schedule_ids: number[]
-  skipped: Array<{ source_schedule_id: number; reason: string; conflicts: ScheduleConflict[] }>
+  skipped: Array<{ source_schedule_id: number; reason: string; conflicts?: ScheduleConflict[] }>
 }
