@@ -10,6 +10,7 @@ from app.api.v1 import (
     notifications,
     operation_logs,
     organizations,
+    personal_time,
     projects,
     reports,
     risks,
@@ -31,6 +32,7 @@ api_router.include_router(roles.router)
 api_router.include_router(projects.router)
 api_router.include_router(tasks.router)
 api_router.include_router(schedules.router)
+api_router.include_router(personal_time.router)
 api_router.include_router(work_calendar.router)
 api_router.include_router(executions.router)
 api_router.include_router(evaluations.router)

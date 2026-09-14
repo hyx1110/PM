@@ -11,6 +11,11 @@ from app.services.operation_log_service import log_operation
 from app.utils.model import model_to_dict
 
 
+def _assert_locally_managed(item: Department | Organization) -> None:
+    if item.data_source == "hrdb":
+        raise bad_request("该数据来自 HRDB，只能通过同步任务更新")
+
+
 def _validate_manager(db: Session, manager_id: int | None) -> None:
     manager = db.get(User, manager_id) if manager_id else None
     if manager_id and (not manager or manager.is_deleted or manager.status != "active"):
@@ -50,6 +55,7 @@ def update_department(db: Session, department_id: int, payload: DepartmentUpdate
     item = db.get(Department, department_id)
     if not item:
         raise not_found("department not found")
+    _assert_locally_managed(item)
     before = model_to_dict(item)
     values = payload.model_dump(exclude_unset=True)
     if "manager_id" in values:
@@ -67,6 +73,7 @@ def delete_department(db: Session, department_id: int, operator_id: int) -> None
     item = db.get(Department, department_id)
     if not item:
         raise not_found("department not found")
+    _assert_locally_managed(item)
     if db.scalar(select(Organization.id).where(Organization.department_id == department_id).limit(1)):
         raise conflict("delete all organizations in the department before deleting it", 40913)
     before = model_to_dict(item)
@@ -119,6 +126,7 @@ def update_organization(db: Session, organization_id: int, payload: Organization
     item = db.get(Organization, organization_id)
     if not item:
         raise not_found("organization not found")
+    _assert_locally_managed(item)
     before = model_to_dict(item)
     values = payload.model_dump(exclude_unset=True)
     parent_id = values.get("parent_id")
@@ -146,6 +154,7 @@ def delete_organization(db: Session, organization_id: int, operator_id: int) -> 
     item = db.get(Organization, organization_id)
     if not item:
         raise not_found("organization not found")
+    _assert_locally_managed(item)
     if organization_repository.has_children(db, organization_id):
         raise conflict("delete child organizations before deleting this organization", 40914)
     before = model_to_dict(item)

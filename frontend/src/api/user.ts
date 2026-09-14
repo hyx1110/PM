@@ -9,3 +9,5 @@ export const updateUser = (id: number, payload: Partial<UserPayload>) => api.put
 export const deleteUser = (id: number) => api.delete<void>(`/users/${id}`)
 export const assignUserRoles = (id: number, role_ids: number[]) => api.put<User>(`/users/${id}/roles`, { role_ids })
 export const getUserOptions = () => api.get<UserOption[]>('/lookups/users')
+export const getScheduleUserOptions = () =>
+  api.get<UserOption[]>('/lookups/schedule-users')

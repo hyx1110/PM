@@ -121,8 +121,8 @@ onMounted(load)
       <aside class="surface departments">
         <h3>部门</h3>
         <div v-for="item in departments" :key="item.id" class="department-item" :class="{ active: activeDepartment===item.id }" @click="switchDepartment(item.id)">
-          <span><strong>{{ item.name }}</strong><small>{{ item.code }}</small></span>
-          <span v-if="userStore.hasPermission('organization:edit')" class="department-actions"><el-button link size="small" @click.stop="editDepartment(item)">编辑</el-button><el-button link size="small" type="danger" @click.stop="removeDepartment(item)">删除</el-button></span>
+          <span><strong>{{ item.name }}</strong><small>{{ item.code }}{{ item.data_source==='hrdb' ? ' · HRDB' : '' }}</small></span>
+          <span v-if="userStore.hasPermission('organization:edit') && item.data_source!=='hrdb'" class="department-actions"><el-button link size="small" @click.stop="editDepartment(item)">编辑</el-button><el-button link size="small" type="danger" @click.stop="removeDepartment(item)">删除</el-button></span>
         </div>
         <el-empty v-if="!departments.length" description="暂无部门" :image-size="70" />
       </aside>
@@ -130,7 +130,7 @@ onMounted(load)
         <div class="tree-head"><div><h3>组织层级</h3><p>展开节点查看下级组织，最多维护到 L4。</p></div></div>
         <el-tree :data="tree" node-key="id" default-expand-all :expand-on-click-node="false">
           <template #default="{ data }">
-            <div class="tree-node"><div><el-tag size="small" effect="plain">{{ data.level }}</el-tag><strong>{{ data.name }}</strong><span>{{ data.code }}</span><span v-if="data.manager_name">主管：{{ data.manager_name }}</span></div><div v-if="userStore.hasPermission('organization:edit')"><el-button v-if="data.level!=='L4'" link @click.stop="editOrganization(undefined,data)">添加下级</el-button><el-button link @click.stop="editOrganization(data)">编辑</el-button><el-button link type="danger" @click.stop="removeOrganization(data)">删除</el-button></div></div>
+            <div class="tree-node"><div><el-tag size="small" effect="plain">{{ data.level }}</el-tag><strong>{{ data.name }}</strong><span>{{ data.code }}</span><el-tag v-if="data.data_source==='hrdb'" size="small" type="info" effect="plain">HRDB 只读</el-tag><span v-if="data.manager_name">主管：{{ data.manager_name }}</span></div><div v-if="userStore.hasPermission('organization:edit') && data.data_source!=='hrdb'"><el-button v-if="data.level!=='L4'" link @click.stop="editOrganization(undefined,data)">添加下级</el-button><el-button link @click.stop="editOrganization(data)">编辑</el-button><el-button link type="danger" @click.stop="removeOrganization(data)">删除</el-button></div></div>
           </template>
         </el-tree>
         <el-empty v-if="!tree.length" description="该部门暂无组织节点" />

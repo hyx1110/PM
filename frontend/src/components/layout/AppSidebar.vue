@@ -23,6 +23,7 @@ const userStore = useUserStore()
 
 const menuItems = computed(() => [
   { path: '/dashboard', label: '首页', icon: HomeFilled },
+  { path: '/my-tasks', label: '我的任务', icon: Tickets, permission: 'task:view' },
   { path: '/users', label: '用户管理', icon: User, permission: 'user:view' },
   { path: '/organizations', label: '组织管理', icon: OfficeBuilding, permission: 'organization:view' },
   { path: '/roles', label: '角色权限', icon: UserFilled, permission: 'role:view' },

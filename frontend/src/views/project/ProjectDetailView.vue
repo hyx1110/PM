@@ -15,8 +15,8 @@ import {
 import { getTasks } from '@/api/task'
 import { getSchedules } from '@/api/schedule'
 import { getUserOptions } from '@/api/user'
-import { getDepartmentOptions } from '@/api/organization'
-import type { DepartmentOption } from '@/types/organization'
+import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
+import type { DepartmentOption, OrganizationNode } from '@/types/organization'
 import type { Project, ProjectHourRequest, ProjectMember } from '@/types/project'
 import type { Schedule } from '@/types/schedule'
 import type { Task } from '@/types/task'
@@ -36,18 +36,32 @@ const schedules = ref<Schedule[]>([])
 const hourRequests = ref<ProjectHourRequest[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
+const organizations = ref<OrganizationNode[]>([])
 const activeTab = ref('basic')
 const memberDialog = ref(false)
 const hourDialog = ref(false)
 const memberForm = reactive({
+  department_id: undefined as number | undefined,
+  organization_id: undefined as number | undefined,
   user_id: undefined as number | undefined,
   project_role: 'member',
   allocation_percent: 100,
   joined_at: '',
 })
 const hourForm = reactive({ requested_hours: 8, reason: '' })
-const approvalLabel = { pending: '待 L3 审批', approved: '已审批', rejected: '已驳回' }
+const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已通过', rejected: '已驳回' }
 const hourStatusLabel = { pending: '待 L3 审批', approved: '已批准', rejected: '已驳回' }
+const organizationOptions = computed(() =>
+  organizations.value.filter((item) => item.department_id === memberForm.department_id),
+)
+const candidateUsers = computed(() =>
+  users.value.filter(
+    (item) =>
+      item.department_id === memberForm.department_id
+      && item.organization_id === memberForm.organization_id
+      && !members.value.some((member) => member.user_id === item.id),
+  ),
+)
 const canRequestHours = computed(
   () =>
     project.value?.approval_status === 'approved'
@@ -63,7 +77,7 @@ const canReviewHours = (item: ProjectHourRequest) =>
 async function load() {
   loading.value = true
   try {
-    const [p, m, t, s, h, u, d] = await Promise.all([
+    const [p, m, t, s, h, u, d, o] = await Promise.all([
       getProject(projectId.value),
       getProjectMembers(projectId.value),
       getTasks({ project_id: projectId.value, page: 1, page_size: 200 }),
@@ -71,6 +85,7 @@ async function load() {
       getProjectHourRequests(projectId.value),
       getUserOptions(),
       getDepartmentOptions(),
+      getOrganizationTree(),
     ])
     project.value = p
     members.value = m
@@ -79,6 +94,7 @@ async function load() {
     hourRequests.value = h
     users.value = u
     departments.value = d
+    organizations.value = o
   } finally {
     loading.value = false
   }
@@ -86,6 +102,8 @@ async function load() {
 
 function openMember() {
   Object.assign(memberForm, {
+    department_id: undefined,
+    organization_id: undefined,
     user_id: undefined,
     project_role: 'member',
     allocation_percent: 100,
@@ -95,10 +113,13 @@ function openMember() {
 }
 
 async function saveMember() {
+  if (!memberForm.department_id) return ElMessage.warning('请先选择部门')
+  if (!memberForm.organization_id) return ElMessage.warning('请选择组织')
   if (!memberForm.user_id) return ElMessage.warning('请选择成员')
   await addProjectMember(projectId.value, {
-    ...memberForm,
     user_id: memberForm.user_id,
+    project_role: memberForm.project_role,
+    allocation_percent: memberForm.allocation_percent,
     joined_at: `${memberForm.joined_at} 00:00:00`,
   })
   ElMessage.success('成员已添加')
@@ -171,7 +192,7 @@ onMounted(load)
     </header>
     <el-alert
       v-if="project && project.approval_status!=='approved'"
-      :title="project.approval_status==='pending' ? '项目正在等待 L3 审批，审批前不能添加成员、任务或预约人力。' : `项目已被 L3 驳回：${project.approval_note || '未填写原因'}`"
+      :title="project.approval_status==='draft' ? '项目尚未提交审批，审批前不能添加成员、任务或预约人力。' : project.approval_status==='pending' ? `项目正在等待 ${project.approval_required_name || '创建人的直属主管'} 审批。` : `项目已被驳回：${project.approval_note || '未填写原因'}`"
       :type="project.approval_status==='pending' ? 'warning' : 'error'"
       :closable="false"
       show-icon
@@ -193,7 +214,7 @@ onMounted(load)
             <el-descriptions-item label="所属部门">{{ project.department_name || '—' }}</el-descriptions-item>
             <el-descriptions-item label="优先级">{{ project.priority }}</el-descriptions-item>
             <el-descriptions-item label="计划周期">{{ formatDate(project.planned_start) }} 至 {{ formatDate(project.planned_end) }}</el-descriptions-item>
-            <el-descriptions-item label="审批人">{{ project.approver_name || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="审批人">{{ project.approver_name || project.approval_required_name || '—' }}</el-descriptions-item>
             <el-descriptions-item label="审批时间">{{ formatDateTime(project.approved_at) }}</el-descriptions-item>
             <el-descriptions-item label="审批意见" :span="3">{{ project.approval_note || '—' }}</el-descriptions-item>
             <el-descriptions-item label="描述" :span="3">{{ project.description || '—' }}</el-descriptions-item>
@@ -251,7 +272,9 @@ onMounted(load)
 
     <el-dialog v-model="memberDialog" title="添加项目成员" width="500px">
       <el-form :model="memberForm" label-position="top">
-        <el-form-item label="成员"><el-select v-model="memberForm.user_id" filterable style="width:100%"><el-option v-for="item in users.filter(u=>!members.some(m=>m.user_id===u.id))" :key="item.id" :label="`${item.name} (${item.username})`" :value="item.id"/></el-select></el-form-item>
+        <el-form-item label="部门" required><el-select v-model="memberForm.department_id" filterable style="width:100%" @change="memberForm.organization_id=undefined;memberForm.user_id=undefined"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+        <el-form-item label="组织" required><el-tree-select v-model="memberForm.organization_id" :data="organizationOptions" :props="{label:'name',children:'children'}" node-key="id" check-strictly filterable :disabled="!memberForm.department_id" style="width:100%" @change="memberForm.user_id=undefined"/></el-form-item>
+        <el-form-item label="成员" required><el-select v-model="memberForm.user_id" filterable :disabled="!memberForm.organization_id" placeholder="可按姓名或工号搜索" style="width:100%"><el-option v-for="item in candidateUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
         <el-form-item label="项目角色"><el-input v-model="memberForm.project_role"/></el-form-item>
         <el-form-item label="投入比例"><el-input-number v-model="memberForm.allocation_percent" :min="0" :max="100" style="width:100%"/></el-form-item>
         <el-form-item label="加入日期"><el-date-picker v-model="memberForm.joined_at" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>

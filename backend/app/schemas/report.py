@@ -38,5 +38,7 @@ class DashboardSummary(ORMModel):
     projects_running: int
     delayed_tasks: int
     pending_schedules: int
+    pending_project_approvals: int
+    my_today_tasks: int
+    my_upcoming_tasks: int
     today_schedules: int
-

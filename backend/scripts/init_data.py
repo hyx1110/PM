@@ -3,6 +3,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
+from app.models.employee_profile import EmployeeProfile
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.user import User
 
@@ -74,6 +75,14 @@ ROLES = {
     ),
 }
 
+ROLE_DESCRIPTIONS = {
+    "super_admin": "系统最高权限角色，与正式人员职级无关。",
+    "department_manager": "系统 L3 功能角色；可人工分配，也可由 Department Manager 人事职级自动授予。",
+    "functional_manager": "系统 L4 功能角色；可人工分配，也可由 Management Manager 人事职级自动授予。",
+    "project_manager": "项目经理系统功能角色，与正式人员职级独立。",
+    "project_member": "项目成员系统功能角色，与正式人员职级独立。",
+}
+
 
 def initialize() -> None:
     with SessionLocal() as db:
@@ -96,6 +105,7 @@ def initialize() -> None:
             else:
                 role.name = name
                 role.is_system = True
+            role.description = ROLE_DESCRIPTIONS.get(code)
             role_map[code] = role
             db.query(RolePermission).filter(RolePermission.role_id == role.id).delete(synchronize_session=False)
             db.add_all(
@@ -105,6 +115,7 @@ def initialize() -> None:
         admin = db.scalar(select(User).where(User.username == settings.initial_admin_username))
         if not admin:
             admin = User(
+                employee_no=settings.initial_admin_username,
                 username=settings.initial_admin_username,
                 password_hash=hash_password(settings.initial_admin_password),
                 name=settings.initial_admin_name,
@@ -113,8 +124,33 @@ def initialize() -> None:
             db.add(admin)
             db.flush()
         super_role = role_map["super_admin"]
-        if not db.scalar(select(UserRole).where(UserRole.user_id == admin.id, UserRole.role_id == super_role.id)):
-            db.add(UserRole(user_id=admin.id, role_id=super_role.id))
+        if not db.scalar(
+            select(EmployeeProfile).where(EmployeeProfile.user_id == admin.id)
+        ):
+            db.add(
+                EmployeeProfile(
+                    user_id=admin.id,
+                    preferred_name=admin.name,
+                    hr_management_level="employee",
+                )
+            )
+        admin_role = db.scalar(
+            select(UserRole).where(
+                UserRole.user_id == admin.id,
+                UserRole.role_id == super_role.id,
+            )
+        )
+        if not admin_role:
+            db.add(
+                UserRole(
+                    user_id=admin.id,
+                    role_id=super_role.id,
+                    is_manual=True,
+                    is_hr_auto=False,
+                )
+            )
+        else:
+            admin_role.is_manual = True
         db.commit()
 
 

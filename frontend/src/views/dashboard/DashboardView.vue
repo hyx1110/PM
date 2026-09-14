@@ -4,38 +4,62 @@ import { Calendar, Collection, Timer, TrendCharts, WarningFilled } from '@elemen
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDashboardSummary } from '@/api/report'
+import { getProjects } from '@/api/project'
 import { confirmSchedule, getMyPendingSchedules, rejectSchedule } from '@/api/schedule'
 import type { DashboardSummary } from '@/types/report'
 import type { Schedule } from '@/types/schedule'
+import type { Project } from '@/types/project'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const loading = ref(false)
 const decisionState = ref<{ id: number; action: 'approve' | 'reject' }>()
 const pendingBookings = ref<Schedule[]>([])
+const pendingProjectApprovals = ref<Project[]>([])
 const data = ref<DashboardSummary>({
   projects_total: 0, projects_running: 0, projects_completed: 0, projects_delayed: 0,
-  delayed_tasks: 0, pending_schedules: 0, today_schedules: 0, open_risks: 0,
+  delayed_tasks: 0, pending_schedules: 0, pending_project_approvals: 0,
+  my_today_tasks: 0, my_upcoming_tasks: 0, today_schedules: 0, open_risks: 0,
   critical_risks: 0, today_risks: 0, weekly_planned_hours: 0, monthly_planned_hours: 0,
   weekly_utilization_rate: 0, task_completion_rate: 0, schedule_trend: [],
 })
-const cards = computed(() => [
-  { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
-  { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#4b7b6b' },
-  { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
-  { value: data.value.open_risks, label: '未关闭风险', note: `今日 ${data.value.today_risks} / 严重 ${data.value.critical_risks}`, icon: WarningFilled, color: '#a75858' },
-])
+const cards = computed(() => {
+  const roles = userStore.profile?.roles || []
+  const memberOnly = roles.length === 1 && roles[0] === 'project_member'
+  if (memberOnly) return [
+    { value: data.value.my_today_tasks, label: '今日任务', note: '查看今日需要处理的任务', icon: Collection, color: '#315f8e' },
+    { value: data.value.my_upcoming_tasks, label: '7 天内到期', note: '关注即将到期的任务', icon: TrendCharts, color: '#4b7b6b' },
+    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
+    { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#6f7790' },
+  ]
+  if (data.value.pending_project_approvals) return [
+    { value: data.value.pending_project_approvals, label: '待审批项目', note: '由你作为创建人的直属主管审批', icon: Calendar, color: '#92713c' },
+    { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
+    { value: data.value.delayed_tasks, label: '异常任务', note: '已超过计划截止时间', icon: WarningFilled, color: '#a75858' },
+    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#4b7b6b' },
+  ]
+  return [
+    { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
+    { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#4b7b6b' },
+    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
+    { value: data.value.open_risks, label: '未关闭风险', note: `今日 ${data.value.today_risks} / 严重 ${data.value.critical_risks}`, icon: WarningFilled, color: '#a75858' },
+  ]
+})
 const maxHours = computed(() => Math.max(...data.value.schedule_trend.map(item => item.planned_hours), 1))
 
 async function loadDashboard() {
   loading.value = true
   try {
-    const [summary, pending] = await Promise.all([
+    const [summary, pending, projects] = await Promise.all([
       getDashboardSummary(),
       getMyPendingSchedules(8),
+      getProjects({ page: 1, page_size: 50, approval_status: 'pending' }),
     ])
     data.value = summary
     pendingBookings.value = pending
+    pendingProjectApprovals.value = projects.items.filter(
+      (item) => item.approver_id === userStore.profile?.id,
+    )
   } finally {
     loading.value = false
   }
@@ -99,6 +123,19 @@ onMounted(loadDashboard)
         <div class="metric-icon" :style="{ color: card.color, backgroundColor: `${card.color}14` }"><el-icon><component :is="card.icon" /></el-icon></div>
         <div><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></div>
       </article>
+    </section>
+    <section v-if="pendingProjectApprovals.length" class="surface decision-card">
+      <div class="decision-header">
+        <div><span class="overline">PROJECT APPROVALS</span><h2>待我审批的项目</h2><p>你是这些项目创建人的直属主管。</p></div>
+        <el-button text type="primary" @click="$router.push('/projects')">进入项目审批</el-button>
+      </div>
+      <div class="decision-list">
+        <article v-for="item in pendingProjectApprovals.slice(0,8)" :key="item.id" class="decision-item">
+          <div class="decision-info"><strong>{{ item.name }}</strong><span>{{ item.code }} · 申请人 {{ item.creator_name || item.manager_name }}</span></div>
+          <el-tag type="warning" effect="plain">待审批</el-tag>
+          <el-button type="primary" plain @click="$router.push('/projects')">去审批</el-button>
+        </article>
+      </div>
     </section>
     <section class="surface decision-card">
       <div class="decision-header">

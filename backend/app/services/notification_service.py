@@ -3,7 +3,7 @@ from datetime import datetime
 from email.message import EmailMessage
 
 import httpx
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -59,7 +59,10 @@ def create_notification(
 def list_notifications(
     db: Session, user_id: int, page: int, page_size: int, status: str | None
 ) -> dict:
-    filters = [Notification.recipient_id == user_id]
+    filters = [
+        Notification.recipient_id == user_id,
+        Notification.is_deleted.is_(False),
+    ]
     if status:
         filters.append(Notification.status == status)
     total = db.scalar(select(func.count(Notification.id)).where(*filters)) or 0
@@ -76,7 +79,9 @@ def list_notifications(
 def unread_count(db: Session, user_id: int) -> int:
     return db.scalar(
         select(func.count(Notification.id)).where(
-            Notification.recipient_id == user_id, Notification.status == "unread"
+            Notification.recipient_id == user_id,
+            Notification.status == "unread",
+            Notification.is_deleted.is_(False),
         )
     ) or 0
 
@@ -84,7 +89,9 @@ def unread_count(db: Session, user_id: int) -> int:
 def mark_read(db: Session, notification_id: int, user_id: int) -> Notification:
     item = db.scalar(
         select(Notification).where(
-            Notification.id == notification_id, Notification.recipient_id == user_id
+            Notification.id == notification_id,
+            Notification.recipient_id == user_id,
+            Notification.is_deleted.is_(False),
         )
     )
     if not item:
@@ -100,7 +107,11 @@ def mark_read(db: Session, notification_id: int, user_id: int) -> Notification:
 def mark_all_read(db: Session, user_id: int) -> int:
     result = db.execute(
         update(Notification)
-        .where(Notification.recipient_id == user_id, Notification.status == "unread")
+        .where(
+            Notification.recipient_id == user_id,
+            Notification.status == "unread",
+            Notification.is_deleted.is_(False),
+        )
         .values(status="read", read_at=datetime.now())
     )
     db.commit()
@@ -112,20 +123,27 @@ def delete_notification(db: Session, notification_id: int, user_id: int) -> None
         select(Notification).where(
             Notification.id == notification_id,
             Notification.recipient_id == user_id,
+            Notification.is_deleted.is_(False),
         )
     )
     if not item:
         raise not_found("notification not found")
-    db.delete(item)
+    item.is_deleted = True
+    if item.status == "unread":
+        item.status = "read"
+        item.read_at = datetime.now()
     db.commit()
 
 
 def delete_read_notifications(db: Session, user_id: int) -> int:
     result = db.execute(
-        delete(Notification).where(
+        update(Notification)
+        .where(
             Notification.recipient_id == user_id,
             Notification.status == "read",
+            Notification.is_deleted.is_(False),
         )
+        .values(is_deleted=True)
     )
     db.commit()
     return result.rowcount or 0

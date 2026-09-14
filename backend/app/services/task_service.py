@@ -1,9 +1,11 @@
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import bad_request, conflict, not_found
+from app.core.dependencies import get_role_codes
 from app.models.evaluation import TaskEvaluation
 from app.models.execution import ExecutionRecord
 from app.models.project import ProjectMember
@@ -13,6 +15,7 @@ from app.models.user import User
 from app.repositories.task_repository import task_repository
 from app.schemas.task import TASK_STATUSES, TASK_TYPES, TaskCreate, TaskUpdate
 from app.services.operation_log_service import log_operation
+from app.services.notification_service import create_notification
 from app.services.project_service import (
     assert_project_approved,
     assert_project_manageable,
@@ -31,7 +34,7 @@ def effective_status(task_status: str, planned_end: datetime, now: datetime | No
 
 def _validate_owner(db: Session, project_id: int, owner_id: int) -> None:
     owner = db.get(User, owner_id)
-    if not owner or owner.is_deleted:
+    if not owner or owner.is_deleted or owner.status != "active":
         raise not_found("task owner not found")
     project = assert_project_visible(db, project_id, owner)
     if project.manager_id == owner_id:
@@ -46,10 +49,37 @@ def _validate_owner(db: Session, project_id: int, owner_id: int) -> None:
 
 
 def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None):
+    roles = get_role_codes(db, user.id)
+    if not roles & {
+        "project_manager",
+        "department_manager",
+        "functional_manager",
+        "super_admin",
+    }:
+        owner_id = user.id
     items, total = task_repository.list(db, page, page_size, project_id, owner_id, status, visible_project_ids(db, user))
     for item in items:
         item["effective_status"] = effective_status(item["status"], item["planned_end"])
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+def list_my_tasks(
+    db: Session,
+    user: User,
+    page: int,
+    page_size: int,
+    status: str | None,
+):
+    return list_tasks(db, user, page, page_size, None, user.id, status)
+
+
+def _confirmed_booking_hours(db: Session, task_id: int) -> Decimal:
+    return db.scalar(
+        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(
+            ScheduleBooking.task_id == task_id,
+            ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+        )
+    ) or Decimal("0")
 
 
 def task_detail(db: Session, task_id: int, user: User) -> dict:
@@ -57,6 +87,14 @@ def task_detail(db: Session, task_id: int, user: User) -> dict:
     if not task:
         raise not_found("task not found")
     assert_project_visible(db, task.project_id, user)
+    roles = get_role_codes(db, user.id)
+    if task.owner_id != user.id and not roles & {
+        "project_manager",
+        "department_manager",
+        "functional_manager",
+        "super_admin",
+    }:
+        raise not_found("task not found")
     match = task_repository.detail(db, task_id)
     match["effective_status"] = effective_status(match["status"], match["planned_end"])
     return match
@@ -83,6 +121,16 @@ def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
     task = Task(**payload.model_dump())
     db.add(task)
     db.flush()
+    if task.owner_id != user.id:
+        create_notification(
+            db,
+            task.owner_id,
+            "task_assigned",
+            "你收到了一项新任务",
+            f"任务“{task.name}”已分配给你，请关注计划时间和预计工时。",
+            related_type="task",
+            related_id=task.id,
+        )
     log_operation(db, operator_id=user.id, module="task", action="create", object_type="task", object_id=task.id, after_data=model_to_dict(task))
     db.commit()
     db.refresh(task)
@@ -107,9 +155,43 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
         raise bad_request("invalid task type")
     if values.get("status") and values["status"] not in TASK_STATUSES:
         raise bad_request("invalid task status")
+    if "estimated_hours" in values:
+        booked_hours = _confirmed_booking_hours(db, task.id)
+        if values["estimated_hours"] < booked_hours:
+            raise bad_request(
+                f"当前任务已确认预约 {booked_hours} 小时，预计工时不能小于已确认预约工时"
+            )
+    owner_changed = "owner_id" in values and values["owner_id"] != task.owner_id
+    time_changed = any(
+        key in values and values[key] != getattr(task, key)
+        for key in {"planned_start", "planned_end"}
+    )
     for key, value in values.items():
         setattr(task, key, value)
     db.flush()
+    if owner_changed:
+        create_notification(
+            db,
+            task.owner_id,
+            "task_owner_changed",
+            "任务负责人已变更",
+            f"任务“{task.name}”现已由你负责。",
+            level="warning",
+            related_type="task",
+            related_id=task.id,
+        )
+    if time_changed:
+        create_notification(
+            db,
+            task.owner_id,
+            "task_time_changed",
+            "任务计划时间发生变化",
+            f"任务“{task.name}”的计划时间已调整为 "
+            f"{task.planned_start:%Y-%m-%d %H:%M} 至 {task.planned_end:%Y-%m-%d %H:%M}。",
+            level="warning",
+            related_type="task",
+            related_id=task.id,
+        )
     log_operation(db, operator_id=user.id, module="task", action="update", object_type="task", object_id=task.id, before_data=before, after_data=model_to_dict(task))
     db.commit()
     db.refresh(task)
@@ -141,7 +223,7 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
         )
 
     before = model_to_dict(task)
-    db.delete(task)
+    task.is_deleted = True
     db.flush()
     log_operation(
         db,

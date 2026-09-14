@@ -1,5 +1,6 @@
 export interface CurrentUser {
   id: number
+  employee_no: string
   username: string
   name: string
   email?: string
@@ -11,7 +12,7 @@ export interface CurrentUser {
 }
 
 export interface LoginPayload {
-  username: string
+  employee_no: string
   password: string
 }
 
@@ -20,4 +21,3 @@ export interface LoginResult {
   token_type: string
   user: CurrentUser
 }
-

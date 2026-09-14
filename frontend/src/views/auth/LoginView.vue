@@ -11,23 +11,25 @@ const userStore = useUserStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 const isComposing = ref(false)
-const form = reactive({ username: '', password: '' })
+const form = reactive({ employee_no: '', password: '' })
 const rules: FormRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  employee_no: [{ required: true, message: '请输入员工号', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
 
 async function submit() {
   if (loading.value) return
   // The API performs Unicode normalization and retains a fallback for legacy
-  // usernames, so the UI only removes accidental surrounding whitespace.
-  form.username = form.username.trim()
+  // employee numbers, so the UI only removes accidental surrounding whitespace.
+  form.employee_no = form.employee_no.trim()
   if (!(await formRef.value?.validate())) return
   loading.value = true
   try {
     await userStore.login(form)
     ElMessage.success('登录成功')
-    await router.replace(String(route.query.redirect || '/dashboard'))
+    const roles = userStore.profile?.roles || []
+    const memberOnly = roles.length === 1 && roles[0] === 'project_member'
+    await router.replace(String(route.query.redirect || (memberOnly ? '/my-tasks' : '/dashboard')))
   } finally {
     loading.value = false
   }
@@ -55,7 +57,7 @@ function handleEnter(event: KeyboardEvent) {
         <h2>欢迎回来</h2>
         <p>登录项目任务与人力协同管理系统</p>
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @compositionstart="isComposing=true" @compositionend="isComposing=false" @keydown.enter="handleEnter">
-          <el-form-item label="用户名" prop="username"><el-input v-model.trim="form.username" size="large" placeholder="请输入用户名" /></el-form-item>
+          <el-form-item label="员工号" prop="employee_no"><el-input v-model.trim="form.employee_no" size="large" placeholder="请输入员工号" /></el-form-item>
           <el-form-item label="密码" prop="password"><el-input v-model="form.password" size="large" type="password" show-password placeholder="请输入密码" /></el-form-item>
           <el-button type="primary" size="large" :loading="loading" class="submit" @click="submit">登录</el-button>
         </el-form>

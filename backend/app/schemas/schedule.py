@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -73,11 +74,15 @@ class ScheduleDecision(ORMModel):
 
 
 class ScheduleConflict(ORMModel):
-    schedule_id: int
-    project_id: int
+    conflict_type: Literal["project_booking", "personal_time"] = "project_booking"
+    conflict_id: int
+    schedule_id: int | None = None
+    personal_time_id: int | None = None
+    project_id: int | None = None
     project_name: str
-    task_id: int
+    task_id: int | None = None
     task_name: str
+    personal_time_type: str | None = None
     user_id: int
     user_name: str
     start_time: datetime

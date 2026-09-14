@@ -36,11 +36,13 @@ class ProjectRepository:
         status: str | None = None,
         manager_id: int | None = None,
         department_id: int | None = None,
+        approval_status: str | None = None,
         visible_project_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         manager = aliased(User)
         creator = aliased(User)
         approver = aliased(User)
+        approval_required_user = aliased(User)
         booked_hours = booked_hours_expression()
         filters = [Project.is_deleted.is_(False)]
         if keyword:
@@ -51,6 +53,8 @@ class ProjectRepository:
             filters.append(Project.manager_id == manager_id)
         if department_id:
             filters.append(Project.department_id == department_id)
+        if approval_status:
+            filters.append(Project.approval_status == approval_status)
         if visible_project_ids is not None:
             filters.append(Project.id.in_(visible_project_ids or {-1}))
         total = db.scalar(select(func.count(Project.id)).where(*filters)) or 0
@@ -61,19 +65,32 @@ class ProjectRepository:
                 Department.name.label("department_name"),
                 creator.name.label("creator_name"),
                 approver.name.label("approver_name"),
+                approval_required_user.name.label("approval_required_name"),
                 booked_hours.label("booked_hours"),
             )
             .join(manager, manager.id == Project.manager_id)
             .outerjoin(Department, Department.id == Project.department_id)
             .outerjoin(creator, creator.id == Project.created_by)
             .outerjoin(approver, approver.id == Project.approved_by)
+            .outerjoin(
+                approval_required_user,
+                approval_required_user.id == Project.approver_id,
+            )
             .where(*filters)
             .order_by(Project.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()
         items = []
-        for project, manager_name, department_name, creator_name, approver_name, booked in rows:
+        for (
+            project,
+            manager_name,
+            department_name,
+            creator_name,
+            approver_name,
+            approval_required_name,
+            booked,
+        ) in rows:
             data = {col.name: getattr(project, col.name) for col in Project.__table__.columns}
             used = booked or 0
             data.update(
@@ -81,6 +98,7 @@ class ProjectRepository:
                 department_name=department_name,
                 creator_name=creator_name,
                 approver_name=approver_name,
+                approval_required_name=approval_required_name,
                 booked_hours=used,
                 remaining_hours=max(project.budget_hours - used, 0),
             )

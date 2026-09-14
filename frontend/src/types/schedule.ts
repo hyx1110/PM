@@ -41,14 +41,19 @@ export interface ScheduleQuery extends PageQuery {
   task_id?: number
   department_id?: number
   status?: string
+  sort_order?: 'asc' | 'desc'
 }
 
 export interface ScheduleConflict {
-  schedule_id: number
-  project_id: number
+  conflict_type: 'project_booking' | 'personal_time'
+  conflict_id: number
+  schedule_id?: number
+  personal_time_id?: number
+  project_id?: number
   project_name: string
-  task_id: number
+  task_id?: number
   task_name: string
+  personal_time_type?: string
   user_id: number
   user_name: string
   start_time: string

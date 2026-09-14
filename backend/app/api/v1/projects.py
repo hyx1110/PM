@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import require_permission
+from app.core.dependencies import get_current_user, require_permission
 from app.core.responses import success
 from app.models.user import User
 from app.schemas.project import (
@@ -26,10 +26,23 @@ def list_projects(
     status: str | None = None,
     manager_id: int | None = None,
     department_id: int | None = None,
+    approval_status: str | None = None,
     current_user: User = Depends(require_permission("project:view")),
     db: Session = Depends(get_db),
 ):
-    return success(project_service.list_projects(db, current_user, page, page_size, keyword, status, manager_id, department_id))
+    return success(
+        project_service.list_projects(
+            db,
+            current_user,
+            page,
+            page_size,
+            keyword,
+            status,
+            manager_id,
+            department_id,
+            approval_status,
+        )
+    )
 
 
 @router.post("")
@@ -51,6 +64,16 @@ def get_project(
     return success(project_service.project_detail(db, project_id, current_user))
 
 
+@router.post("/{project_id}/submit")
+def submit_project(
+    project_id: int,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    project_service.submit_project(db, project_id, current_user)
+    return success(project_service.project_detail(db, project_id, current_user))
+
+
 @router.put("/{project_id}")
 def update_project(
     project_id: int,
@@ -66,7 +89,7 @@ def update_project(
 def approve_project(
     project_id: int,
     payload: ProjectDecision,
-    current_user: User = Depends(require_permission("project:edit")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     project_service.decide_project(db, project_id, payload, current_user, approved=True)
@@ -77,7 +100,7 @@ def approve_project(
 def reject_project(
     project_id: int,
     payload: ProjectDecision,
-    current_user: User = Depends(require_permission("project:edit")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     project_service.decide_project(db, project_id, payload, current_user, approved=False)

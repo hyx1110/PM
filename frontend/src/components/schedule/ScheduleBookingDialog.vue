@@ -205,7 +205,7 @@ async function submit() {
         </el-form-item>
         <el-form-item label="人员" prop="user_id">
           <el-select v-model="form.user_id" filterable style="width:100%">
-            <el-option v-for="item in users" :key="item.id" :label="`${item.name} (${item.username})`" :value="item.id"/>
+            <el-option v-for="item in users" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/>
           </el-select>
         </el-form-item>
         <el-form-item label="自动计算工时"><el-input :model-value="`${plannedHours} 小时`" disabled/></el-form-item>

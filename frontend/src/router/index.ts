@@ -9,6 +9,7 @@ const routes: RouteRecordRaw[] = [
     redirect: '/dashboard',
     children: [
       { path: 'dashboard', component: () => import('@/views/dashboard/DashboardView.vue'), meta: { title: '首页' } },
+      { path: 'my-tasks', component: () => import('@/views/task/MyTaskView.vue'), meta: { title: '我的任务', permission: 'task:view' } },
       { path: 'users', component: () => import('@/views/user/UserView.vue'), meta: { title: '用户管理', permission: 'user:view' } },
       { path: 'organizations', component: () => import('@/views/organization/OrganizationView.vue'), meta: { title: '组织管理', permission: 'organization:view' } },
       { path: 'roles', component: () => import('@/views/role/RoleView.vue'), meta: { title: '角色权限', permission: 'role:view' } },

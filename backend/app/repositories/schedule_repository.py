@@ -129,7 +129,10 @@ class ScheduleRepository:
         rows = db.execute(statement.order_by(ScheduleBooking.start_time)).all()
         return [
             {
+                "conflict_type": "project_booking",
+                "conflict_id": item.id,
                 "schedule_id": item.id,
+                "personal_time_id": None,
                 "project_id": item.project_id,
                 "project_name": project_name,
                 "task_id": item.task_id,
@@ -154,7 +157,9 @@ class ScheduleRepository:
         task_id: int | None = None,
         department_id: int | None = None,
         status: str | None = None,
+        sort_order: str = "asc",
         visible_project_ids: set[int] | None = None,
+        visible_user_ids: set[int] | None = None,
         viewer_user_id: int | None = None,
     ) -> tuple[list[dict], int]:
         filters = []
@@ -180,12 +185,24 @@ class ScheduleRepository:
                     ScheduleBooking.created_by == viewer_user_id,
                 )
             )
+        if visible_user_ids is not None:
+            filters.append(ScheduleBooking.user_id.in_(visible_user_ids or {-1}))
         base = (
             select(ScheduleBooking)
             .join(User, User.id == ScheduleBooking.user_id)
             .where(*filters)
         )
         total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+        start_order = (
+            ScheduleBooking.start_time.desc()
+            if sort_order == "desc"
+            else ScheduleBooking.start_time.asc()
+        )
+        id_order = (
+            ScheduleBooking.id.desc()
+            if sort_order == "desc"
+            else ScheduleBooking.id.asc()
+        )
         rows = db.execute(
             select(
                 ScheduleBooking,
@@ -199,7 +216,7 @@ class ScheduleRepository:
             .join(Project, Project.id == ScheduleBooking.project_id)
             .join(Task, Task.id == ScheduleBooking.task_id)
             .where(*filters)
-            .order_by(ScheduleBooking.start_time, User.name)
+            .order_by(start_order, id_order, User.name)
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()

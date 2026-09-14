@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -31,6 +32,7 @@ def list_schedules(
     task_id: int | None = None,
     department_id: int | None = None,
     status: str | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
     current_user: User = Depends(require_permission("schedule:view")),
     db: Session = Depends(get_db),
 ):
@@ -47,6 +49,7 @@ def list_schedules(
             task_id=task_id,
             department_id=department_id,
             status=status,
+            sort_order=sort_order,
         )
     )
 

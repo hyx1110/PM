@@ -7,7 +7,7 @@ from app.schemas.common import ORMModel
 
 
 PROJECT_STATUSES = {"Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"}
-PROJECT_APPROVAL_STATUSES = {"pending", "approved", "rejected"}
+PROJECT_APPROVAL_STATUSES = {"draft", "pending", "approved", "rejected"}
 HOUR_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 
 
@@ -65,6 +65,8 @@ class ProjectResponse(ProjectBase):
     approval_status: str
     created_by: int | None = None
     creator_name: str | None = None
+    approver_id: int | None = None
+    approval_required_name: str | None = None
     approved_by: int | None = None
     approver_name: str | None = None
     approved_at: datetime | None = None

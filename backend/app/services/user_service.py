@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import bad_request, conflict, not_found
 from app.core.security import hash_password
 from app.models.organization import Department, Organization
+from app.models.employee_profile import EmployeeProfile
 from app.models.project import Project, ProjectMember
 from app.models.rbac import Role, UserRole
 from app.models.schedule import ScheduleBooking
@@ -11,7 +12,12 @@ from app.models.task import Task
 from app.models.user import User
 from app.repositories.rbac_repository import rbac_repository
 from app.repositories.user_repository import user_repository
+from app.schemas.employee_profile import EmployeeProfileUpdate
 from app.schemas.user import UserCreate, UserUpdate
+from app.services.employee_profile_service import (
+    ensure_default_system_role,
+    upsert_employee_profile,
+)
 from app.services.operation_log_service import log_operation
 from app.utils.model import model_to_dict
 
@@ -41,22 +47,44 @@ def user_detail(db: Session, user_id: int) -> dict:
     return item
 
 
+def _validate_role_ids(db: Session, role_ids: list[int]) -> list[int]:
+    unique_ids = list(set(role_ids))
+    if unique_ids:
+        found = set(db.scalars(select(Role.id).where(Role.id.in_(unique_ids))).all())
+        if found != set(unique_ids):
+            raise not_found("one or more roles do not exist")
+    return unique_ids
+
+
 def create_user(db: Session, payload: UserCreate, operator_id: int) -> User:
-    if user_repository.get_by_username(db, payload.username):
-        raise conflict("username already exists", 40902)
+    if user_repository.get_by_employee_no(db, payload.employee_no):
+        raise conflict("employee_no already exists", 40902)
+    if user_repository.get_by_username(db, payload.employee_no):
+        raise conflict("login account already exists", 40902)
     if payload.email and db.scalar(select(User).where(User.email == payload.email)):
         raise conflict("email already exists", 40903)
     _validate_relations(db, payload.department_id, payload.organization_id, payload.supervisor_id)
-    role_ids = list(set(payload.role_ids))
-    if role_ids:
-        found = set(db.scalars(select(Role.id).where(Role.id.in_(role_ids))).all())
-        if found != set(role_ids):
-            raise not_found("one or more roles do not exist")
-    values = payload.model_dump(exclude={"password", "role_ids"})
-    user = User(**values, password_hash=hash_password(payload.password))
+    role_ids = _validate_role_ids(db, payload.role_ids)
+    values = payload.model_dump(
+        exclude={
+            "employee_no",
+            "password",
+            "confirm_password",
+            "role_ids",
+            "employee_profile",
+        }
+    )
+    user = User(
+        **values,
+        employee_no=payload.employee_no,
+        username=payload.employee_no,
+        password_hash=hash_password(payload.password),
+    )
     db.add(user)
     db.flush()
     rbac_repository.replace_user_roles(db, user.id, role_ids)
+    profile = upsert_employee_profile(db, user.id, payload.employee_profile)
+    ensure_default_system_role(db, user.id)
     log_operation(
         db,
         operator_id=operator_id,
@@ -64,7 +92,14 @@ def create_user(db: Session, payload: UserCreate, operator_id: int) -> User:
         action="create",
         object_type="user",
         object_id=user.id,
-        after_data={key: value for key, value in model_to_dict(user).items() if key != "password_hash"},
+        after_data={
+            **{
+                key: value
+                for key, value in model_to_dict(user).items()
+                if key != "password_hash"
+            },
+            "employee_profile": model_to_dict(profile),
+        },
     )
     db.commit()
     db.refresh(user)
@@ -78,7 +113,26 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
     before = {key: value for key, value in model_to_dict(user).items() if key != "password_hash"}
     values = payload.model_dump(exclude_unset=True)
     role_ids = values.pop("role_ids", None)
+    employee_profile = values.pop("employee_profile", None)
     password = values.pop("password", None)
+    values.pop("confirm_password", None)
+
+    current_profile = db.scalar(
+        select(EmployeeProfile).where(EmployeeProfile.user_id == user_id)
+    )
+    if current_profile and current_profile.data_source == "hrdb":
+        hr_owned_fields = {
+            "name",
+            "email",
+            "phone",
+            "department_id",
+            "organization_id",
+            "supervisor_id",
+        }
+        if hr_owned_fields & values.keys() or employee_profile is not None:
+            raise bad_request(
+                "该用户由 HRDB 同步，姓名、组织、岗位和直属主管等主数据只读"
+            )
 
     # A department change invalidates an old organization assignment when the
     # client does not explicitly send organization_id. This also keeps API
@@ -105,7 +159,17 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
     if password:
         user.password_hash = hash_password(password)
     if role_ids is not None:
-        rbac_repository.replace_user_roles(db, user_id, role_ids)
+        rbac_repository.replace_user_roles(
+            db, user_id, _validate_role_ids(db, role_ids)
+        )
+    profile = None
+    if employee_profile is not None:
+        profile = upsert_employee_profile(
+            db,
+            user_id,
+            EmployeeProfileUpdate.model_validate(employee_profile),
+        )
+    ensure_default_system_role(db, user_id)
     db.flush()
     log_operation(
         db,
@@ -115,7 +179,18 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
         object_type="user",
         object_id=user.id,
         before_data=before,
-        after_data={key: value for key, value in model_to_dict(user).items() if key != "password_hash"},
+        after_data={
+            **{
+                key: value
+                for key, value in model_to_dict(user).items()
+                if key != "password_hash"
+            },
+            **(
+                {"employee_profile": model_to_dict(profile)}
+                if profile
+                else {}
+            ),
+        },
     )
     db.commit()
     db.refresh(user)
@@ -209,7 +284,7 @@ def delete_user(db: Session, user_id: int, operator: User) -> None:
     db.execute(update(Department).where(Department.manager_id == user_id).values(manager_id=None))
     db.execute(update(Organization).where(Organization.manager_id == user_id).values(manager_id=None))
     db.execute(update(User).where(User.supervisor_id == user_id).values(supervisor_id=None))
-    rbac_repository.replace_user_roles(db, user_id, [])
+    rbac_repository.clear_user_roles(db, user_id)
     user.status = "disabled"
     user.is_deleted = True
     user.department_id = None

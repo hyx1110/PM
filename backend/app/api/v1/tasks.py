@@ -34,6 +34,19 @@ def create_task(
     return success(task_service.task_detail(db, item.id, current_user))
 
 
+@router.get("/mine")
+def list_my_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    status: str | None = None,
+    current_user: User = Depends(require_permission("task:view")),
+    db: Session = Depends(get_db),
+):
+    return success(
+        task_service.list_my_tasks(db, current_user, page, page_size, status)
+    )
+
+
 @router.get("/{task_id}")
 def get_task(
     task_id: int,

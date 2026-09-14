@@ -5,6 +5,7 @@ export interface Department {
   manager_id?: number | null
   manager_name?: string | null
   status: string
+  data_source: 'local' | 'hrdb'
 }
 
 export interface DepartmentOption {
@@ -24,5 +25,6 @@ export interface OrganizationNode {
   manager_id?: number | null
   manager_name?: string | null
   status: string
+  data_source: 'local' | 'hrdb'
   children: OrganizationNode[]
 }

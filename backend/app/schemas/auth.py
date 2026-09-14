@@ -1,13 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=50)
+    employee_no: str = Field(
+        min_length=1,
+        max_length=50,
+        validation_alias=AliasChoices("employee_no", "username"),
+    )
     password: str = Field(min_length=1, max_length=128)
 
 
 class UserProfile(BaseModel):
     id: int
+    employee_no: str
     username: str
     name: str
     email: str | None = None

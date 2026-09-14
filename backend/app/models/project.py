@@ -29,6 +29,9 @@ class Project(TimestampMixin, Base):
     budget_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     approval_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    approver_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime)
     approval_note: Mapped[str | None] = mapped_column(Text)

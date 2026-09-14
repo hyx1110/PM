@@ -4,6 +4,7 @@ from unicodedata import normalize
 
 USERNAME_PATTERN = re.compile(r"^(?=.*[A-Za-z0-9])[\x21-\x7E]+$")
 USERNAME_ERROR = "用户名只能包含英文字母、数字和英文符号，不能包含中文或空格"
+EMPLOYEE_NO_ERROR = "员工号只能包含英文字母、数字和英文符号，不能包含中文或空格"
 
 
 def normalize_username(value: str) -> str:

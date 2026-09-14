@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.dependencies import get_role_codes
 from app.models.project import Project, ProjectMember
 from app.models.evaluation import TaskEvaluation
 from app.models.execution import ExecutionRecord
@@ -50,14 +51,26 @@ def workload_report(db: Session, user: User, start_date: date, end_date: date, d
 
 def dashboard_summary(db: Session, user: User) -> dict:
     scope = visible_project_ids(db, user)
+    has_team_scope = bool(
+        get_role_codes(db, user.id)
+        & {
+            "project_manager",
+            "department_manager",
+            "functional_manager",
+            "super_admin",
+        }
+    )
     project_filters = [Project.is_deleted.is_(False)]
-    task_filters = []
+    task_filters = [Task.is_deleted.is_(False)]
     schedule_filters = []
     if scope is not None:
         ids = scope or {-1}
         project_filters.append(Project.id.in_(ids))
         task_filters.append(Task.project_id.in_(ids))
         schedule_filters.append(ScheduleBooking.project_id.in_(ids))
+    if not has_team_scope:
+        task_filters.append(Task.owner_id == user.id)
+        schedule_filters.append(ScheduleBooking.user_id == user.id)
     now = datetime.now()
     today = now.date()
     project_total = db.scalar(select(func.count(Project.id)).where(*project_filters)) or 0
@@ -83,6 +96,33 @@ def dashboard_summary(db: Session, user: User) -> dict:
             ScheduleBooking.status.in_({"pending", "changed"}),
         )
     ) or 0
+    pending_project_approvals = db.scalar(
+        select(func.count(Project.id)).where(
+            Project.approver_id == user.id,
+            Project.approval_status == "pending",
+            Project.is_deleted.is_(False),
+        )
+    ) or 0
+    start_of_today = datetime.combine(today, datetime.min.time())
+    start_of_tomorrow = start_of_today + timedelta(days=1)
+    my_today_tasks = db.scalar(
+        select(func.count(Task.id)).where(
+            Task.owner_id == user.id,
+            Task.is_deleted.is_(False),
+            Task.status.notin_({"completed", "cancelled"}),
+            Task.planned_start < start_of_tomorrow,
+            Task.planned_end >= start_of_today,
+        )
+    ) or 0
+    my_upcoming_tasks = db.scalar(
+        select(func.count(Task.id)).where(
+            Task.owner_id == user.id,
+            Task.is_deleted.is_(False),
+            Task.status.notin_({"completed", "cancelled"}),
+            Task.planned_end >= start_of_tomorrow,
+            Task.planned_end < start_of_tomorrow + timedelta(days=7),
+        )
+    ) or 0
     today_count = db.scalar(
         select(func.count(ScheduleBooking.id)).where(
             *schedule_filters,
@@ -90,7 +130,9 @@ def dashboard_summary(db: Session, user: User) -> dict:
         )
     ) or 0
     risk_filters = [RiskRecord.status.in_({"open", "handling"})]
-    if scope is not None:
+    if not has_team_scope:
+        active_user_filters.append(User.id == user.id)
+    elif scope is not None:
         risk_filters.append(
             (RiskRecord.project_id.in_(scope or {-1}))
             | (RiskRecord.project_id.is_(None) & (RiskRecord.user_id == user.id))
@@ -165,6 +207,9 @@ def dashboard_summary(db: Session, user: User) -> dict:
         "projects_delayed": delayed_projects,
         "delayed_tasks": delayed_tasks,
         "pending_schedules": pending,
+        "pending_project_approvals": pending_project_approvals,
+        "my_today_tasks": my_today_tasks,
+        "my_upcoming_tasks": my_upcoming_tasks,
         "today_schedules": today_count,
         "open_risks": open_risks,
         "critical_risks": critical_risks,
@@ -190,7 +235,7 @@ def analytics_report(db: Session, user: User, start_date: date, end_date: date) 
     _validate_range(start_date, end_date)
     scope = visible_project_ids(db, user)
     project_filters = [Project.is_deleted.is_(False)]
-    task_filters = [Task.planned_end >= datetime.combine(start_date, datetime.min.time()), Task.planned_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
+    task_filters = [Task.is_deleted.is_(False), Task.planned_end >= datetime.combine(start_date, datetime.min.time()), Task.planned_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
     schedule_filters = [ScheduleBooking.start_time >= datetime.combine(start_date, datetime.min.time()), ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), datetime.min.time()), ScheduleBooking.status.in_({"confirmed", "running", "completed"})]
     execution_filters = [ExecutionRecord.actual_start >= datetime.combine(start_date, datetime.min.time()), ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
     if scope is not None:

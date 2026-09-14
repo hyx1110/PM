@@ -6,7 +6,7 @@ from pydantic import Field, model_validator
 from app.schemas.common import ORMModel
 
 TASK_TYPES = {"Project", "Routine", "Training", "Leave", "Other"}
-TASK_STATUSES = {"not_started", "pending", "confirmed", "running", "completed", "delayed", "cancelled"}
+TASK_STATUSES = {"not_started", "running", "completed", "suspended", "cancelled"}
 
 
 class TaskBase(ORMModel):
@@ -56,7 +56,8 @@ class TaskResponse(TaskBase):
     id: int
     project_name: str | None = None
     owner_name: str | None = None
+    project_manager_name: str | None = None
+    booked_hours: Decimal = Decimal("0")
     effective_status: str
     created_at: datetime
     updated_at: datetime
-

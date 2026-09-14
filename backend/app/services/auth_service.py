@@ -12,6 +12,7 @@ from app.utils.username import normalize_username
 def user_profile(db: Session, user: User) -> dict:
     return {
         "id": user.id,
+        "employee_no": user.employee_no,
         "username": user.username,
         "name": user.name,
         "email": user.email,
@@ -24,20 +25,26 @@ def user_profile(db: Session, user: User) -> dict:
 
 
 def login(db: Session, payload: LoginRequest) -> dict:
-    normalized_username = normalize_username(payload.username)
+    normalized_employee_no = normalize_username(payload.employee_no)
     user = db.scalar(
-        select(User).where(User.username == normalized_username, User.is_deleted.is_(False))
+        select(User).where(
+            User.employee_no == normalized_employee_no,
+            User.is_deleted.is_(False),
+        )
     )
-    # Fall back to the original value for accounts created before username
-    # normalization was introduced.
-    if not user and normalized_username != payload.username:
+    # Keep a fallback for employee numbers created before normalization was
+    # introduced.
+    if not user and normalized_employee_no != payload.employee_no:
         user = db.scalar(
-            select(User).where(User.username == payload.username, User.is_deleted.is_(False))
+            select(User).where(
+                User.employee_no == payload.employee_no,
+                User.is_deleted.is_(False),
+            )
         )
     if not user or not verify_password(payload.password, user.password_hash):
-        raise unauthorized("invalid username or password")
+        raise unauthorized("员工号或密码错误")
     if user.status != "active":
-        raise unauthorized("account is disabled")
+        raise unauthorized("当前账号已被禁用，请联系管理员")
     return {
         "access_token": create_access_token(user.id),
         "token_type": "bearer",

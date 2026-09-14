@@ -21,12 +21,23 @@ from app.services.notification_service import create_notification
 from app.services.operation_log_service import log_operation
 from app.utils.model import model_to_dict
 
+PROJECT_CREATOR_ROLES = {"project_manager", "department_manager", "super_admin"}
+PROJECT_CLOSED_STATUSES = {"Completed", "Cancelled"}
+
 
 def visible_project_ids(db: Session, user: User) -> set[int] | None:
     roles = get_role_codes(db, user.id)
     if "super_admin" in roles:
         return None
     visible = project_repository.visible_ids_for_user(db, user.id)
+    visible.update(
+        db.scalars(
+            select(Project.id).where(
+                Project.approver_id == user.id,
+                Project.is_deleted.is_(False),
+            )
+        ).all()
+    )
     if roles & {"department_manager", "functional_manager"} and user.department_id:
         visible.update(
             db.scalars(
@@ -69,7 +80,9 @@ def assert_project_approved(db: Session, project_id: int) -> Project:
     if not project:
         raise not_found("project not found")
     if project.approval_status != "approved":
-        raise bad_request("项目尚未通过 L3 审批，不能执行该操作")
+        raise bad_request("项目尚未通过审批，不能执行该操作")
+    if project.status in PROJECT_CLOSED_STATUSES:
+        raise bad_request("已完成或已取消的项目不能继续增加业务数据")
     return project
 
 
@@ -82,8 +95,13 @@ def assert_project_booking_manager(db: Session, project_id: int, user: User) -> 
     if not project:
         raise not_found("project not found")
     if project.approval_status != "approved":
-        raise bad_request("项目尚未通过 L3 审批，不能执行该操作")
-    if project.manager_id != user.id or "project_manager" not in get_role_codes(db, user.id):
+        raise bad_request("项目尚未通过审批，不能执行该操作")
+    if project.status in PROJECT_CLOSED_STATUSES:
+        raise bad_request("已完成或已取消的项目不能继续预约人力")
+    if (
+        project.manager_id != user.id
+        or not (get_role_codes(db, user.id) & PROJECT_CREATOR_ROLES)
+    ):
         raise forbidden("只有该项目的项目经理可以提交或调整人力预约")
     return project
 
@@ -92,8 +110,8 @@ def _validate_project_manager(db: Session, manager_id: int, department_id: int) 
     manager = db.get(User, manager_id)
     if not manager or manager.is_deleted or manager.status != "active":
         raise not_found("project manager not found")
-    if "project_manager" not in get_role_codes(db, manager.id):
-        raise bad_request("所选负责人必须具有项目经理角色")
+    if not (get_role_codes(db, manager.id) & PROJECT_CREATOR_ROLES):
+        raise bad_request("项目负责人必须具有项目经理、L3 或超级管理员角色")
     if manager.department_id != department_id:
         raise bad_request("项目经理必须属于项目所属部门")
     return manager
@@ -133,6 +151,7 @@ def list_projects(
     status: str | None,
     manager_id: int | None,
     department_id: int | None,
+    approval_status: str | None = None,
 ):
     items, total = project_repository.list(
         db,
@@ -142,6 +161,7 @@ def list_projects(
         status,
         manager_id,
         department_id,
+        approval_status,
         visible_project_ids(db, user),
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -156,36 +176,96 @@ def project_detail(db: Session, project_id: int, user: User) -> dict:
 def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
     if db.scalar(select(Project.id).where(Project.code == payload.code)):
         raise conflict("project code already exists", 40921)
-    if "project_manager" not in get_role_codes(db, user.id) or payload.manager_id != user.id:
-        raise forbidden("项目只能由项目经理本人创建，且负责人必须选择本人")
+    if not (get_role_codes(db, user.id) & PROJECT_CREATOR_ROLES):
+        raise forbidden("只有项目经理、L3 或超级管理员可以创建项目")
+    if payload.manager_id != user.id:
+        raise forbidden("项目负责人必须选择当前创建人本人")
     _validate_project_manager(db, payload.manager_id, payload.department_id)
-    approver = get_department_l3(db, payload.department_id)
     values = payload.model_dump(exclude={"status"})
     project = Project(
         **values,
         status="Draft",
-        approval_status="pending",
+        approval_status="draft",
         created_by=user.id,
     )
     db.add(project)
     db.flush()
-    create_notification(
-        db,
-        approver.id,
-        "project_approval_required",
-        "项目待 L3 审批",
-        f"项目 {project.code} - {project.name} 已提交，请审核项目与 {project.budget_hours} 小时工时额度。",
-        level="warning",
-        related_type="project",
-        related_id=project.id,
-    )
     log_operation(
         db,
         operator_id=user.id,
         module="project",
-        action="submit_for_approval",
+        action="create_draft",
         object_type="project",
         object_id=project.id,
+        after_data=model_to_dict(project),
+    )
+    db.commit()
+    db.refresh(project)
+    return project
+
+
+def _get_active_supervisor(db: Session, creator: User) -> User:
+    supervisor = db.get(User, creator.supervisor_id) if creator.supervisor_id else None
+    if not supervisor or supervisor.is_deleted or supervisor.status != "active":
+        raise bad_request("当前用户未设置有效直属主管，无法提交项目审批")
+    return supervisor
+
+
+def submit_project(db: Session, project_id: int, user: User) -> Project:
+    project = db.scalar(
+        select(Project)
+        .where(Project.id == project_id, Project.is_deleted.is_(False))
+        .with_for_update()
+    )
+    if not project:
+        raise not_found("project not found")
+    if project.created_by != user.id or project.manager_id != user.id:
+        raise forbidden("只有项目创建人可以提交审批")
+    if project.approval_status not in {"draft", "rejected"}:
+        raise bad_request("只有草稿或已驳回项目可以提交审批")
+    roles = get_role_codes(db, user.id)
+    if not (roles & PROJECT_CREATOR_ROLES):
+        raise forbidden("当前用户不再具有项目创建权限")
+    before = model_to_dict(project)
+    project.approval_note = None
+    project.approved_by = None
+    project.approved_at = None
+    if roles & {"department_manager", "super_admin"}:
+        project.approval_status = "approved"
+        project.status = "Planned"
+        project.approver_id = None
+        project.approved_at = datetime.now()
+        project.approval_note = "创建人属于 L3 或超级管理员，系统自动通过"
+        action = "auto_approve"
+    else:
+        creator = db.get(User, project.created_by)
+        if not creator:
+            raise not_found("project creator not found")
+        approver = _get_active_supervisor(db, creator)
+        project.approval_status = "pending"
+        project.status = "Draft"
+        project.approver_id = approver.id
+        create_notification(
+            db,
+            approver.id,
+            "project_approval_required",
+            "项目等待直属主管审批",
+            f"{creator.name} 提交了项目 {project.code} - {project.name}，"
+            f"请审核项目与 {project.budget_hours} 小时工时额度。",
+            level="warning",
+            related_type="project",
+            related_id=project.id,
+        )
+        action = "submit_for_approval"
+    db.flush()
+    log_operation(
+        db,
+        operator_id=user.id,
+        module="project",
+        action=action,
+        object_type="project",
+        object_id=project.id,
+        before_data=before,
         after_data=model_to_dict(project),
     )
     db.commit()
@@ -206,7 +286,6 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
     if not department_id:
         raise bad_request("project department is required")
     _validate_project_manager(db, manager_id, department_id)
-    approver = get_department_l3(db, department_id)
     planned_start = values.get("planned_start", project.planned_start)
     planned_end = values.get("planned_end", project.planned_end)
     actual_start = values.get("actual_start", project.actual_start)
@@ -219,25 +298,18 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
         raise bad_request("invalid project status")
     if project.approval_status != "approved":
         if project.manager_id != user.id:
-            raise forbidden("待审批或已驳回项目只能由项目经理修改后重新提交")
+            raise forbidden("未审批项目只能由项目创建人修改")
+        if project.approval_status == "pending":
+            raise bad_request("待审批项目不能修改，请先由直属主管审批")
         values["status"] = "Draft"
     for key, value in values.items():
         setattr(project, key, value)
     if project.approval_status == "rejected":
-        project.approval_status = "pending"
+        project.approval_status = "draft"
+        project.approver_id = None
         project.approved_by = None
         project.approved_at = None
         project.approval_note = None
-        create_notification(
-            db,
-            approver.id,
-            "project_approval_required",
-            "项目修改后重新待审",
-            f"项目 {project.code} - {project.name} 已修改并重新提交。",
-            level="warning",
-            related_type="project",
-            related_id=project.id,
-        )
     db.flush()
     log_operation(
         db,
@@ -268,9 +340,12 @@ def decide_project(
     )
     if not project:
         raise not_found("project not found")
-    _assert_department_l3(db, project, user)
     if project.approval_status != "pending":
         raise bad_request("only pending projects can be reviewed")
+    if project.approver_id != user.id:
+        raise forbidden("只有项目创建人的直属主管可以审批")
+    if project.created_by == user.id:
+        raise forbidden("项目创建人不能审批自己的项目")
     if not approved and not payload.note:
         raise bad_request("驳回项目时必须填写原因")
     before = model_to_dict(project)
@@ -287,7 +362,7 @@ def decide_project(
             db,
             recipient_id,
             "project_approved" if approved else "project_rejected",
-            "项目已通过 L3 审批" if approved else "项目被 L3 驳回",
+            "项目审批已通过" if approved else "项目审批已驳回",
             f"项目 {project.code} - {project.name} {'已获批' if approved else '未通过审批'}。"
             + (f" 审批意见：{payload.note}" if payload.note else ""),
             level="info" if approved else "warning",
@@ -313,8 +388,8 @@ def decide_project(
 
 def delete_draft_project(db: Session, project_id: int, user: User) -> None:
     project = assert_project_manageable(db, project_id, user)
-    if project.status != "Draft":
-        raise bad_request("only draft projects can be deleted")
+    if project.approval_status not in {"draft", "rejected"}:
+        raise bad_request("只有草稿或已驳回项目可以删除")
     before = model_to_dict(project)
     project.is_deleted = True
     log_operation(
@@ -335,11 +410,17 @@ def list_members(db: Session, project_id: int, user: User):
 
 
 def add_member(db: Session, project_id: int, payload: ProjectMemberCreate, user: User) -> ProjectMember:
-    assert_project_manageable(db, project_id, user)
+    project = assert_project_manageable(db, project_id, user)
     assert_project_approved(db, project_id)
     member_user = db.get(User, payload.user_id)
-    if not member_user or member_user.is_deleted:
+    if (
+        not member_user
+        or member_user.is_deleted
+        or member_user.status != "active"
+    ):
         raise not_found("user not found")
+    if not member_user.department_id or not member_user.organization_id:
+        raise bad_request("项目成员必须来自完整的部门和组织架构")
     member = db.scalar(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
@@ -357,6 +438,16 @@ def add_member(db: Session, project_id: int, payload: ProjectMemberCreate, user:
         member = ProjectMember(project_id=project_id, **payload.model_dump())
         db.add(member)
     db.flush()
+    if member_user.id != user.id:
+        create_notification(
+            db,
+            member_user.id,
+            "project_member_added",
+            "你已加入项目",
+            f"你已被加入项目“{project.name}”。",
+            related_type="project",
+            related_id=project.id,
+        )
     log_operation(
         db,
         operator_id=user.id,

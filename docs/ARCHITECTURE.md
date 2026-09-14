@@ -39,7 +39,7 @@ Celery Beat ── Redis ── Celery Worker
 | `api` | JWT、统一解包、Blob 下载、领域接口 |
 | `types` | V1/V2 请求响应类型 |
 | `router` | 登录保护、权限路由、懒加载 |
-| `components/schedule` | 半小时时间轴、预约卡、拖放槽位、工作时段表单和冲突详情 |
+| `components/schedule` | 半小时时间轴、项目预约卡、个人时间卡与表单、拖放槽位、工作时段表单和冲突详情 |
 | `views/dashboard` | 管理驾驶舱 |
 | `views/workload`、`analytics` | 负载与经营分析 |
 | `views/risk`、`notification` | 风险/通知闭环 |
@@ -48,16 +48,41 @@ Celery Beat ── Redis ── Celery Worker
 ## 数据范围
 
 - `super_admin`：全量。
-- L3/L4：本部门项目，以及本人管理或参与项目。L3 是项目和追加工时的指定审批角色，L4 不参与这两项审批。
+- 系统 L3/L4：本部门项目，以及本人管理或参与项目。L3 是项目和追加工时的指定审批角色，L4 不参与这两项审批。系统权限不区分该角色来自人工分配还是人事职级自动映射。
 - 项目经理：本人管理或参与项目；写操作仍要求可管理项目。
 - 项目成员：本人参与项目和本人关联的无项目风险/通知。
 - 前端隐藏菜单和按钮不是安全边界，后端权限与 Service 数据范围才是。
+
+## 人员身份、正式职级与 RBAC
+
+```text
+正式人员关系                         系统鉴权关系
+
+users.id（内部数字主键）             roles / permissions
+├─ employee_no（员工号/登录账号）    └─ user_roles
+├─ department_id                         ├─ is_manual   人工授权
+├─ organization_id                       └─ is_hr_auto  职级自动授权
+├─ supervisor_id
+└─ employee_profiles（1:1）
+   ├─ position_id（一个员工一个岗位）
+   └─ hr_management_level
+      ├─ department_manager ─────────→ 系统 L3 / department_manager
+      ├─ management_manager ─────────→ 系统 L4 / functional_manager
+      └─ employee             ───────→ 不自动授权
+```
+
+- 超级管理员、L3、L4、项目经理、项目成员仍是五类完整的系统功能角色；正式职级只提供一条自动授权来源，不替代 RBAC。
+- 同一系统角色可以同时由人工与职级授予。职级变化只撤销 `is_hr_auto`，因此不会误删人工授权。
+- `username` 为升级兼容字段并始终等于 `employee_no`，新接口和 Excel 统一使用 `employee_no`。
+- 当前版本只在 MySQL 中建立可测试的数据架构，未包含正式库同步任务或真实数据导入。
 
 ## 排期并发与冲突
 
 - 新预约不经过草稿，项目经理提交后直接进入 `pending`；只有 `user_id` 对应的被预约人本人可以确认/拒绝。
 - `pending/changed` 且被预约人尚未确认时，原提交人可以撤回为 `withdrawn`，相应项目额度立即释放。
 - `pending/confirmed/changed/running` 参与时间冲突检测。
+- `active` 个人时间安排与项目预约双向互斥；培训、会议、休假和其他安排均阻止重叠预约，本人撤回后释放时段。
+- 项目预约和个人时间创建先锁定相同的用户记录，再查询两类冲突，避免两个并发事务同时占用同一时段。
 - 拖动请求携带读取时的 `expected_version`，服务端版本不一致返回 `40903`。
 - 已确认排期移动后变为 `changed`，需要成员重新确认。
 - 每次写入递增版本并记录修改前后数据。

@@ -23,6 +23,9 @@ class Notification(TimestampMixin, Base):
     delivered_channels: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="unread", index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime)
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True
+    )
 
 
 class NotificationPreference(TimestampMixin, Base):
@@ -38,4 +41,3 @@ class NotificationPreference(TimestampMixin, Base):
     wecom_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dingtalk_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     upcoming_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
-

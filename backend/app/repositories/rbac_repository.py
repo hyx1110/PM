@@ -27,9 +27,32 @@ class RBACRepository:
         db.add_all([RolePermission(role_id=role_id, permission_id=item) for item in set(permission_ids)])
 
     def replace_user_roles(self, db: Session, user_id: int, role_ids: list[int]) -> None:
-        db.query(UserRole).filter(UserRole.user_id == user_id).delete(synchronize_session=False)
-        db.add_all([UserRole(user_id=user_id, role_id=item) for item in set(role_ids)])
+        """Replace manual grants without removing HR-derived grants."""
+        requested = set(role_ids)
+        existing = {
+            item.role_id: item
+            for item in db.scalars(
+                select(UserRole).where(UserRole.user_id == user_id)
+            ).all()
+        }
+        for role_id, assignment in existing.items():
+            assignment.is_manual = role_id in requested
+            if not assignment.is_manual and not assignment.is_hr_auto:
+                db.delete(assignment)
+        for role_id in requested - set(existing):
+            db.add(
+                UserRole(
+                    user_id=user_id,
+                    role_id=role_id,
+                    is_manual=True,
+                    is_hr_auto=False,
+                )
+            )
+
+    def clear_user_roles(self, db: Session, user_id: int) -> None:
+        db.query(UserRole).filter(UserRole.user_id == user_id).delete(
+            synchronize_session=False
+        )
 
 
 rbac_repository = RBACRepository()
-

@@ -8,6 +8,7 @@ import {
   deleteProject,
   getProjects,
   rejectProject,
+  submitProject,
   updateProject,
 } from '@/api/project'
 import { getDepartmentOptions } from '@/api/organization'
@@ -38,6 +39,8 @@ const editingProject = ref<Project>()
 const formRef = ref<FormInstance>()
 const isProjectManager = computed(() => userStore.profile?.roles.includes('project_manager') || false)
 const isL3 = computed(() => userStore.profile?.roles.includes('department_manager') || false)
+const isSuperAdmin = computed(() => userStore.profile?.roles.includes('super_admin') || false)
+const canCreateProject = computed(() => isProjectManager.value || isL3.value || isSuperAdmin.value)
 const emptyForm = (): ProjectPayload => ({
   code: '',
   name: '',
@@ -71,8 +74,8 @@ const statusLabel: Record<string, string> = {
   Completed: '已完成',
   Cancelled: '已取消',
 }
-const approvalLabel = { pending: '待 L3 审批', approved: '已审批', rejected: '已驳回' }
-const approvalType = { pending: 'warning', approved: 'success', rejected: 'danger' } as const
+const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已审批', rejected: '已驳回' }
+const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
 const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
   Running: 'primary',
   Completed: 'success',
@@ -81,10 +84,8 @@ const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> 
 }
 const statusType = (status: string) => statusTypeMap[status] || ''
 const canReview = (row: Project) =>
-  isL3.value
-  && row.approval_status === 'pending'
-  && row.department_id === userStore.profile?.department_id
-  && departments.value.find((item) => item.id === row.department_id)?.manager_id === userStore.profile?.id
+  row.approval_status === 'pending'
+  && row.approver_id === userStore.profile?.id
 
 async function load() {
   loading.value = true
@@ -137,14 +138,12 @@ function openEdit(row: Project) {
   dialogVisible.value = true
 }
 
-async function save() {
+async function save(submitAfterSave = false) {
   if (!(await formRef.value?.validate())) return
   if (form.planned_end < form.planned_start) {
     return ElMessage.warning('计划结束日期不能早于开始日期')
   }
-  if (!editingId.value && !departments.value.find((item) => item.id === form.department_id)?.manager_id) {
-    return ElMessage.warning('所选部门尚未设置 L3，请先在组织管理中设置')
-  }
+  let saved: Project
   if (editingId.value) {
     const { code: _code, ...payload } = form
     if (editingProject.value?.approval_status === 'approved') {
@@ -154,27 +153,32 @@ async function save() {
         budget_hours: _budgetHours,
         ...editable
       } = payload
-      await updateProject(editingId.value, editable)
+      saved = await updateProject(editingId.value, editable)
     } else {
-      await updateProject(editingId.value, payload)
+      saved = await updateProject(editingId.value, payload)
     }
-    ElMessage.success(
-      editingProject.value?.approval_status === 'rejected'
-        ? '项目已修改并重新提交 L3 审批'
-        : '项目已保存',
-    )
   } else {
-    await createProject(form)
-    ElMessage.success('项目已提交 L3 审批')
+    saved = await createProject(form)
   }
+  if (submitAfterSave) {
+    await submitProject(saved.id)
+    ElMessage.success(isL3.value || isSuperAdmin.value ? '项目已自动审批通过' : '项目已提交直属主管审批')
+  } else ElMessage.success(saved.approval_status === 'approved' ? '项目已保存' : '项目草稿已保存')
   dialogVisible.value = false
+  await load()
+}
+
+async function submitExisting(row: Project) {
+  await ElMessageBox.confirm(`确认提交项目“${row.name}”审批吗？`, '提交项目', { type: 'warning' })
+  await submitProject(row.id)
+  ElMessage.success(isL3.value || isSuperAdmin.value ? '项目已自动审批通过' : '项目已提交直属主管审批')
   await load()
 }
 
 async function approve(row: Project) {
   await ElMessageBox.confirm(
     `确认批准项目“${row.name}”及 ${row.budget_hours} 小时工时额度吗？`,
-    'L3 项目审批',
+    '项目审批',
     { type: 'warning' },
   )
   await approveProject(row.id)
@@ -183,7 +187,7 @@ async function approve(row: Project) {
 }
 
 async function reject(row: Project) {
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', 'L3 项目审批', {
+  const { value } = await ElMessageBox.prompt('请输入驳回原因', '项目审批', {
     inputType: 'textarea',
     inputValidator: (value) => Boolean(value?.trim()) || '请填写驳回原因',
   })
@@ -212,13 +216,13 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">项目管理</h1>
-        <p class="page-subtitle">项目经理提交项目与工时额度，由所属部门 L3 审批后生效。</p>
+        <p class="page-subtitle">项目经理由直属主管审批；L3 或超级管理员提交时系统自动通过，避免自己审批自己。</p>
       </div>
-      <el-button v-if="isProjectManager" type="primary" @click="openCreate">新建并提交审批</el-button>
+      <el-button v-if="canCreateProject" type="primary" @click="openCreate">新建项目</el-button>
     </header>
     <el-alert
-      v-if="userStore.hasPermission('project:edit') && !isProjectManager && !isL3"
-      title="只有项目经理角色可以创建项目；L3 负责审批本部门项目。"
+      v-if="userStore.hasPermission('project:edit') && !canCreateProject"
+      title="只有项目经理、L3 或超级管理员可以创建项目。"
       type="info"
       :closable="false"
       show-icon
@@ -262,12 +266,15 @@ onMounted(async () => {
         <el-table-column label="计划周期" width="205">
           <template #default="{row}">{{ formatDate(row.planned_start) }} 至 {{ formatDate(row.planned_end) }}</template>
         </el-table-column>
-        <el-table-column v-if="userStore.hasPermission('project:edit')" label="操作" fixed="right" width="220">
+        <el-table-column label="操作" fixed="right" width="220">
           <template #default="{row}">
             <el-button v-if="canReview(row)" link type="success" @click="approve(row)">批准</el-button>
             <el-button v-if="canReview(row)" link type="danger" @click="reject(row)">驳回</el-button>
-            <el-button v-if="row.manager_id===userStore.profile?.id || row.approval_status==='approved'" link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="row.status==='Draft' && row.manager_id===userStore.profile?.id" link type="danger" @click="remove(row)">删除</el-button>
+            <template v-if="userStore.hasPermission('project:edit')">
+              <el-button v-if="['draft','rejected'].includes(row.approval_status)&&row.manager_id===userStore.profile?.id" link type="warning" @click="submitExisting(row)">提交审批</el-button>
+              <el-button v-if="row.approval_status!=='pending'&&(row.manager_id===userStore.profile?.id || row.approval_status==='approved')" link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button v-if="['draft','rejected'].includes(row.approval_status) && row.manager_id===userStore.profile?.id" link type="danger" @click="remove(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -276,8 +283,8 @@ onMounted(async () => {
       </div>
     </section>
 
-    <el-dialog v-model="dialogVisible" :title="editingId?'编辑项目':'新建项目并提交 L3 审批'" width="720px" destroy-on-close>
-      <el-alert v-if="!editingId" title="项目创建后处于待审批状态，L3 批准后才能维护成员、任务和预约人力。" type="info" :closable="false" show-icon/>
+    <el-dialog v-model="dialogVisible" :title="editingId?'编辑项目':'新建项目'" width="720px" destroy-on-close>
+      <el-alert v-if="!editingId" title="可以先保存草稿；项目经理提交后由直属主管审批，L3/超级管理员提交时自动通过。" type="info" :closable="false" show-icon/>
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
           <el-form-item label="项目编号" prop="code"><el-input v-model="form.code" :disabled="Boolean(editingId)"/></el-form-item>
@@ -314,7 +321,8 @@ onMounted(async () => {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible=false">取消</el-button>
-        <el-button type="primary" @click="save">{{ editingId ? '保存' : '提交 L3 审批' }}</el-button>
+        <el-button @click="save(false)">{{ editingProject?.approval_status==='approved' ? '保存' : '保存草稿' }}</el-button>
+        <el-button v-if="editingProject?.approval_status!=='approved'" type="primary" @click="save(true)">保存并提交审批</el-button>
       </template>
     </el-dialog>
   </div>

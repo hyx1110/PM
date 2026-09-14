@@ -47,6 +47,9 @@ export interface DashboardSummary {
   projects_running: number
   delayed_tasks: number
   pending_schedules: number
+  pending_project_approvals: number
+  my_today_tasks: number
+  my_upcoming_tasks: number
   today_schedules: number
   projects_completed: number
   projects_delayed: number

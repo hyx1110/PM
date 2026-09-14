@@ -25,6 +25,7 @@ class DepartmentResponse(ORMModel):
     manager_id: int | None
     manager_name: str | None = None
     status: str
+    data_source: str
     created_at: datetime
     updated_at: datetime
 
@@ -63,5 +64,5 @@ class OrganizationNode(ORMModel):
     manager_id: int | None
     manager_name: str | None = None
     status: str
+    data_source: str
     children: list["OrganizationNode"] = []
-

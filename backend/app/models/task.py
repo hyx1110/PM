@@ -24,4 +24,6 @@ class Task(TimestampMixin, Base):
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
     description: Mapped[str | None] = mapped_column(Text)
     remark: Mapped[str | None] = mapped_column(Text)
-
+    is_deleted: Mapped[bool] = mapped_column(
+        nullable=False, default=False, index=True
+    )

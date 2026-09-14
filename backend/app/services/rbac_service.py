@@ -5,6 +5,7 @@ from app.core.exceptions import not_found
 from app.models.rbac import Permission, Role
 from app.models.user import User
 from app.repositories.rbac_repository import rbac_repository
+from app.services.employee_profile_service import ensure_default_system_role
 from app.services.operation_log_service import log_operation
 
 
@@ -51,6 +52,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
     if existing_count != len(set(role_ids)):
         raise not_found("one or more roles do not exist")
     rbac_repository.replace_user_roles(db, user_id, role_ids)
+    ensure_default_system_role(db, user_id)
     log_operation(
         db,
         operator_id=operator_id,

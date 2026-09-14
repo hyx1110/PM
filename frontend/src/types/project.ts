@@ -1,6 +1,6 @@
 import type { PageQuery } from './common'
 
-export type ProjectApprovalStatus = 'pending' | 'approved' | 'rejected'
+export type ProjectApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected'
 
 export interface Project {
   id: number
@@ -25,6 +25,8 @@ export interface Project {
   approval_status: ProjectApprovalStatus
   created_by?: number | null
   creator_name?: string | null
+  approver_id?: number | null
+  approval_required_name?: string | null
   approved_by?: number | null
   approver_name?: string | null
   approved_at?: string | null
@@ -53,6 +55,7 @@ export interface ProjectQuery extends PageQuery {
   status?: string
   manager_id?: number
   department_id?: number
+  approval_status?: ProjectApprovalStatus
 }
 
 export interface ProjectMember {

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import require_permission
+from app.core.dependencies import get_current_user, require_permission
 from app.core.responses import success
 from app.models.user import User
 from app.schemas.organization import DepartmentCreate, DepartmentUpdate, OrganizationCreate, OrganizationUpdate
@@ -14,7 +14,7 @@ router = APIRouter(tags=["组织"])
 
 @router.get("/departments")
 def departments(
-    _: User = Depends(require_permission("organization:view")),
+    _: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     return success(organization_service.list_departments(db))
