@@ -53,7 +53,6 @@ function handleEnter(event: KeyboardEvent) {
     </section>
     <section class="login-panel">
       <div class="card">
-        <div class="logo">协</div>
         <h2>欢迎回来</h2>
         <p>登录项目任务与人力协同管理系统</p>
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @compositionstart="isComposing=true" @compositionend="isComposing=false" @keydown.enter="handleEnter">
@@ -77,8 +76,7 @@ function handleEnter(event: KeyboardEvent) {
 .flow i { width: 25px; height: 1px; background: #60778e; }
 .login-panel { display: grid; place-items: center; padding: 64px; }
 .card { width: min(420px,100%); padding: 46px; border: 1px solid #e2e7ec; border-radius: 24px; background: white; box-shadow: 0 24px 60px rgba(38,50,64,.1); }
-.logo { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 14px; background: #355f8d; color: white; font-size: 18px; font-weight: 700; }
-.card h2 { margin: 28px 0 8px; color: #192438; font-size: 27px; }
+.card h2 { margin: 0 0 8px; color: #192438; font-size: 27px; }
 .card > p { margin: 0 0 30px; color: #8a94a3; font-size: 13px; }
 .submit { width: 100%; margin-top: 8px; border-radius: 10px; background: #355f8d; }
 .hint { margin-top: 22px; color: #a2aab6; font-size: 11px; line-height: 1.6; }

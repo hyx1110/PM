@@ -38,6 +38,7 @@ export interface ProjectPayload {
   name: string
   project_type: string
   manager_id: number
+  member_ids: number[]
   department_id: number
   budget_hours: number
   status: string

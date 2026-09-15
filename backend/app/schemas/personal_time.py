@@ -10,6 +10,7 @@ PersonalTimeType = Literal[
     "training",
     "meeting",
     "leave",
+    "out_of_office",
     "business_trip",
     "other",
 ]

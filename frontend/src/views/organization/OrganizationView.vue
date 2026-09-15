@@ -116,7 +116,7 @@ onMounted(load)
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">组织管理</h1><p class="page-subtitle">维护部门及 L1-L4 组织层级与主管关系。</p></div><div v-if="userStore.hasPermission('organization:edit')"><el-button @click="editDepartment()">新增部门</el-button><el-button type="primary" :disabled="!activeDepartment" @click="editOrganization()">新增组织</el-button></div></header>
+    <header class="page-header"><div><h1 class="page-title">组织管理</h1><p class="page-subtitle">本地测试数据可维护；标记为 HRDB 的部门和组织只能由同步任务更新。</p></div><div v-if="userStore.hasPermission('organization:edit')"><el-button @click="editDepartment()">新增部门</el-button><el-button type="primary" :disabled="!activeDepartment" @click="editOrganization()">新增组织</el-button></div></header>
     <section class="org-layout">
       <aside class="surface departments">
         <h3>部门</h3>
@@ -138,7 +138,7 @@ onMounted(load)
     </section>
 
     <el-dialog v-model="departmentDialog" :title="departmentId?'编辑部门':'新增部门'" width="500px">
-      <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item label="L3（项目审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-form>
+      <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item label="L3（部门负责人/追加工时审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-form>
       <template #footer><el-button @click="departmentDialog=false">取消</el-button><el-button type="primary" @click="saveDepartment">保存</el-button></template>
     </el-dialog>
     <el-dialog v-model="organizationDialog" :title="organizationId?'编辑组织':'新增组织'" width="540px">

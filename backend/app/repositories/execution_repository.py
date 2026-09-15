@@ -1,6 +1,6 @@
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.execution import ExecutionRecord
@@ -11,7 +11,17 @@ from app.models.user import User
 
 class ExecutionRepository:
     def get(self, db: Session, execution_id: int) -> ExecutionRecord | None:
-        return db.get(ExecutionRecord, execution_id)
+        return db.scalar(
+            select(ExecutionRecord)
+            .join(Task, Task.id == ExecutionRecord.task_id)
+            .join(Project, Project.id == Task.project_id)
+            .where(
+                ExecutionRecord.id == execution_id,
+                ExecutionRecord.is_deleted.is_(False),
+                Task.is_deleted.is_(False),
+                Project.is_deleted.is_(False),
+            )
+        )
 
     def detail(self, db: Session, execution_id: int) -> dict | None:
         row = db.execute(
@@ -27,7 +37,12 @@ class ExecutionRepository:
             .join(Task, Task.id == ExecutionRecord.task_id)
             .join(Project, Project.id == Task.project_id)
             .join(User, User.id == ExecutionRecord.user_id)
-            .where(ExecutionRecord.id == execution_id)
+            .where(
+                ExecutionRecord.id == execution_id,
+                ExecutionRecord.is_deleted.is_(False),
+                Task.is_deleted.is_(False),
+                Project.is_deleted.is_(False),
+            )
         ).first()
         if not row:
             return None
@@ -54,8 +69,13 @@ class ExecutionRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         visible_project_ids: set[int] | None = None,
+        own_user_id: int | None = None,
     ) -> tuple[list[dict], int]:
-        filters = []
+        filters = [
+            ExecutionRecord.is_deleted.is_(False),
+            Task.is_deleted.is_(False),
+            Project.is_deleted.is_(False),
+        ]
         if task_id:
             filters.append(ExecutionRecord.task_id == task_id)
         if user_id:
@@ -67,10 +87,16 @@ class ExecutionRepository:
         if end_date:
             filters.append(ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), time.min))
         if visible_project_ids is not None:
-            filters.append(Task.project_id.in_(visible_project_ids or {-1}))
+            project_scope = Task.project_id.in_(visible_project_ids or {-1})
+            filters.append(
+                or_(project_scope, ExecutionRecord.user_id == own_user_id)
+                if own_user_id is not None
+                else project_scope
+            )
         count_query = (
             select(func.count(ExecutionRecord.id))
             .join(Task, Task.id == ExecutionRecord.task_id)
+            .join(Project, Project.id == Task.project_id)
             .where(*filters)
         )
         total = db.scalar(count_query) or 0

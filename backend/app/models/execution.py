@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -20,4 +20,6 @@ class ExecutionRecord(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="running", index=True)
     description: Mapped[str | None] = mapped_column(Text)
     exception_reason: Mapped[str | None] = mapped_column(Text)
-
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, index=True
+    )

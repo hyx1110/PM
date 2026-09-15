@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.project import Project
@@ -21,7 +21,9 @@ class TaskRepository:
             select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0))
             .where(
                 ScheduleBooking.task_id == Task.id,
-                ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+                ScheduleBooking.status.in_(
+                    {"pending", "confirmed", "changed", "running", "completed"}
+                ),
             )
             .correlate(Task)
             .scalar_subquery()
@@ -40,7 +42,11 @@ class TaskRepository:
             .join(Project, Project.id == Task.project_id)
             .join(User, User.id == Task.owner_id)
             .join(manager, manager.id == Project.manager_id)
-            .where(Task.id == task_id, Task.is_deleted.is_(False))
+            .where(
+                Task.id == task_id,
+                Task.is_deleted.is_(False),
+                Project.is_deleted.is_(False),
+            )
         ).first()
         if not row:
             return None
@@ -62,8 +68,14 @@ class TaskRepository:
         owner_id: int | None = None,
         status: str | None = None,
         visible_project_ids: set[int] | None = None,
+        own_user_id: int | None = None,
     ) -> tuple[list[dict], int]:
-        filters = [Task.is_deleted.is_(False)]
+        filters = [
+            Task.is_deleted.is_(False),
+            Task.project_id.in_(
+                select(Project.id).where(Project.is_deleted.is_(False))
+            ),
+        ]
         if project_id:
             filters.append(Task.project_id == project_id)
         if owner_id:
@@ -73,7 +85,12 @@ class TaskRepository:
         elif status:
             filters.append(Task.status == status)
         if visible_project_ids is not None:
-            filters.append(Task.project_id.in_(visible_project_ids or {-1}))
+            project_scope = Task.project_id.in_(visible_project_ids or {-1})
+            filters.append(
+                or_(project_scope, Task.owner_id == own_user_id)
+                if own_user_id is not None
+                else project_scope
+            )
         total = db.scalar(select(func.count(Task.id)).where(*filters)) or 0
         manager = aliased(User)
         rows = db.execute(

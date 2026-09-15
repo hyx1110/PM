@@ -4,11 +4,13 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import { getWorkCalendar } from '@/api/work-calendar'
+import { getProjectMembers } from '@/api/project'
 import type { Project } from '@/types/project'
 import type { Schedule, SchedulePayload } from '@/types/schedule'
 import type { Task } from '@/types/task'
 import type { UserOption } from '@/types/user'
 import type { WorkCalendarDay } from '@/types/work-calendar'
+import { useUserStore } from '@/stores/user'
 
 const props = defineProps<{
   modelValue: boolean
@@ -22,6 +24,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   save: [payload: SchedulePayload]
 }>()
+const userStore = useUserStore()
 const formRef = ref<FormInstance>()
 const form = reactive({
   user_id: 0,
@@ -34,6 +37,7 @@ const form = reactive({
   remark: '',
 })
 const calendar = ref<WorkCalendarDay[]>([])
+const projectUsers = ref<UserOption[]>([])
 const loadedYears = new Set<number>()
 const rules: FormRules = {
   user_id: [{ required: true, message: '请选择人员' }],
@@ -76,6 +80,38 @@ const projectRemaining = computed(() => {
 const availableHours = (project: Project) =>
   project.remaining_hours
   + (props.initial?.project_id === project.id ? Number(props.initial.planned_hours) : 0)
+
+function canBookUserForProject(item: UserOption, project?: Project) {
+  if (!project) return false
+  const roles = userStore.profile?.roles || []
+  const currentUserId = userStore.profile?.id
+  if (roles.includes('super_admin')) return true
+  if (
+    project.manager_id === currentUserId
+    && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
+  ) return true
+  return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
+    && item.supervisor_id === currentUserId
+}
+
+async function loadProjectUsers(projectId: number) {
+  if (!projectId) {
+    projectUsers.value = []
+    return
+  }
+  const members = await getProjectMembers(projectId)
+  const ids = new Set(members.map((item) => item.user_id))
+  const project = props.projects.find((item) => item.id === projectId)
+  projectUsers.value = props.users.filter(
+    (item) => ids.has(item.id) && canBookUserForProject(item, project),
+  )
+  if (!projectUsers.value.some((item) => item.id === form.user_id)) form.user_id = 0
+}
+
+async function changeProject(projectId: number) {
+  form.task_id = projectTasks.value[0]?.id || 0
+  await loadProjectUsers(projectId)
+}
 
 async function ensureCalendar(year: number) {
   if (!year || loadedYears.has(year)) return
@@ -135,6 +171,7 @@ watch(
       })
       form.task_id = projectTasks.value[0]?.id || 0
     }
+    await loadProjectUsers(form.project_id)
     await ensureCalendar(dayjs(form.work_date).year())
   },
   { immediate: true },
@@ -190,11 +227,11 @@ async function submit() {
     destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <el-alert title="预约提交后直接由被预约人本人审批；时间按 30 分钟自动计算工时。" type="info" :closable="false" show-icon/>
+    <el-alert title="预约对象必须是当前项目成员；项目经理可预约本项目成员，L3/L4 可预约直属下属，提交后由被预约人本人审批。" type="info" :closable="false" show-icon/>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <div class="form-grid">
         <el-form-item label="项目" prop="project_id">
-          <el-select v-model="form.project_id" filterable style="width:100%" @change="form.task_id=projectTasks[0]?.id||0">
+          <el-select v-model="form.project_id" filterable style="width:100%" @change="changeProject">
             <el-option v-for="item in projects" :key="item.id" :label="`${item.name}（本次可用 ${availableHours(item)}h）`" :value="item.id"/>
           </el-select>
         </el-form-item>
@@ -205,7 +242,7 @@ async function submit() {
         </el-form-item>
         <el-form-item label="人员" prop="user_id">
           <el-select v-model="form.user_id" filterable style="width:100%">
-            <el-option v-for="item in users" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/>
+            <el-option v-for="item in projectUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/>
           </el-select>
         </el-form-item>
         <el-form-item label="自动计算工时"><el-input :model-value="`${plannedHours} 小时`" disabled/></el-form-item>

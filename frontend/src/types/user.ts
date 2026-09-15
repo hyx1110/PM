@@ -65,6 +65,7 @@ export interface UserOption {
   name: string
   department_id?: number | null
   organization_id?: number | null
+  supervisor_id?: number | null
 }
 
 export interface UserQuery extends PageQuery {

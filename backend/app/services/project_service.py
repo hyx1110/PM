@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, conflict, forbidden, not_found
-from app.models.organization import Department
+from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectHourRequest, ProjectMember
 from app.models.user import User
 from app.repositories.project_repository import project_repository
@@ -23,6 +23,14 @@ from app.utils.model import model_to_dict
 
 PROJECT_CREATOR_ROLES = {"project_manager", "department_manager", "super_admin"}
 PROJECT_CLOSED_STATUSES = {"Completed", "Cancelled"}
+PROJECT_STATUS_TRANSITIONS = {
+    "Draft": {"Planned", "Running", "Cancelled"},
+    "Planned": {"Running", "Suspended", "Completed", "Cancelled"},
+    "Running": {"Suspended", "Completed", "Cancelled"},
+    "Suspended": {"Running", "Completed", "Cancelled"},
+    "Completed": set(),
+    "Cancelled": set(),
+}
 
 
 def visible_project_ids(db: Session, user: User) -> set[int] | None:
@@ -50,6 +58,33 @@ def visible_project_ids(db: Session, user: User) -> set[int] | None:
     return visible
 
 
+def manageable_project_ids(db: Session, user: User) -> set[int] | None:
+    """Projects whose team-level data the current user may manage."""
+    roles = get_role_codes(db, user.id)
+    if "super_admin" in roles:
+        return None
+    manageable: set[int] = set()
+    if roles & PROJECT_CREATOR_ROLES:
+        manageable.update(
+            db.scalars(
+                select(Project.id).where(
+                    Project.manager_id == user.id,
+                    Project.is_deleted.is_(False),
+                )
+            ).all()
+        )
+    if roles & {"department_manager", "functional_manager"} and user.department_id:
+        manageable.update(
+            db.scalars(
+                select(Project.id).where(
+                    Project.department_id == user.department_id,
+                    Project.is_deleted.is_(False),
+                )
+            ).all()
+        )
+    return manageable
+
+
 def assert_project_visible(db: Session, project_id: int, user: User) -> Project:
     project = project_repository.get(db, project_id)
     if not project:
@@ -65,7 +100,9 @@ def assert_project_manageable(db: Session, project_id: int, user: User) -> Proje
     if not project:
         raise not_found("project not found")
     roles = get_role_codes(db, user.id)
-    allowed = "super_admin" in roles or project.manager_id == user.id
+    allowed = "super_admin" in roles or (
+        project.manager_id == user.id and bool(roles & PROJECT_CREATOR_ROLES)
+    )
     if roles & {"department_manager", "functional_manager"}:
         allowed = allowed or (
             user.department_id is not None and project.department_id == user.department_id
@@ -86,7 +123,9 @@ def assert_project_approved(db: Session, project_id: int) -> Project:
     return project
 
 
-def assert_project_booking_manager(db: Session, project_id: int, user: User) -> Project:
+def assert_project_owner_for_hour_request(
+    db: Session, project_id: int, user: User
+) -> Project:
     project = db.scalar(
         select(Project)
         .where(Project.id == project_id, Project.is_deleted.is_(False))
@@ -102,8 +141,51 @@ def assert_project_booking_manager(db: Session, project_id: int, user: User) -> 
         project.manager_id != user.id
         or not (get_role_codes(db, user.id) & PROJECT_CREATOR_ROLES)
     ):
-        raise forbidden("只有该项目的项目经理可以提交或调整人力预约")
+        raise forbidden("只有该项目的项目负责人可以申请追加工时")
     return project
+
+
+def assert_project_booking_access(
+    db: Session,
+    project_id: int,
+    user: User,
+    target_user_ids: list[int],
+) -> Project:
+    """Authorize a project booking for the exact people being scheduled."""
+    project = db.scalar(
+        select(Project)
+        .where(Project.id == project_id, Project.is_deleted.is_(False))
+        .with_for_update()
+    )
+    if not project:
+        raise not_found("project not found")
+    if project.approval_status != "approved":
+        raise bad_request("项目尚未通过审批，不能执行该操作")
+    if project.status in PROJECT_CLOSED_STATUSES:
+        raise bad_request("已完成或已取消的项目不能继续预约人力")
+
+    target_ids = set(target_user_ids)
+    if not target_ids:
+        raise bad_request("请选择至少一名被预约人")
+    roles = get_role_codes(db, user.id)
+    if "super_admin" in roles:
+        return project
+    if project.manager_id == user.id and roles & PROJECT_CREATOR_ROLES:
+        return project
+    if roles & {"department_manager", "functional_manager"}:
+        direct_report_ids = set(
+            db.scalars(
+                select(User.id).where(
+                    User.id.in_(target_ids),
+                    User.supervisor_id == user.id,
+                    User.status == "active",
+                    User.is_deleted.is_(False),
+                )
+            ).all()
+        )
+        if target_ids <= direct_report_ids:
+            return project
+    raise forbidden("项目经理只能预约本项目成员；L3/L4 只能预约自己的直属下属")
 
 
 def _validate_project_manager(db: Session, manager_id: int, department_id: int) -> User:
@@ -115,6 +197,69 @@ def _validate_project_manager(db: Session, manager_id: int, department_id: int) 
     if manager.department_id != department_id:
         raise bad_request("项目经理必须属于项目所属部门")
     return manager
+
+
+def _validate_initial_project_members(
+    db: Session,
+    member_ids: list[int],
+) -> list[User]:
+    unique_ids = list(dict.fromkeys(member_ids))
+    members = db.scalars(select(User).where(User.id.in_(unique_ids))).all()
+    members_by_id = {member.id: member for member in members}
+    missing_ids = [member_id for member_id in unique_ids if member_id not in members_by_id]
+    if missing_ids:
+        raise bad_request(f"项目成员不存在：{', '.join(map(str, missing_ids))}")
+    ordered_members = [members_by_id[member_id] for member_id in unique_ids]
+    for member in ordered_members:
+        if member.is_deleted or member.status != "active":
+            raise bad_request(f"项目成员 {member.name} 已删除或已停用")
+        if not member.department_id or not member.organization_id:
+            raise bad_request(f"项目成员 {member.name} 必须设置部门和组织")
+        organization = db.get(Organization, member.organization_id)
+        if (
+            not organization
+            or organization.status != "active"
+            or organization.department_id != member.department_id
+        ):
+            raise bad_request(f"项目成员 {member.name} 的部门和组织关系无效")
+    return ordered_members
+
+
+def _add_initial_project_members(
+    db: Session,
+    project: Project,
+    manager: User,
+    members: list[User],
+) -> None:
+    joined_at = datetime.now()
+    db.add(
+        ProjectMember(
+            project_id=project.id,
+            user_id=manager.id,
+            project_role="manager",
+            allocation_percent=100,
+            joined_at=joined_at,
+        )
+    )
+    for member in members:
+        db.add(
+            ProjectMember(
+                project_id=project.id,
+                user_id=member.id,
+                project_role="member",
+                allocation_percent=100,
+                joined_at=joined_at,
+            )
+        )
+        create_notification(
+            db,
+            member.id,
+            "project_member_added",
+            "你已加入项目",
+            f"你已在项目创建时被加入项目“{project.name}”。",
+            related_type="project",
+            related_id=project.id,
+        )
 
 
 def get_department_l3(db: Session, department_id: int) -> User:
@@ -176,28 +321,42 @@ def project_detail(db: Session, project_id: int, user: User) -> dict:
 def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
     if db.scalar(select(Project.id).where(Project.code == payload.code)):
         raise conflict("project code already exists", 40921)
-    if not (get_role_codes(db, user.id) & PROJECT_CREATOR_ROLES):
+    roles = get_role_codes(db, user.id)
+    if not (roles & PROJECT_CREATOR_ROLES):
         raise forbidden("只有项目经理、L3 或超级管理员可以创建项目")
     if payload.manager_id != user.id:
         raise forbidden("项目负责人必须选择当前创建人本人")
-    _validate_project_manager(db, payload.manager_id, payload.department_id)
-    values = payload.model_dump(exclude={"status"})
+    manager = _validate_project_manager(db, payload.manager_id, payload.department_id)
+    members = _validate_initial_project_members(db, payload.member_ids)
+    values = payload.model_dump(exclude={"status", "member_ids"})
+    auto_approved = bool(roles & {"department_manager", "super_admin"})
     project = Project(
         **values,
-        status="Draft",
-        approval_status="draft",
+        status="Planned" if auto_approved else "Draft",
+        approval_status="approved" if auto_approved else "draft",
         created_by=user.id,
+        approved_at=datetime.now() if auto_approved else None,
+        approval_note=(
+            "创建人属于 L3 或超级管理员，系统自动通过"
+            if auto_approved
+            else None
+        ),
     )
     db.add(project)
+    db.flush()
+    _add_initial_project_members(db, project, manager, members)
     db.flush()
     log_operation(
         db,
         operator_id=user.id,
         module="project",
-        action="create_draft",
+        action="create_auto_approved" if auto_approved else "create_draft",
         object_type="project",
         object_id=project.id,
-        after_data=model_to_dict(project),
+        after_data={
+            **model_to_dict(project),
+            "member_ids": payload.member_ids,
+        },
     )
     db.commit()
     db.refresh(project)
@@ -302,6 +461,12 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
         if project.approval_status == "pending":
             raise bad_request("待审批项目不能修改，请先由直属主管审批")
         values["status"] = "Draft"
+    elif "status" in values and values["status"] != project.status:
+        allowed_statuses = PROJECT_STATUS_TRANSITIONS.get(project.status, set())
+        if values["status"] not in allowed_statuses:
+            raise bad_request(
+                f"项目状态不能从 {project.status} 变更为 {values['status']}"
+            )
     for key, value in values.items():
         setattr(project, key, value)
     if project.approval_status == "rejected":
@@ -421,6 +586,13 @@ def add_member(db: Session, project_id: int, payload: ProjectMemberCreate, user:
         raise not_found("user not found")
     if not member_user.department_id or not member_user.organization_id:
         raise bad_request("项目成员必须来自完整的部门和组织架构")
+    organization = db.get(Organization, member_user.organization_id)
+    if (
+        not organization
+        or organization.status != "active"
+        or organization.department_id != member_user.department_id
+    ):
+        raise bad_request("项目成员的部门和组织关系无效")
     member = db.scalar(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
@@ -463,8 +635,10 @@ def add_member(db: Session, project_id: int, payload: ProjectMemberCreate, user:
 
 
 def remove_member(db: Session, project_id: int, member_user_id: int, user: User) -> None:
-    assert_project_manageable(db, project_id, user)
+    project = assert_project_manageable(db, project_id, user)
     assert_project_approved(db, project_id)
+    if member_user_id == project.manager_id:
+        raise bad_request("项目经理属于固定项目成员，不能移除")
     member = db.scalar(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
@@ -495,7 +669,7 @@ def create_hour_request(
     payload: ProjectHourRequestCreate,
     user: User,
 ) -> ProjectHourRequest:
-    project = assert_project_booking_manager(db, project_id, user)
+    project = assert_project_owner_for_hour_request(db, project_id, user)
     if not project.department_id:
         raise bad_request("项目未设置所属部门，无法申请追加工时")
     if db.scalar(
@@ -540,7 +714,7 @@ def create_hour_request(
 
 
 def list_hour_requests(db: Session, project_id: int, user: User) -> list[dict]:
-    assert_project_visible(db, project_id, user)
+    assert_project_manageable(db, project_id, user)
     requester = aliased(User)
     reviewer = aliased(User)
     rows = db.execute(

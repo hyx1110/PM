@@ -12,6 +12,10 @@ import type { Project } from '@/types/project'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
+const memberOnly = computed(() => {
+  const roles = userStore.profile?.roles || []
+  return roles.length === 1 && roles[0] === 'project_member'
+})
 const loading = ref(false)
 const decisionState = ref<{ id: number; action: 'approve' | 'reject' }>()
 const pendingBookings = ref<Schedule[]>([])
@@ -24,19 +28,17 @@ const data = ref<DashboardSummary>({
   weekly_utilization_rate: 0, task_completion_rate: 0, schedule_trend: [],
 })
 const cards = computed(() => {
-  const roles = userStore.profile?.roles || []
-  const memberOnly = roles.length === 1 && roles[0] === 'project_member'
-  if (memberOnly) return [
-    { value: data.value.my_today_tasks, label: '今日任务', note: '查看今日需要处理的任务', icon: Collection, color: '#315f8e' },
-    { value: data.value.my_upcoming_tasks, label: '7 天内到期', note: '关注即将到期的任务', icon: TrendCharts, color: '#4b7b6b' },
-    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
-    { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#6f7790' },
-  ]
   if (data.value.pending_project_approvals) return [
     { value: data.value.pending_project_approvals, label: '待审批项目', note: '由你作为创建人的直属主管审批', icon: Calendar, color: '#92713c' },
     { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
     { value: data.value.delayed_tasks, label: '异常任务', note: '已超过计划截止时间', icon: WarningFilled, color: '#a75858' },
     { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#4b7b6b' },
+  ]
+  if (memberOnly.value) return [
+    { value: data.value.my_today_tasks, label: '今日任务', note: '查看今日需要处理的任务', icon: Collection, color: '#315f8e' },
+    { value: data.value.my_upcoming_tasks, label: '7 天内到期', note: '关注即将到期的任务', icon: TrendCharts, color: '#4b7b6b' },
+    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
+    { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#6f7790' },
   ]
   return [
     { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
@@ -116,7 +118,7 @@ onMounted(loadDashboard)
   <div class="page-shell" v-loading="loading">
     <header class="page-header">
       <div><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{ userStore.profile?.name }}，这里汇总项目进度、人力排期和实时风险。</p></div>
-      <div class="header-actions"><el-button @click="$router.push('/risks')">风险中心</el-button><el-button type="primary" @click="$router.push('/schedules')">共享看板</el-button></div>
+      <div class="header-actions"><el-button @click="$router.push('/my-tasks')">我的任务</el-button><el-button v-if="!memberOnly" @click="$router.push('/risks')">风险中心</el-button><el-button type="primary" @click="$router.push('/schedules')">共享看板</el-button></div>
     </header>
     <section class="metrics">
       <article v-for="card in cards" :key="card.label" class="surface metric">
@@ -166,7 +168,7 @@ onMounted(loadDashboard)
         </article>
       </div>
     </section>
-    <section class="dashboard-grid">
+    <section v-if="!memberOnly" class="dashboard-grid">
       <article class="surface trend-card">
         <div class="section-title"><div><span class="overline">WORKFORCE TREND</span><h2>近 14 天计划工时</h2></div><div class="week-total"><el-icon><Timer /></el-icon> 本周 {{ data.weekly_planned_hours }}h · 利用率 {{ data.weekly_utilization_rate }}%</div></div>
         <div class="trend-chart">
@@ -184,7 +186,7 @@ onMounted(loadDashboard)
         <div class="health-row"><span>进行中项目</span><strong>{{ data.projects_running }}</strong></div>
         <div class="health-row"><span>本月计划工时</span><strong>{{ data.monthly_planned_hours }}h</strong></div>
         <el-progress :percentage="data.task_completion_rate" :stroke-width="8" color="#4b7b6b" />
-        <p>任务完成率基于当前可见项目中的全部任务计算。</p>
+        <p>任务完成率按当前账号的数据范围计算。</p>
       </article>
     </section>
   </div>

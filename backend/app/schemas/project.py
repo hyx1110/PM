@@ -39,6 +39,16 @@ class ProjectBase(ORMModel):
 
 class ProjectCreate(ProjectBase):
     code: str = Field(min_length=1, max_length=50)
+    member_ids: list[int] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_initial_members(self):
+        self.member_ids = list(dict.fromkeys(self.member_ids))
+        if self.manager_id in self.member_ids:
+            raise ValueError("member_ids must not contain the project manager")
+        if not self.member_ids:
+            raise ValueError("at least one project member is required")
+        return self
 
 
 class ProjectUpdate(ORMModel):

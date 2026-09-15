@@ -7,25 +7,16 @@ from app.models.user import User
 
 
 def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
-    """Resolve schedule visibility from system role, organization and projects."""
+    """Resolve whose schedules the current user may see."""
     roles = get_role_codes(db, user.id)
-    if "super_admin" in roles:
+    if roles & {"super_admin", "department_manager"}:
         return None
     visible = {user.id}
-    visible.update(
-        db.scalars(
-            select(User.id).where(
-                User.supervisor_id == user.id,
-                User.status == "active",
-                User.is_deleted.is_(False),
-            )
-        ).all()
-    )
-    if roles & {"department_manager", "functional_manager"} and user.department_id:
+    if "functional_manager" in roles:
         visible.update(
             db.scalars(
                 select(User.id).where(
-                    User.department_id == user.department_id,
+                    User.supervisor_id == user.id,
                     User.status == "active",
                     User.is_deleted.is_(False),
                 )
@@ -34,6 +25,8 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
     if "project_manager" in roles:
         managed_project_ids = select(Project.id).where(
             Project.manager_id == user.id,
+            Project.approval_status == "approved",
+            Project.status.notin_({"Completed", "Cancelled"}),
             Project.is_deleted.is_(False),
         )
         visible.update(

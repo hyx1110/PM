@@ -1,6 +1,7 @@
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from io import BytesIO
+import re
 from typing import Any, Callable
 from zipfile import BadZipFile
 
@@ -9,18 +10,18 @@ from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.dependencies import get_role_codes
-from app.core.exceptions import bad_request
+from app.core.exceptions import BusinessException, bad_request
 from app.core.security import hash_password
 from app.models.execution import ExecutionRecord
 from app.models.import_job import ImportJob
 from app.models.organization import Department, Organization
-from app.models.project import Project
+from app.models.project import Project, ProjectMember
 from app.models.rbac import Role, UserRole
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task
@@ -35,7 +36,13 @@ from app.services.employee_profile_service import (
     ensure_default_system_role,
     upsert_employee_profile,
 )
-from app.services.project_service import PROJECT_CREATOR_ROLES, visible_project_ids
+from app.services.project_service import (
+    PROJECT_CREATOR_ROLES,
+    _add_initial_project_members,
+    _validate_initial_project_members,
+    manageable_project_ids,
+)
+from app.services.visibility_service import visible_schedule_user_ids
 
 RESOURCE_HEADERS = {
     "users": [
@@ -61,6 +68,7 @@ RESOURCE_HEADERS = {
         ("name", "项目名称*"),
         ("project_type", "项目类型"),
         ("manager_employee_no", "项目经理员工号*"),
+        ("member_employee_nos", "项目成员员工号*(逗号分隔)"),
         ("department_code", "部门编码*"),
         ("budget_hours", "项目总工时*"),
         ("planned_start", "计划开始*"),
@@ -87,7 +95,7 @@ RESOURCE_HEADERS = {
 
 EXAMPLES = {
     "users": ["E10001", "张三", "", "zhangsan@example.com", "13800000000", "", "", "", "project_member", "active", "P10001", "张三", "E", "J100", "工程师", "employee"],
-    "projects": ["P-2026-001", "示例项目", "General", "E10001", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "high", "", ""],
+    "projects": ["P-2026-001", "示例项目", "General", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "high", "", ""],
     "tasks": ["P-2026-001", "", "需求分析", "Project", "admin", datetime(2026, 10, 1, 9), datetime(2026, 10, 3, 18), 24, "not_started", "high", "", ""],
 }
 
@@ -140,7 +148,7 @@ def create_template(resource_type: str) -> bytes:
         status_values = {
             "users": ["active", "disabled"],
             "projects": ["Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"],
-            "tasks": ["not_started", "pending", "confirmed", "running", "completed", "delayed", "cancelled"],
+            "tasks": ["not_started", "running", "completed", "suspended", "cancelled"],
         }[resource_type]
         _add_list_validation(book, sheet, field_index["status"], status_values)
     if "priority" in field_index:
@@ -159,6 +167,8 @@ def create_template(resource_type: str) -> bytes:
     notes.append(["必填字段", "标题包含 * 的列必须填写；请勿修改标题行。"])
     notes.append(["日期", "请使用 Excel 日期/时间单元格或 YYYY-MM-DD HH:mm 格式。"])
     notes.append(["数字", "工时等数值请使用真实数字单元格，不要添加单位。"])
+    if resource_type == "projects":
+        notes.append(["项目成员", "创建项目时必须填写至少一名项目成员；多个员工号使用英文逗号分隔，项目经理无需重复填写。"])
     notes.append(["导入策略", "按行校验并导入；失败行会保留错误明细，成功行不会被回滚。"])
     _style_sheet(notes, [20, 76])
     stream = BytesIO()
@@ -299,11 +309,42 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         raise ValueError("项目只能由项目经理、L3 或超级管理员本人导入")
     if manager.department_id != department.id:
         raise ValueError("项目经理必须属于项目所属部门")
+    member_employee_nos = [
+        value.strip()
+        for value in re.split(r"[,，;；]", str(row.get("member_employee_nos") or ""))
+        if value.strip()
+    ]
+    member_employee_nos = list(dict.fromkeys(member_employee_nos))
+    if not member_employee_nos:
+        raise ValueError("创建项目时必须指定至少一名项目成员")
+    if manager.employee_no in member_employee_nos:
+        raise ValueError("项目经理无需在项目成员员工号中重复填写")
+    member_users = db.scalars(
+        select(User).where(User.employee_no.in_(member_employee_nos))
+    ).all()
+    member_users_by_no = {member.employee_no: member for member in member_users}
+    missing_member_nos = [
+        employee_no
+        for employee_no in member_employee_nos
+        if employee_no not in member_users_by_no
+    ]
+    if missing_member_nos:
+        raise ValueError(f"项目成员员工号不存在：{', '.join(missing_member_nos)}")
+    ordered_member_users = [
+        member_users_by_no[employee_no] for employee_no in member_employee_nos
+    ]
+    try:
+        _validate_initial_project_members(
+            db, [member.id for member in ordered_member_users]
+        )
+    except BusinessException as exc:
+        raise ValueError(exc.message) from exc
     payload = ProjectCreate(
         code=row.get("code"),
         name=row.get("name"),
         project_type=row.get("project_type") or "General",
         manager_id=manager.id,
+        member_ids=[member.id for member in ordered_member_users],
         department_id=department.id,
         budget_hours=Decimal(str(row.get("budget_hours") or 0)),
         status="Draft",
@@ -322,7 +363,7 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         if not approver or approver.is_deleted or approver.status != "active":
             raise ValueError("当前用户未设置有效直属主管，无法导入并提交项目")
     item = Project(
-        **payload.model_dump(exclude={"status"}),
+        **payload.model_dump(exclude={"status", "member_ids"}),
         status="Planned" if auto_approved else "Draft",
         approval_status="approved" if auto_approved else "pending",
         created_by=operator.id,
@@ -331,6 +372,8 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         approval_note="创建人属于 L3 或超级管理员，系统自动通过" if auto_approved else None,
     )
     db.add(item)
+    db.flush()
+    _add_initial_project_members(db, item, manager, ordered_member_users)
     db.flush()
     if approver:
         create_notification(
@@ -350,8 +393,20 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
 def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     project = _required_lookup(db, Project, Project.code, row.get("project_code"), "项目编号不能为空且必须存在")
     if project.approval_status != "approved":
-        raise ValueError("项目尚未通过 L3 审批，不能导入任务")
+        raise ValueError("项目尚未通过审批，不能导入任务")
+    if project.status in {"Completed", "Cancelled"}:
+        raise ValueError("已完成或已取消的项目不能导入任务")
     owner = _required_lookup(db, User, User.employee_no, row.get("owner_employee_no"), "负责人员工号不能为空且必须存在")
+    if owner.status != "active":
+        raise ValueError("任务负责人必须是启用用户")
+    if owner.id != project.manager_id and not db.scalar(
+        select(ProjectMember.id).where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.user_id == owner.id,
+            ProjectMember.left_at.is_(None),
+        )
+    ):
+        raise ValueError("任务负责人必须是项目经理或当前有效项目成员")
     parent = None
     if row.get("parent_task_name"):
         parent = db.scalar(
@@ -378,6 +433,16 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     item = Task(**payload.model_dump())
     db.add(item)
     db.flush()
+    if owner.id != operator.id:
+        create_notification(
+            db,
+            owner.id,
+            "task_assigned",
+            "你收到了一项新任务",
+            f"任务“{item.name}”已通过导入分配给你。",
+            related_type="task",
+            related_id=item.id,
+        )
     return item
 
 
@@ -403,7 +468,7 @@ def _assert_import_scope(
             raise ValueError("只能导入到当前操作人所属部门")
     if resource_type == "tasks":
         project_id = db.scalar(select(Project.id).where(Project.code == row.get("project_code")))
-        manageable = visible_project_ids(db, operator)
+        manageable = manageable_project_ids(db, operator)
         if not project_id or manageable is not None and project_id not in manageable:
             raise ValueError("任务所属项目不在当前操作人的数据范围内")
 
@@ -544,13 +609,13 @@ def _validate_export_range(start_date: date, end_date: date) -> None:
 
 def export_schedules(db: Session, user: User, start_date: date, end_date: date) -> bytes:
     _validate_export_range(start_date, end_date)
-    scope = visible_project_ids(db, user)
+    visible_user_ids = visible_schedule_user_ids(db, user)
     filters = [
         ScheduleBooking.end_time > datetime.combine(start_date, time.min),
         ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), time.min),
     ]
-    if scope is not None:
-        filters.append(ScheduleBooking.project_id.in_(scope or {-1}))
+    if visible_user_ids is not None:
+        filters.append(ScheduleBooking.user_id.in_(visible_user_ids or {-1}))
     rows = db.execute(
         select(ScheduleBooking, User.name, Project.code, Project.name, Task.name)
         .join(User, User.id == ScheduleBooking.user_id)
@@ -568,13 +633,21 @@ def export_schedules(db: Session, user: User, start_date: date, end_date: date) 
 
 def export_executions(db: Session, user: User, start_date: date, end_date: date) -> bytes:
     _validate_export_range(start_date, end_date)
-    scope = visible_project_ids(db, user)
+    scope = manageable_project_ids(db, user)
     filters = [
+        ExecutionRecord.is_deleted.is_(False),
+        Task.is_deleted.is_(False),
+        Project.is_deleted.is_(False),
         ExecutionRecord.actual_start >= datetime.combine(start_date, time.min),
         ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), time.min),
     ]
     if scope is not None:
-        filters.append(Task.project_id.in_(scope or {-1}))
+        filters.append(
+            or_(
+                Task.project_id.in_(scope or {-1}),
+                ExecutionRecord.user_id == user.id,
+            )
+        )
     rows = db.execute(
         select(ExecutionRecord, User.name, Project.code, Project.name, Task.name)
         .join(User, User.id == ExecutionRecord.user_id)

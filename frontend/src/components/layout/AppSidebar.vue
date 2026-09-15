@@ -20,6 +20,10 @@ import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const userStore = useUserStore()
+const memberOnly = computed(() => {
+  const roles = userStore.profile?.roles || []
+  return roles.length === 1 && roles[0] === 'project_member'
+})
 
 const menuItems = computed(() => [
   { path: '/dashboard', label: '首页', icon: HomeFilled },
@@ -28,7 +32,7 @@ const menuItems = computed(() => [
   { path: '/organizations', label: '组织管理', icon: OfficeBuilding, permission: 'organization:view' },
   { path: '/roles', label: '角色权限', icon: UserFilled, permission: 'role:view' },
   { path: '/projects', label: '项目管理', icon: Collection, permission: 'project:view' },
-  { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:view' },
+  { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:edit' },
   { path: '/schedules', label: '任务共享看板', icon: Calendar, permission: 'schedule:view' },
   { path: '/work-calendar', label: '工作日历', icon: Calendar, permission: 'calendar:manage' },
   { path: '/workload', label: '人员负载分析', icon: TrendCharts, permission: 'analytics:view' },
@@ -39,7 +43,11 @@ const menuItems = computed(() => [
   { path: '/data-exchange', label: '数据导入导出', icon: UploadFilled, permission: 'export:download' },
   { path: '/notifications', label: '通知中心', icon: Bell, permission: 'notification:view' },
   { path: '/operation-logs', label: '操作日志', icon: Document, permission: 'operation_log:view' },
-].filter((item) => userStore.hasPermission(item.permission)))
+].filter(
+  (item) =>
+    userStore.hasPermission(item.permission)
+    && (!memberOnly.value || !['/tasks', '/risks'].includes(item.path)),
+))
 
 const activePath = computed(() => {
   if (route.path.startsWith('/projects/')) return '/projects'

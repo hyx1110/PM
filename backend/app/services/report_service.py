@@ -15,8 +15,9 @@ from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
 from app.repositories.report_repository import report_repository
-from app.services.project_service import visible_project_ids
+from app.services.project_service import manageable_project_ids, visible_project_ids
 from app.services.task_service import effective_status
+from app.services.work_calendar_service import is_workday
 
 
 def process_report(db: Session, user: User, page: int, page_size: int, **filters):
@@ -24,7 +25,7 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
         db,
         page,
         page_size,
-        visible_project_ids=visible_project_ids(db, user),
+        visible_project_ids=manageable_project_ids(db, user),
         **filters,
     )
     for item in items:
@@ -39,35 +40,62 @@ def workload_report(db: Session, user: User, start_date: date, end_date: date, d
         end_date,
         department_id,
         user_id,
-        visible_project_ids(db, user),
+        manageable_project_ids(db, user),
     )
-    available = Decimal(str(settings.standard_work_hours))
     for item in rows:
+        work_date = item["date"]
+        if not isinstance(work_date, date):
+            work_date = date.fromisoformat(str(work_date))
+        available = (
+            Decimal(str(settings.standard_work_hours))
+            if is_workday(db, work_date)
+            else Decimal("0")
+        )
         planned = Decimal(str(item["planned_hours"] or 0))
         rate = ((planned / available) * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if available else Decimal("0")
-        item.update(available_hours=available, load_rate=rate, overloaded=rate > 100)
+        item.update(
+            available_hours=available,
+            load_rate=rate,
+            overloaded=planned > available,
+        )
     return rows
 
 
 def dashboard_summary(db: Session, user: User) -> dict:
-    scope = visible_project_ids(db, user)
+    roles = get_role_codes(db, user.id)
     has_team_scope = bool(
-        get_role_codes(db, user.id)
-        & {
+        roles & {
             "project_manager",
             "department_manager",
             "functional_manager",
             "super_admin",
         }
     )
+    scope = (
+        manageable_project_ids(db, user)
+        if has_team_scope
+        else visible_project_ids(db, user)
+    )
     project_filters = [Project.is_deleted.is_(False)]
-    task_filters = [Task.is_deleted.is_(False)]
-    schedule_filters = []
+    active_project_ids = select(Project.id).where(Project.is_deleted.is_(False))
+    task_filters = [
+        Task.is_deleted.is_(False),
+        Task.project_id.in_(active_project_ids),
+    ]
+    schedule_filters = [ScheduleBooking.project_id.in_(active_project_ids)]
     if scope is not None:
         ids = scope or {-1}
         project_filters.append(Project.id.in_(ids))
-        task_filters.append(Task.project_id.in_(ids))
-        schedule_filters.append(ScheduleBooking.project_id.in_(ids))
+        task_filters.append(
+            (Task.project_id.in_(ids)) | (Task.owner_id == user.id)
+            if has_team_scope
+            else Task.project_id.in_(ids)
+        )
+        if has_team_scope:
+            schedule_filters.append(
+                (ScheduleBooking.project_id.in_(ids))
+                | (ScheduleBooking.user_id == user.id)
+            )
     if not has_team_scope:
         task_filters.append(Task.owner_id == user.id)
         schedule_filters.append(ScheduleBooking.user_id == user.id)
@@ -126,16 +154,19 @@ def dashboard_summary(db: Session, user: User) -> dict:
     today_count = db.scalar(
         select(func.count(ScheduleBooking.id)).where(
             *schedule_filters,
+            ScheduleBooking.status.in_(
+                {"pending", "confirmed", "changed", "running", "completed"}
+            ),
             func.date(ScheduleBooking.start_time) == today,
         )
     ) or 0
     risk_filters = [RiskRecord.status.in_({"open", "handling"})]
     if not has_team_scope:
-        active_user_filters.append(User.id == user.id)
+        risk_filters.append(RiskRecord.user_id == user.id)
     elif scope is not None:
         risk_filters.append(
             (RiskRecord.project_id.in_(scope or {-1}))
-            | (RiskRecord.project_id.is_(None) & (RiskRecord.user_id == user.id))
+            | (RiskRecord.user_id == user.id)
         )
     open_risks = db.scalar(select(func.count(RiskRecord.id)).where(*risk_filters)) or 0
     critical_risks = db.scalar(
@@ -164,7 +195,9 @@ def dashboard_summary(db: Session, user: User) -> dict:
         )
     ) or 0
     active_user_filters = [User.status == "active", User.is_deleted.is_(False)]
-    if scope is not None:
+    if not has_team_scope:
+        active_user_filters.append(User.id == user.id)
+    elif scope is not None:
         member_ids = select(ProjectMember.user_id).where(
             ProjectMember.project_id.in_(scope or {-1}), ProjectMember.left_at.is_(None)
         )
@@ -173,7 +206,10 @@ def dashboard_summary(db: Session, user: User) -> dict:
             (User.id.in_(member_ids)) | (User.id.in_(manager_ids)) | (User.id == user.id)
         )
     active_users = db.scalar(select(func.count(User.id)).where(*active_user_filters)) or 0
-    weekly_capacity = active_users * 5 * settings.standard_work_hours
+    weekly_workdays = sum(
+        is_workday(db, week_start + timedelta(days=index)) for index in range(7)
+    )
+    weekly_capacity = active_users * weekly_workdays * settings.standard_work_hours
     total_tasks = db.scalar(select(func.count(Task.id)).where(*task_filters)) or 0
     completed_tasks = db.scalar(
         select(func.count(Task.id)).where(*task_filters, Task.status == "completed")
@@ -233,11 +269,12 @@ def _validate_range(start_date: date, end_date: date) -> None:
 
 def analytics_report(db: Session, user: User, start_date: date, end_date: date) -> dict:
     _validate_range(start_date, end_date)
-    scope = visible_project_ids(db, user)
+    scope = manageable_project_ids(db, user)
     project_filters = [Project.is_deleted.is_(False)]
-    task_filters = [Task.is_deleted.is_(False), Task.planned_end >= datetime.combine(start_date, datetime.min.time()), Task.planned_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
-    schedule_filters = [ScheduleBooking.start_time >= datetime.combine(start_date, datetime.min.time()), ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), datetime.min.time()), ScheduleBooking.status.in_({"confirmed", "running", "completed"})]
-    execution_filters = [ExecutionRecord.actual_start >= datetime.combine(start_date, datetime.min.time()), ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
+    active_project_ids = select(Project.id).where(Project.is_deleted.is_(False))
+    task_filters = [Task.is_deleted.is_(False), Task.project_id.in_(active_project_ids), Task.planned_end >= datetime.combine(start_date, datetime.min.time()), Task.planned_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
+    schedule_filters = [ScheduleBooking.project_id.in_(active_project_ids), ScheduleBooking.start_time >= datetime.combine(start_date, datetime.min.time()), ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), datetime.min.time()), ScheduleBooking.status.in_({"confirmed", "running", "completed"})]
+    execution_filters = [ExecutionRecord.is_deleted.is_(False), Task.is_deleted.is_(False), Task.project_id.in_(active_project_ids), ExecutionRecord.actual_start >= datetime.combine(start_date, datetime.min.time()), ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), datetime.min.time())]
     if scope is not None:
         ids = scope or {-1}
         project_filters.append(Project.id.in_(ids))
@@ -352,9 +389,12 @@ def workload_summary(db: Session, user: User, start_date: date, end_date: date, 
     if granularity not in {"day", "week", "month"}:
         from app.core.exceptions import bad_request
         raise bad_request("granularity must be day, week or month")
-    scope = visible_project_ids(db, user)
+    scope = manageable_project_ids(db, user)
     filters = [
         ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+        ScheduleBooking.project_id.in_(
+            select(Project.id).where(Project.is_deleted.is_(False))
+        ),
         ScheduleBooking.start_time >= datetime.combine(start_date, datetime.min.time()),
         ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), datetime.min.time()),
     ]
@@ -397,8 +437,11 @@ def workload_summary(db: Session, user: User, start_date: date, end_date: date, 
             eligible_user.id,
             {"user_id": eligible_user.id, "user_name": eligible_user.name, "planned_hours": 0.0},
         )
-    weekdays = sum((start_date + timedelta(days=index)).weekday() < 5 for index in range((end_date - start_date).days + 1))
-    available = weekdays * settings.standard_work_hours
+    workdays = sum(
+        is_workday(db, start_date + timedelta(days=index))
+        for index in range((end_date - start_date).days + 1)
+    )
+    available = workdays * settings.standard_work_hours
     for item in user_totals.values():
         item["available_hours"] = available
         item["load_rate"] = round(item["planned_hours"] / available * 100, 2) if available else 0

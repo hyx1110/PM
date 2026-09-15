@@ -21,7 +21,7 @@ from app.schemas.schedule import (
 )
 from app.services.notification_service import create_notification
 from app.services.operation_log_service import log_operation
-from app.services.project_service import assert_project_booking_manager, visible_project_ids
+from app.services.project_service import assert_project_booking_access
 from app.services.work_calendar_service import calculate_work_hours
 from app.utils.model import model_to_dict
 from app.services.visibility_service import visible_schedule_user_ids
@@ -45,7 +45,7 @@ def _validate_relations(db: Session, user_id: int, project_id: int, task_id: int
         raise bad_request("task does not belong to project")
     if task.status in {"completed", "cancelled"}:
         raise bad_request("已完成或已取消的任务不能继续预约人力")
-    if scheduled_user.id != project.manager_id and not db.scalar(
+    if not db.scalar(
         select(ProjectMember.id).where(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == user_id,
@@ -157,7 +157,10 @@ def list_schedules(db: Session, user: User, page: int, page_size: int, **filters
         db,
         page,
         page_size,
-        visible_project_ids=visible_project_ids(db, user),
+        # Schedule visibility is person-based: once a person is in the
+        # viewer's scope, all of that person's project bookings are needed to
+        # judge real availability, even when they belong to another project.
+        visible_project_ids=None,
         visible_user_ids=visible_schedule_user_ids(db, user),
         viewer_user_id=user.id,
         **filters,
@@ -174,11 +177,10 @@ def schedule_detail(db: Session, schedule_id: int, user: User) -> dict:
     item = schedule_repository.get(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    scope = visible_project_ids(db, user)
+    visible_user_ids = visible_schedule_user_ids(db, user)
     if (
-        scope is not None
-        and item.project_id not in scope
-        and item.user_id != user.id
+        visible_user_ids is not None
+        and item.user_id not in visible_user_ids
         and item.created_by != user.id
     ):
         raise forbidden("schedule is outside your data scope")
@@ -186,7 +188,9 @@ def schedule_detail(db: Session, schedule_id: int, user: User) -> dict:
 
 
 def create_schedule(db: Session, payload: ScheduleCreate, user: User) -> ScheduleBooking:
-    project = assert_project_booking_manager(db, payload.project_id, user)
+    project = assert_project_booking_access(
+        db, payload.project_id, user, [payload.user_id]
+    )
     _validate_relations(db, payload.user_id, payload.project_id, payload.task_id)
     hours = calculate_work_hours(db, payload.start_time, payload.end_time)
     _lock_users(db, [payload.user_id])
@@ -205,7 +209,7 @@ def create_schedule(db: Session, payload: ScheduleCreate, user: User) -> Schedul
         db,
         item,
         "收到新的人力预约",
-        f"项目经理预约了你 {item.start_time:%Y-%m-%d %H:%M} 至 "
+        f"你收到 {item.start_time:%Y-%m-%d %H:%M} 至 "
         f"{item.end_time:%H:%M} 的 {item.planned_hours} 小时，请由你本人确认。",
     )
     log_operation(
@@ -242,7 +246,7 @@ def update_schedule(
     task_id = values.get("task_id", item.task_id)
     start_time = values.get("start_time", item.start_time)
     end_time = values.get("end_time", item.end_time)
-    project = assert_project_booking_manager(db, project_id, user)
+    project = assert_project_booking_access(db, project_id, user, [user_id])
     _validate_relations(db, user_id, project_id, task_id)
     hours = calculate_work_hours(db, start_time, end_time)
     _lock_users(db, [user_id])
@@ -291,7 +295,10 @@ def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBookin
         raise bad_request("only legacy draft or rejected schedules can be submitted")
     if item.created_by != user.id:
         raise forbidden("只有该预约的提交人可以提交")
-    project = assert_project_booking_manager(db, item.project_id, user)
+    project = assert_project_booking_access(
+        db, item.project_id, user, [item.user_id]
+    )
+    _validate_relations(db, item.user_id, item.project_id, item.task_id)
     hours = calculate_work_hours(db, item.start_time, item.end_time)
     _lock_users(db, [item.user_id])
     _raise_conflicts(db, item.user_id, item.start_time, item.end_time, item.id)
@@ -339,6 +346,7 @@ def confirm_schedule(
     _assert_decision_access(item, user)
     if item.status not in {"pending", "changed"}:
         raise bad_request("only pending or changed schedules can be confirmed")
+    _validate_relations(db, item.user_id, item.project_id, item.task_id)
     calculate_work_hours(db, item.start_time, item.end_time)
     _lock_users(db, [item.user_id])
     _raise_conflicts(db, item.user_id, item.start_time, item.end_time, item.id)
@@ -423,7 +431,6 @@ def withdraw_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBook
         raise not_found("schedule not found")
     if item.created_by != user.id:
         raise forbidden("只有该预约的提交人可以撤回")
-    assert_project_booking_manager(db, item.project_id, user)
     if item.status not in {"pending", "changed"}:
         raise bad_request("只有对方尚未确认的预约可以撤回")
     before = model_to_dict(item)
@@ -434,7 +441,7 @@ def withdraw_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBook
         item.user_id,
         "schedule_withdrawn",
         "人力预约已撤回",
-        f"预约 #{item.id} 已由项目经理撤回，无需再审批。",
+        f"预约 #{item.id} 已由提交人撤回，无需再审批。",
         related_type="schedule",
         related_id=item.id,
     )
@@ -461,19 +468,19 @@ def delete_schedule(db: Session, schedule_id: int, user: User) -> None:
         raise bad_request("only draft, rejected, cancelled or withdrawn schedules can be deleted")
     if item.created_by != user.id:
         raise forbidden("只有该预约的提交人可以删除")
-    assert_project_booking_manager(db, item.project_id, user)
     before = model_to_dict(item)
+    item.status = "cancelled"
+    item.version += 1
     log_operation(
         db,
         operator_id=user.id,
         module="schedule",
-        action="delete",
+        action="cancel",
         object_type="schedule_booking",
         object_id=item.id,
         before_data=before,
+        after_data=model_to_dict(item),
     )
-    item.status = "cancelled"
-    item.version += 1
     db.commit()
 
 
@@ -496,7 +503,10 @@ def move_schedule(
         )
     if item.status not in {"pending", "rejected", "confirmed"}:
         raise bad_request("current schedule status does not allow moving")
-    project = assert_project_booking_manager(db, item.project_id, user)
+    project = assert_project_booking_access(
+        db, item.project_id, user, [item.user_id]
+    )
+    _validate_relations(db, item.user_id, item.project_id, item.task_id)
     hours = calculate_work_hours(db, payload.start_time, payload.end_time)
     _lock_users(db, [item.user_id])
     _raise_conflicts(db, item.user_id, payload.start_time, payload.end_time, item.id)
@@ -535,7 +545,9 @@ def batch_create_schedules(
     payload: ScheduleBatchCreate,
     user: User,
 ) -> dict:
-    project = assert_project_booking_manager(db, payload.project_id, user)
+    project = assert_project_booking_access(
+        db, payload.project_id, user, payload.user_ids
+    )
     hours = calculate_work_hours(db, payload.start_time, payload.end_time)
     for user_id in payload.user_ids:
         _validate_relations(db, user_id, payload.project_id, payload.task_id)
@@ -569,7 +581,7 @@ def batch_create_schedules(
             db,
             item,
             "收到新的人力预约",
-            f"项目经理预约了你 {item.start_time:%Y-%m-%d %H:%M} 至 "
+            f"你收到 {item.start_time:%Y-%m-%d %H:%M} 至 "
             f"{item.end_time:%H:%M} 的 {item.planned_hours} 小时，请由你本人确认。",
         )
         log_operation(
@@ -606,16 +618,16 @@ def copy_week(db: Session, payload: ScheduleCopyWeek, user: User) -> dict:
     _lock_users(db, [item.user_id for item in source_items])
     created_ids: list[int] = []
     skipped: list[dict] = []
-    checked_projects: dict[int, Project] = {}
     for source in source_items:
-        if source.project_id not in checked_projects:
-            checked_projects[source.project_id] = assert_project_booking_manager(
-                db, source.project_id, user
-            )
-        project = checked_projects[source.project_id]
         start_time = source.start_time + delta
         end_time = source.end_time + delta
         try:
+            project = assert_project_booking_access(
+                db, source.project_id, user, [source.user_id]
+            )
+            _validate_relations(
+                db, source.user_id, source.project_id, source.task_id
+            )
             hours = calculate_work_hours(db, start_time, end_time)
             _assert_project_capacity(db, project, hours)
         except BusinessException as exc:

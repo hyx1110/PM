@@ -10,7 +10,12 @@ from app.models.user import User
 from app.repositories.execution_repository import execution_repository
 from app.schemas.execution import ExecutionCreate, ExecutionUpdate
 from app.services.operation_log_service import log_operation
-from app.services.project_service import assert_project_visible, visible_project_ids
+from app.services.project_service import (
+    assert_project_manageable,
+    assert_project_visible,
+    manageable_project_ids,
+    visible_project_ids,
+)
 from app.utils.model import model_to_dict
 
 
@@ -25,13 +30,20 @@ def _can_edit_other_users(db: Session, user: User) -> bool:
 
 
 def list_executions(db: Session, user: User, page: int, page_size: int, mine: bool = False, **filters):
-    if mine:
+    can_manage_team = _can_edit_other_users(db, user)
+    if mine or not can_manage_team:
         filters["user_id"] = user.id
+    scope = (
+        manageable_project_ids(db, user)
+        if can_manage_team and not mine
+        else visible_project_ids(db, user)
+    )
     items, total = execution_repository.list(
         db,
         page,
         page_size,
-        visible_project_ids=visible_project_ids(db, user),
+        visible_project_ids=scope,
+        own_user_id=(user.id if can_manage_team and not mine else None),
         **filters,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -43,21 +55,31 @@ def execution_detail(db: Session, execution_id: int, user: User) -> dict:
         raise not_found("execution record not found")
     task = db.get(Task, record.task_id)
     assert_project_visible(db, task.project_id, user)
+    if record.user_id != user.id:
+        if not _can_edit_other_users(db, user):
+            raise not_found("execution record not found")
+        assert_project_manageable(db, task.project_id, user)
     return execution_repository.detail(db, execution_id)
 
 
 def create_execution(db: Session, payload: ExecutionCreate, user: User) -> ExecutionRecord:
     task = db.get(Task, payload.task_id)
-    if not task:
+    if not task or task.is_deleted:
         raise not_found("task not found")
     assert_project_visible(db, task.project_id, user)
     target_user_id = payload.user_id or user.id
     target_user = db.get(User, target_user_id)
-    if not target_user or target_user.is_deleted:
+    if not target_user or target_user.is_deleted or target_user.status != "active":
         raise not_found("execution user not found")
     if target_user_id != user.id and not _can_edit_other_users(db, user):
         raise forbidden("users may only create their own execution records")
-    values = payload.model_dump(exclude={"user_id"})
+    if target_user_id != user.id or task.owner_id != user.id:
+        if not _can_edit_other_users(db, user):
+            raise forbidden("用户只能填报自己负责任务的执行记录")
+        assert_project_manageable(db, task.project_id, user)
+    # user_id and actual_hours are resolved below. Excluding both prevents
+    # passing actual_hours twice when constructing ExecutionRecord.
+    values = payload.model_dump(exclude={"user_id", "actual_hours"})
     actual_hours = payload.actual_hours
     if actual_hours is None:
         actual_hours = _duration_hours(payload.actual_start, payload.actual_end)
@@ -76,8 +98,10 @@ def update_execution(db: Session, execution_id: int, payload: ExecutionUpdate, u
         raise not_found("execution record not found")
     task = db.get(Task, record.task_id)
     assert_project_visible(db, task.project_id, user)
-    if record.user_id != user.id and not _can_edit_other_users(db, user):
-        raise forbidden("users may only update their own execution records")
+    if record.user_id != user.id:
+        if not _can_edit_other_users(db, user):
+            raise forbidden("users may only update their own execution records")
+        assert_project_manageable(db, task.project_id, user)
     before = model_to_dict(record)
     values = payload.model_dump(exclude_unset=True)
     actual_start = values.get("actual_start", record.actual_start)
@@ -101,10 +125,12 @@ def delete_execution(db: Session, execution_id: int, user: User) -> None:
         raise not_found("execution record not found")
     task = db.get(Task, record.task_id)
     assert_project_visible(db, task.project_id, user)
-    if record.user_id != user.id and not _can_edit_other_users(db, user):
-        raise forbidden("users may only delete their own execution records")
+    if record.user_id != user.id:
+        if not _can_edit_other_users(db, user):
+            raise forbidden("users may only delete their own execution records")
+        assert_project_manageable(db, task.project_id, user)
     before = model_to_dict(record)
-    db.delete(record)
+    record.is_deleted = True
     db.flush()
     log_operation(
         db,

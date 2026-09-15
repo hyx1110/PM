@@ -24,7 +24,12 @@ class ReportRepository:
         visible_project_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         parent = aliased(Task)
-        filters = []
+        filters = [
+            Task.is_deleted.is_(False),
+            Task.project_id.in_(
+                select(Project.id).where(Project.is_deleted.is_(False))
+            ),
+        ]
         if project_id:
             filters.append(Task.project_id == project_id)
         if owner_id:
@@ -61,7 +66,11 @@ class ReportRepository:
             .join(Project, Project.id == Task.project_id)
             .join(User, User.id == Task.owner_id)
             .outerjoin(parent, parent.id == Task.parent_id)
-            .outerjoin(ExecutionRecord, ExecutionRecord.task_id == Task.id)
+            .outerjoin(
+                ExecutionRecord,
+                (ExecutionRecord.task_id == Task.id)
+                & (ExecutionRecord.is_deleted.is_(False)),
+            )
             .outerjoin(TaskEvaluation, TaskEvaluation.task_id == Task.id)
             .where(*filters)
             .group_by(
@@ -96,7 +105,10 @@ class ReportRepository:
         visible_project_ids: set[int] | None = None,
     ) -> list[dict]:
         filters = [
-            ScheduleBooking.status.in_({"confirmed", "running"}),
+            ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+            ScheduleBooking.project_id.in_(
+                select(Project.id).where(Project.is_deleted.is_(False))
+            ),
             ScheduleBooking.start_time >= datetime.combine(start_date, time.min),
             ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), time.min),
         ]

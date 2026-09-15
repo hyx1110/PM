@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.project import Project
 from app.models.risk import RiskRecord
@@ -16,11 +17,17 @@ from app.repositories.risk_repository import risk_repository
 from app.schemas.risk import RiskHandleRequest
 from app.services.notification_service import create_notification
 from app.services.operation_log_service import log_operation
-from app.services.project_service import visible_project_ids
+from app.services.project_service import manageable_project_ids
 from app.utils.model import model_to_dict
 
-OPEN_TASK_STATUSES = {"not_started", "pending", "confirmed", "running", "delayed"}
+OPEN_TASK_STATUSES = {"not_started", "running", "suspended"}
 ACTIVE_SCHEDULE_STATUSES = {"pending", "confirmed", "changed", "running"}
+RISK_TEAM_ROLES = {
+    "project_manager",
+    "department_manager",
+    "functional_manager",
+    "super_admin",
+}
 
 
 def _risk(
@@ -52,7 +59,13 @@ def _risk(
 
 def _detect_task_and_project_risks(db: Session, scope: set[int] | None, now: datetime) -> list[dict]:
     result: list[dict] = []
-    task_filters = [Task.status.in_(OPEN_TASK_STATUSES)]
+    task_filters = [
+        Task.status.in_(OPEN_TASK_STATUSES),
+        Task.is_deleted.is_(False),
+        Task.project_id.in_(
+            select(Project.id).where(Project.is_deleted.is_(False))
+        ),
+    ]
     project_filters = [Project.is_deleted.is_(False), Project.status.notin_({"Completed", "Cancelled"})]
     if scope is not None:
         task_filters.append(Task.project_id.in_(scope or {-1}))
@@ -114,6 +127,9 @@ def _detect_schedule_risks(db: Session, scope: set[int] | None, now: datetime) -
     result: list[dict] = []
     filters = [
         ScheduleBooking.status.in_(ACTIVE_SCHEDULE_STATUSES),
+        ScheduleBooking.project_id.in_(
+            select(Project.id).where(Project.is_deleted.is_(False))
+        ),
         ScheduleBooking.end_time >= datetime.combine(now.date(), time.min),
         ScheduleBooking.start_time < datetime.combine(now.date() + timedelta(days=31), time.min),
     ]
@@ -170,7 +186,7 @@ def _detect_schedule_risks(db: Session, scope: set[int] | None, now: datetime) -
 
 def sync_risks(db: Session, user: User) -> dict:
     now = datetime.now()
-    scope = visible_project_ids(db, user)
+    scope = manageable_project_ids(db, user)
     detected = _detect_task_and_project_risks(db, scope, now) + _detect_schedule_risks(db, scope, now)
     created = 0
     refreshed = 0
@@ -244,12 +260,17 @@ def sync_risks(db: Session, user: User) -> dict:
 
 
 def list_risks(db: Session, user: User, page: int, page_size: int, **filters) -> dict:
+    has_team_scope = bool(get_role_codes(db, user.id) & RISK_TEAM_ROLES)
+    if not has_team_scope:
+        filters["user_id"] = user.id
     items, total = risk_repository.list(
         db,
         page,
         page_size,
         viewer_id=user.id,
-        visible_project_ids=visible_project_ids(db, user),
+        visible_project_ids=(
+            manageable_project_ids(db, user) if has_team_scope else None
+        ),
         **filters,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -261,11 +282,21 @@ def handle_risk(db: Session, risk_id: int, payload: RiskHandleRequest, user: Use
     item = risk_repository.get(db, risk_id)
     if not item:
         raise not_found("risk not found")
-    scope = visible_project_ids(db, user)
-    if scope is not None and item.project_id is not None and item.project_id not in scope:
-        raise forbidden("risk is outside your data scope")
-    if scope is not None and item.project_id is None and item.user_id != user.id:
-        raise forbidden("risk is outside your data scope")
+    has_team_scope = bool(get_role_codes(db, user.id) & RISK_TEAM_ROLES)
+    if not has_team_scope:
+        if item.user_id != user.id:
+            raise forbidden("risk is outside your data scope")
+    else:
+        scope = manageable_project_ids(db, user)
+        if (
+            scope is not None
+            and item.project_id is not None
+            and item.project_id not in scope
+            and item.user_id != user.id
+        ):
+            raise forbidden("risk is outside your data scope")
+        if scope is not None and item.project_id is None and item.user_id != user.id:
+            raise forbidden("risk is outside your data scope")
     before = model_to_dict(item)
     item.status = payload.status
     item.handled_by = user.id
@@ -288,13 +319,16 @@ def handle_risk(db: Session, risk_id: int, payload: RiskHandleRequest, user: Use
 
 
 def risk_stats(db: Session, user: User) -> dict:
-    scope = visible_project_ids(db, user)
     filters = []
-    if scope is not None:
-        filters.append(
-            (RiskRecord.project_id.in_(scope or {-1}))
-            | (RiskRecord.project_id.is_(None) & (RiskRecord.user_id == user.id))
-        )
+    if not (get_role_codes(db, user.id) & RISK_TEAM_ROLES):
+        filters.append(RiskRecord.user_id == user.id)
+    else:
+        scope = manageable_project_ids(db, user)
+        if scope is not None:
+            filters.append(
+                (RiskRecord.project_id.in_(scope or {-1}))
+                | (RiskRecord.user_id == user.id)
+            )
     rows = db.execute(
         select(RiskRecord.status, RiskRecord.risk_level, func.count(RiskRecord.id))
         .where(*filters)

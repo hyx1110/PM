@@ -22,6 +22,7 @@ def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_
             User.name,
             User.department_id,
             User.organization_id,
+            User.supervisor_id,
         )
         .where(User.status == "active", User.is_deleted.is_(False))
         .order_by(User.name)
@@ -42,6 +43,7 @@ def schedule_user_options(
         User.name,
         User.department_id,
         User.organization_id,
+        User.supervisor_id,
     ).where(User.status == "active", User.is_deleted.is_(False))
     if visible_ids is not None:
         statement = statement.where(User.id.in_(visible_ids or {-1}))

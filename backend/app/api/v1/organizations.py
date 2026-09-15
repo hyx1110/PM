@@ -54,7 +54,7 @@ def delete_department(
 @router.get("/organizations/tree")
 def organizations_tree(
     department_id: int | None = None,
-    _: User = Depends(require_permission("organization:view")),
+    _: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     return success(organization_service.organization_tree(db, department_id))

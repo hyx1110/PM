@@ -6,8 +6,10 @@
 users n ── n roles ── n permissions
 departments 1 ── n organizations 1 ── n users
 users 1 ── 1 employee_profiles
+users n ── 1 users              via supervisor_id
 
 projects n ── n users          via project_members
+projects n ── 1 users          via approver_id（提交时锁定的直属主管）
 projects 1 ── n tasks          tasks 支持两级自关联
 projects 1 ── n project_hour_requests
 users/projects/tasks 1 ── n schedule_bookings
@@ -29,17 +31,20 @@ work_calendar_days             法定节假日/调休日期覆盖
 | 表 | 变化 | 关键点 |
 |---|---|---|
 | `users` | 增加 `is_deleted`、`employee_no`，手机号长度扩展至 60 | 用户采用软删除；员工号是登录账号，内部 `id` 继续作为数字主键 |
-| `employee_profiles` | 新表 | 一对一正式人员档案、唯一岗位编号和独立人事管理职级 |
+| `departments` / `organizations` | 增加 `data_source` | 区分本地测试数据与 HRDB 同步数据；HRDB 来源只读 |
+| `employee_profiles` | 新表并增加 `data_source` | 一对一正式人员档案、唯一岗位编号、独立人事管理职级与数据来源 |
 | `user_roles` | 增加 `is_manual`、`is_hr_auto` | 分别标记人工系统授权和人事职级自动授权，两个来源可同时存在 |
 | `schedule_bookings` | 增加 `version`、`source_booking_id` | 拖动乐观锁；复制周来源追溯 |
 | `risk_records` | 增加 `fingerprint`、标题、来源 JSON、检测/到期/解决时间 | 指纹唯一去重，风险处理闭环 |
-| `notifications` | 新表 | 收件人、事件、关联对象、渠道、已读状态 |
+| `notifications` | 新表并增加 `is_deleted` | 收件人、事件、关联对象、渠道、已读状态和软删除标记 |
 | `notification_preferences` | 新表 | `user_id` 唯一，站内/邮件/企业微信/钉钉与提醒小时 |
 | `import_jobs` | 新表 | 文件名、对象、总计/成功/失败、最多 500 条错误 JSON、操作人 |
-| `projects` | 增加 `budget_hours`、审批状态/创建人与审批人字段 | 新项目待 L3 审批；额度控制人力预约总工时 |
+| `projects` | 增加 `budget_hours`、审批状态/创建人/直属审批人字段 | 普通项目经理提交给直属主管；L3/超级管理员创建自动通过；额度控制预约总工时 |
 | `project_hour_requests` | 新表 | 项目经理追加工时申请、L3 审批结果与意见 |
 | `work_calendar_days` | 新表 | `holiday/workday` 日期覆盖；迁移内置 2026 法定安排 |
-| `personal_time_blocks` | 新表 | 用户本人的培训/会议/休假/其他占用，支持生效与撤回状态 |
+| `personal_time_blocks` | 新表 | 用户本人的培训/会议/休假/出差/其他占用，支持生效与撤回状态 |
+| `tasks` | 增加 `is_deleted` 并统一状态 | 业务删除保留历史；状态为未开始、进行中、已完成、已暂停、已取消，延期为动态展示状态 |
+| `execution_records` | 增加 `is_deleted` | 删除后不参与正常查询和统计，但保留审计历史 |
 
 V1 业务表和历史字段均保留；`users`、`projects`、`schedule_bookings` 只做向后兼容的增量扩展，其余部门、组织、成员、任务、执行、评价和日志结构不删除原字段。
 
@@ -57,10 +62,16 @@ V1 业务表和历史字段均保留；`users`、`projects`、`schedule_bookings
 - `employee_profiles.hr_management_level` 与系统角色分离：`department_manager` 自动授予系统 L3，`management_manager` 自动授予系统 L4，`employee` 无自动管理角色。
 - `user_roles.is_manual/is_hr_auto` 可以同时为真。人事职级改变只清理旧的自动来源；如果人工来源仍存在，角色关联不会删除。
 - 数据库检查约束限制人事管理职级只能取三种约定值，并保证每条 `user_roles` 至少存在人工或职级自动来源之一。
+- 每个有效用户至少拥有一个系统角色；没有显式角色的升级数据和新用户默认获得 `project_member`。
+- `data_source=hrdb` 的人员档案、部门和组织由正式 HRDB 同步，项目管理系统拒绝人工修改或删除；本地测试数据仍可维护。
+- 普通项目经理提交项目时将当时有效的 `supervisor_id` 写入 `projects.approver_id`，后续仅该直属主管可批准或驳回；L3 和超级管理员创建项目时直接批准。追加工时仍由项目所属部门 L3 审批。
+- 项目创建时必须同时写入至少一名普通成员；项目经理以 `project_role=manager` 写入 `project_members` 并作为不可移除的固定成员，所有任务负责人和预约对象统一校验当前有效成员关系。
+- 任务持久化状态限定为 `not_started/running/completed/suspended/cancelled`；`delayed` 仅根据计划结束时间动态计算，不再作为数据库状态保存。
 - 预约工时由服务端按照半小时时段计算，客户端提交的 `planned_hours` 不作为可信数据。
 - 项目已占用工时统计 `pending/confirmed/changed/running/completed`；`rejected/withdrawn/cancelled` 不占额度。
-- 工作日历有记录时以 `day_type` 为准，无记录时周一至周五为工作日、周六日为非工作日。
-- 个人时间类型为 `training/meeting/leave/other`，状态为 `active/withdrawn`；只有 `active` 记录参与预约冲突检测。
+- 工作日历有记录时以 `day_type` 为准，无记录时周一至周五为工作日、周六日为非工作日；预约校验、驾驶舱周容量和日/周/月负载报表共用该口径。
+- 软删除的项目、任务和执行记录不参与正常列表及经营统计，物理记录和关联历史仍保留供审计追溯。
+- 个人时间类型为 `training/meeting/leave/out_of_office/business_trip/other`，状态为 `active/withdrawn`；只有 `active` 记录参与预约冲突检测。
 
 ## 索引与约束
 
@@ -73,6 +84,8 @@ V1 业务表和历史字段均保留；`users`、`projects`、`schedule_bookings
 - 个人时间按用户、开始、结束和状态建立组合索引，用于重叠时段查询。
 - `users.employee_no` 唯一并建立查询索引；另有 `employee_no = username` 检查约束，保证登录兼容字段不分叉。
 - `employee_profiles.user_id`、`position_id` 均唯一并建立索引；人事管理职级单独建立索引。
+- 部门、组织和人员档案的数据来源，以及任务、执行记录和通知的软删除字段均建立查询索引。
+- `projects.approver_id` 建立外键与索引，直属主管被删除时置空，历史审批结果仍保留。
 
 ## 事务策略
 
@@ -93,11 +106,15 @@ V1 业务表和历史字段均保留；`users`、`projects`、`schedule_bookings
       ↓
 20260911_0003  用户软删除字段与索引
       ↓
-20260911_0004  项目/L3 审批、工时额度、追加申请、工作日历与 L3/L4 名称
+20260911_0004  项目审批基础、工时额度、追加申请、工作日历与 L3/L4 名称
       ↓
 20260912_0005  个人时间安排与预约冲突拦截数据表
       ↓
 20260914_0006  员工号、人员档案、人工/职级自动角色来源
+      ↓
+20260914_0007  HRDB 只读来源、直属主管审批、任务状态、业务软删除与默认成员角色
+      ↓
+20260915_0008  为历史项目回填项目经理固定成员关系
 ```
 
 维护者执行：
@@ -108,4 +125,4 @@ alembic upgrade head
 python -m scripts.init_data
 ```
 
-降级 `20260914_0006` 会永久删除人员档案和角色来源标记，并移除员工号字段；继续降级 `0005` 会永久删除全部个人时间安排，继续降级 `0004` 会删除项目审批/额度、追加工时申请和工作日历数据，并恢复旧角色显示名。执行前必须备份。
+`20260915_0008` 是数据回填迁移，降级时不会自动删除已补齐的项目经理成员记录，以免误删原本就存在的合法成员关系。继续降级 `0007` 会删除 HRDB 来源标记、直属审批人及任务/执行/通知软删除字段，但不会自动恢复被规范化的旧任务状态，也不会撤销迁移时补授的项目成员角色；执行前必须备份。

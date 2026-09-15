@@ -110,7 +110,7 @@ def reject_project(
 @router.get("/{project_id}/hour-requests")
 def list_hour_requests(
     project_id: int,
-    current_user: User = Depends(require_permission("project:view")),
+    current_user: User = Depends(require_permission("project:edit")),
     db: Session = Depends(get_db),
 ):
     return success(project_service.list_hour_requests(db, project_id, current_user))

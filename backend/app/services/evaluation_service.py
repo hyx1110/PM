@@ -15,7 +15,7 @@ from app.utils.model import model_to_dict
 
 def get_evaluation(db: Session, task_id: int, user: User) -> dict | None:
     task = db.get(Task, task_id)
-    if not task:
+    if not task or task.is_deleted:
         raise not_found("task not found")
     assert_project_visible(db, task.project_id, user)
     row = db.execute(
@@ -34,7 +34,7 @@ def get_evaluation(db: Session, task_id: int, user: User) -> dict | None:
 
 def upsert_evaluation(db: Session, task_id: int, payload: EvaluationUpsert, user: User) -> TaskEvaluation:
     task = db.get(Task, task_id)
-    if not task:
+    if not task or task.is_deleted:
         raise not_found("task not found")
     assert_project_manageable(db, task.project_id, user)
     evaluation = db.scalar(select(TaskEvaluation).where(TaskEvaluation.task_id == task_id))

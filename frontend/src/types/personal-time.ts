@@ -1,6 +1,6 @@
 import type { PageQuery } from './common'
 
-export type PersonalTimeType = 'training' | 'meeting' | 'leave' | 'business_trip' | 'other'
+export type PersonalTimeType = 'training' | 'meeting' | 'leave' | 'out_of_office' | 'business_trip' | 'other'
 
 export interface PersonalTimeBlock {
   id: number

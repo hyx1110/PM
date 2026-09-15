@@ -96,6 +96,21 @@ def upgrade() -> None:
     op.execute("UPDATE tasks SET status = 'running' WHERE status = 'delayed'")
 
     op.add_column(
+        "execution_records",
+        sa.Column(
+            "is_deleted",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
+    )
+    op.create_index(
+        "ix_execution_records_is_deleted",
+        "execution_records",
+        ["is_deleted"],
+    )
+
+    op.add_column(
         "notifications",
         sa.Column(
             "is_deleted",
@@ -114,7 +129,8 @@ def upgrade() -> None:
         SELECT u.id, r.id, 1, 0
         FROM users u
         JOIN roles r ON r.code = 'project_member'
-        WHERE NOT EXISTS (
+        WHERE u.is_deleted = 0
+        AND NOT EXISTS (
             SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id
         )
         """
@@ -124,6 +140,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_notifications_is_deleted", table_name="notifications")
     op.drop_column("notifications", "is_deleted")
+    op.drop_index(
+        "ix_execution_records_is_deleted", table_name="execution_records"
+    )
+    op.drop_column("execution_records", "is_deleted")
     op.drop_index("ix_tasks_is_deleted", table_name="tasks")
     op.drop_column("tasks", "is_deleted")
     op.drop_index("ix_projects_approver_id", table_name="projects")

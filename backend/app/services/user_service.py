@@ -203,6 +203,13 @@ def delete_user(db: Session, user_id: int, operator: User) -> None:
         raise not_found("user not found")
     if user.id == operator.id:
         raise bad_request("users cannot delete their own account")
+    profile = db.scalar(
+        select(EmployeeProfile).where(EmployeeProfile.user_id == user_id)
+    )
+    if profile and profile.data_source == "hrdb":
+        raise bad_request(
+            "该用户来自 HRDB，人员档案不能在项目管理系统中删除；请由 HRDB 同步在职状态"
+        )
 
     is_super_admin = db.scalar(
         select(UserRole.id)
@@ -242,6 +249,7 @@ def delete_user(db: Session, user_id: int, operator: User) -> None:
         .join(Project, Project.id == Task.project_id)
         .where(
             Task.owner_id == user_id,
+            Task.is_deleted.is_(False),
             Task.status.notin_({"completed", "cancelled"}),
             Project.is_deleted.is_(False),
             Project.status.notin_({"Completed", "Cancelled"}),

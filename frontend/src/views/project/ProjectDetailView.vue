@@ -51,8 +51,14 @@ const memberForm = reactive({
 const hourForm = reactive({ requested_hours: 8, reason: '' })
 const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已通过', rejected: '已驳回' }
 const hourStatusLabel = { pending: '待 L3 审批', approved: '已批准', rejected: '已驳回' }
+const activeOrganizationTree = (nodes: OrganizationNode[]): OrganizationNode[] =>
+  nodes
+    .filter((item) => item.status === 'active')
+    .map((item) => ({ ...item, children: activeOrganizationTree(item.children || []) }))
 const organizationOptions = computed(() =>
-  organizations.value.filter((item) => item.department_id === memberForm.department_id),
+  activeOrganizationTree(
+    organizations.value.filter((item) => item.department_id === memberForm.department_id),
+  ),
 )
 const candidateUsers = computed(() =>
   users.value.filter(
@@ -62,11 +68,28 @@ const candidateUsers = computed(() =>
       && !members.value.some((member) => member.user_id === item.id),
   ),
 )
+const canManageProject = computed(() => {
+  if (!project.value || !userStore.hasPermission('project:edit')) return false
+  const roles = userStore.profile?.roles || []
+  if (
+    roles.includes('super_admin')
+    || (
+      project.value.manager_id === userStore.profile?.id
+      && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
+    )
+  ) {
+    return true
+  }
+  return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
+    && project.value.department_id === userStore.profile?.department_id
+})
 const canRequestHours = computed(
   () =>
     project.value?.approval_status === 'approved'
     && project.value.manager_id === userStore.profile?.id
-    && userStore.profile?.roles.includes('project_manager'),
+    && (userStore.profile?.roles || []).some((role) =>
+      ['project_manager', 'department_manager', 'super_admin'].includes(role),
+    ),
 )
 const canReviewHours = (item: ProjectHourRequest) =>
   item.status === 'pending'
@@ -77,24 +100,33 @@ const canReviewHours = (item: ProjectHourRequest) =>
 async function load() {
   loading.value = true
   try {
-    const [p, m, t, s, h, u, d, o] = await Promise.all([
+    const [p, m, t, s] = await Promise.all([
       getProject(projectId.value),
       getProjectMembers(projectId.value),
       getTasks({ project_id: projectId.value, page: 1, page_size: 200 }),
       getSchedules({ project_id: projectId.value, page: 1, page_size: 200 }),
-      getProjectHourRequests(projectId.value),
-      getUserOptions(),
-      getDepartmentOptions(),
-      getOrganizationTree(),
     ])
     project.value = p
     members.value = m
     tasks.value = t.items
     schedules.value = s.items
-    hourRequests.value = h
-    users.value = u
-    departments.value = d
-    organizations.value = o
+    if (canManageProject.value) {
+      const [h, u, d, o] = await Promise.all([
+        getProjectHourRequests(projectId.value),
+        getUserOptions(),
+        getDepartmentOptions(),
+        getOrganizationTree(),
+      ])
+      hourRequests.value = h
+      users.value = u
+      departments.value = d
+      organizations.value = o
+    } else {
+      hourRequests.value = []
+      users.value = []
+      departments.value = []
+      organizations.value = []
+    }
   } finally {
     loading.value = false
   }
@@ -193,7 +225,7 @@ onMounted(load)
     <el-alert
       v-if="project && project.approval_status!=='approved'"
       :title="project.approval_status==='draft' ? '项目尚未提交审批，审批前不能添加成员、任务或预约人力。' : project.approval_status==='pending' ? `项目正在等待 ${project.approval_required_name || '创建人的直属主管'} 审批。` : `项目已被驳回：${project.approval_note || '未填写原因'}`"
-      :type="project.approval_status==='pending' ? 'warning' : 'error'"
+      :type="project.approval_status==='draft' ? 'info' : project.approval_status==='pending' ? 'warning' : 'error'"
       :closable="false"
       show-icon
     />
@@ -224,18 +256,18 @@ onMounted(load)
           <template #label>项目成员 <el-badge :value="members.length" type="info" /></template>
           <div class="tab-tools">
             <span>仅展示当前有效成员</span>
-            <el-button v-if="project?.approval_status==='approved' && userStore.hasPermission('project:edit')" type="primary" size="small" @click="openMember">添加成员</el-button>
+            <el-button v-if="project?.approval_status==='approved' && canManageProject" type="primary" size="small" @click="openMember">添加成员</el-button>
           </div>
           <el-table :data="members">
             <el-table-column prop="user_name" label="成员"/>
-            <el-table-column prop="project_role" label="项目角色"/>
+            <el-table-column label="项目角色"><template #default="{row}">{{ row.project_role === 'manager' ? '项目经理' : row.project_role }}</template></el-table-column>
             <el-table-column prop="allocation_percent" label="投入比例"><template #default="{row}">{{ row.allocation_percent }}%</template></el-table-column>
             <el-table-column label="加入时间"><template #default="{row}">{{ formatDate(row.joined_at) }}</template></el-table-column>
-            <el-table-column v-if="project?.approval_status==='approved' && userStore.hasPermission('project:edit')" label="操作" width="90"><template #default="{row}"><el-button link type="danger" @click="removeMember(row)">移除</el-button></template></el-table-column>
+            <el-table-column v-if="project?.approval_status==='approved' && canManageProject" label="操作" width="90"><template #default="{row}"><el-button v-if="row.user_id!==project?.manager_id" link type="danger" @click="removeMember(row)">移除</el-button><span v-else>固定成员</span></template></el-table-column>
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`项目任务 (${tasks.length})`" name="tasks">
-          <div class="tab-tools"><span>项目下一级与二级任务</span><el-button size="small" @click="router.push('/tasks')">进入任务管理</el-button></div>
+          <div class="tab-tools"><span>项目下一级与二级任务</span><el-button size="small" @click="router.push(canManageProject ? '/tasks' : '/my-tasks')">{{ canManageProject ? '进入任务管理' : '进入我的任务' }}</el-button></div>
           <el-table :data="tasks">
             <el-table-column prop="name" label="任务" min-width="180"/>
             <el-table-column prop="task_type" label="类型"/>
@@ -254,7 +286,7 @@ onMounted(load)
             <el-table-column prop="status" label="状态"/>
           </el-table>
         </el-tab-pane>
-        <el-tab-pane :label="`工时申请 (${hourRequests.length})`" name="hours">
+        <el-tab-pane v-if="canManageProject" :label="`工时申请 (${hourRequests.length})`" name="hours">
           <div class="tab-tools"><span>追加额度必须由项目所属部门当前 L3 审批</span><el-button v-if="canRequestHours" size="small" type="primary" @click="openHourRequest">申请追加</el-button></div>
           <el-table :data="hourRequests">
             <el-table-column prop="requester_name" label="申请人" width="110"/>

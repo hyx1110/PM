@@ -194,8 +194,13 @@ def dispatch_pending(db: Session, limit: int = 100) -> dict:
         select(Notification, NotificationPreference, User)
         .join(User, User.id == Notification.recipient_id)
         .join(NotificationPreference, NotificationPreference.user_id == Notification.recipient_id)
+        .where(
+            Notification.is_deleted.is_(False),
+            User.status == "active",
+            User.is_deleted.is_(False),
+        )
         .order_by(Notification.created_at.desc())
-        .limit(max(limit, 500))
+        .limit(limit)
     ).all()
     delivered_count = 0
     failed_count = 0

@@ -24,7 +24,7 @@ async function loadOptions(){;[tasks.value,projects.value]=await Promise.all([ge
 function openCreate(){editingId.value=undefined;Object.assign(form,emptyForm());dialogVisible.value=true}
 function openEdit(row:Execution){editingId.value=row.id;Object.assign(form,{task_id:row.task_id,user_id:row.user_id,actual_start:row.actual_start,actual_end:row.actual_end,actual_hours:Number(row.actual_hours),status:row.status,description:row.description||'',exception_reason:row.exception_reason||''});dialogVisible.value=true}
 async function save(){if(!(await formRef.value?.validate()))return;if(form.actual_end&&dayjs(form.actual_end)<dayjs(form.actual_start))return ElMessage.warning('实际结束时间不能早于开始时间');const payload={...form,actual_hours:form.actual_end&&(!form.actual_hours||form.actual_hours===0)?Math.max(dayjs(form.actual_end).diff(dayjs(form.actual_start),'minute')/60,0):form.actual_hours};if(editingId.value){const{task_id:_taskId,user_id:_userId,...updatePayload}=payload;await updateExecution(editingId.value,updatePayload)}else await createExecution(payload);ElMessage.success('执行记录已保存');dialogVisible.value=false;await load()}
-async function remove(row:Execution){await ElMessageBox.confirm(`确认删除“${row.task_name||'该任务'}”的这条执行记录吗？删除后报表中的实际工时会相应变化。`,'删除执行记录',{type:'warning',confirmButtonText:'确认删除'});await deleteExecution(row.id);ElMessage.success('执行记录已删除');await load()}
+async function remove(row:Execution){await ElMessageBox.confirm(`确认删除“${row.task_name||'该任务'}”的这条执行记录吗？系统会保留审计数据，但不再计入报表。`,'删除执行记录',{type:'warning',confirmButtonText:'确认删除'});await deleteExecution(row.id);ElMessage.success('执行记录已软删除');await load()}
 onMounted(async()=>{await loadOptions();await load()})
 </script>
 

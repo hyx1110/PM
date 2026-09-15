@@ -124,7 +124,13 @@ class ProjectRepository:
         created = set(db.scalars(select(Project.id).where(Project.created_by == user_id, Project.is_deleted.is_(False))).all())
         member = set(
             db.scalars(
-                select(ProjectMember.project_id).where(ProjectMember.user_id == user_id, ProjectMember.left_at.is_(None))
+                select(ProjectMember.project_id).where(
+                    ProjectMember.user_id == user_id,
+                    ProjectMember.left_at.is_(None),
+                    ProjectMember.project_id.in_(
+                        select(Project.id).where(Project.is_deleted.is_(False))
+                    ),
+                )
             ).all()
         )
         return managed | created | member

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import func, select
@@ -10,6 +12,7 @@ PERSONAL_TIME_TYPE_LABELS = {
     "training": "培训",
     "meeting": "会议",
     "leave": "休假",
+    "out_of_office": "外出",
     "business_trip": "出差",
     "other": "其他安排",
 }

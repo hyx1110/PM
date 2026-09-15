@@ -15,7 +15,7 @@ import {
   updateSchedule,
   withdrawSchedule,
 } from '@/api/schedule'
-import { getProjects } from '@/api/project'
+import { getProjectMembers, getProjects } from '@/api/project'
 import { getTasks } from '@/api/task'
 import { getScheduleUserOptions } from '@/api/user'
 import { getDepartmentOptions } from '@/api/organization'
@@ -47,6 +47,10 @@ const loading = ref(false)
 const viewMode = ref<'day' | 'week' | 'month'>('week')
 const anchorDate = ref(dayjs().format('YYYY-MM-DD'))
 const schedules = ref<Schedule[]>([])
+const hiddenBoardStatuses = new Set(['draft', 'rejected', 'withdrawn', 'cancelled'])
+const boardSchedules = computed(() =>
+  schedules.value.filter((item) => !hiddenBoardStatuses.has(item.status)),
+)
 const personalBlocks = ref<PersonalTimeBlock[]>([])
 const projects = ref<Project[]>([])
 const tasks = ref<Task[]>([])
@@ -66,6 +70,7 @@ const personDrawer = ref(false)
 const conflictDialog = ref(false)
 const batchDialog = ref(false)
 const batchSaving = ref(false)
+const batchUsers = ref<UserOption[]>([])
 const selected = ref<Schedule>()
 const selectedPersonalBlock = ref<PersonalTimeBlock>()
 const personalInitialSlot = ref<{ date: string; time: string }>()
@@ -128,6 +133,7 @@ const personalTypeLabel: Record<string, string> = {
   training: '培训',
   meeting: '会议',
   leave: '休假',
+  out_of_office: '外出',
   business_trip: '出差',
   other: '其他安排',
 }
@@ -169,17 +175,28 @@ const visibleUsers = computed(() => {
     ? [current, ...filtered.filter((item) => item.id !== current.id)]
     : filtered
 })
-const manageableProjects = computed(() =>
-  projects.value.filter(
-    (item) =>
-      item.approval_status === 'approved'
-      && item.manager_id === userStore.profile?.id,
-  ),
-)
+const bookableProjects = computed(() => {
+  const roles = userStore.profile?.roles || []
+  const currentUserId = userStore.profile?.id
+  return projects.value.filter((item) => {
+    if (
+      item.approval_status !== 'approved'
+      || ['Completed', 'Cancelled'].includes(item.status)
+    ) return false
+    if (roles.includes('super_admin')) return true
+    if (
+      item.manager_id === currentUserId
+      && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
+    ) return true
+    return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
+  })
+})
 const canBook = computed(
   () =>
     userStore.hasPermission('schedule:edit')
-    && userStore.profile?.roles.includes('project_manager'),
+    && userStore.profile?.roles.some((role) =>
+      ['project_manager', 'department_manager', 'functional_manager', 'super_admin'].includes(role),
+    ),
 )
 const dateTitle = computed(() =>
   viewMode.value === 'day'
@@ -191,6 +208,33 @@ const dateTitle = computed(() =>
 const batchTasks = computed(() =>
   tasks.value.filter((item) => item.project_id === batchForm.project_id),
 )
+
+function canBookUserForProject(item: UserOption, project?: Project) {
+  if (!project) return false
+  const roles = userStore.profile?.roles || []
+  const currentUserId = userStore.profile?.id
+  if (roles.includes('super_admin')) return true
+  if (
+    project.manager_id === currentUserId
+    && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
+  ) return true
+  return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
+    && item.supervisor_id === currentUserId
+}
+
+async function loadBatchUsers(projectId: number) {
+  const members = await getProjectMembers(projectId)
+  const ids = new Set(members.map((item) => item.user_id))
+  const project = bookableProjects.value.find((item) => item.id === projectId)
+  batchUsers.value = users.value.filter(
+    (item) => ids.has(item.id) && canBookUserForProject(item, project),
+  )
+  batchForm.user_ids = batchForm.user_ids.filter((id) => ids.has(id))
+}
+async function changeBatchProject(projectId: number) {
+  batchForm.task_id = batchTasks.value[0]?.id || 0
+  await loadBatchUsers(projectId)
+}
 const batchStartOptions = computed(() =>
   batchForm.session === 'morning'
     ? ['08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30']
@@ -225,14 +269,14 @@ const canEdit = computed(
     selected.value
     && ['pending', 'rejected', 'confirmed'].includes(selected.value.status)
     && selected.value.created_by === userStore.profile?.id
-    && manageableProjects.value.some((item) => item.id === selected.value?.project_id),
+    && bookableProjects.value.some((item) => item.id === selected.value?.project_id),
 )
 const canWithdraw = computed(
   () =>
-    selected.value
+    userStore.hasPermission('schedule:edit')
+    && selected.value
     && ['pending', 'changed'].includes(selected.value.status)
-    && selected.value.created_by === userStore.profile?.id
-    && manageableProjects.value.some((item) => item.id === selected.value?.project_id),
+    && selected.value.created_by === userStore.profile?.id,
 )
 const canDelete = computed(
   () =>
@@ -242,7 +286,7 @@ const canDelete = computed(
 )
 
 function daySchedules(date: string) {
-  return schedules.value.filter(
+  return boardSchedules.value.filter(
     (item) => dayjs(item.start_time).format('YYYY-MM-DD') === date,
   )
 }
@@ -303,15 +347,12 @@ async function load() {
         start_date: range.value.start,
         end_date: range.value.end,
         project_id: filter.project_id,
-        user_id: filter.user_id,
-        department_id: filter.department_id,
       }),
       getPersonalTimeBlocks({
         page: 1,
         page_size: 500,
         start_date: range.value.start,
         end_date: range.value.end,
-        user_id: filter.user_id,
         status: 'active',
       }),
     ])
@@ -344,8 +385,8 @@ function move(step: number) {
 
 function openCreate(slot: { userId: number; date: string; time: string }) {
   if (!canBook.value) return
-  if (!manageableProjects.value.length) {
-    return ElMessage.warning('没有已通过 L3 审批且由你负责的项目，暂时不能预约')
+  if (!bookableProjects.value.length) {
+    return ElMessage.warning('没有当前权限可预约的已审批项目')
   }
   selected.value = undefined
   initialSlot.value = slot
@@ -361,7 +402,7 @@ function openPersonalCreate(slot?: { date: string; time: string }) {
 }
 
 function handleBlankSlot(slot: { userId: number; date: string; time: string }) {
-  if (slot.userId === userStore.profile?.id && !canBook.value) {
+  if (slot.userId === userStore.profile?.id) {
     openPersonalCreate({ date: slot.date, time: slot.time })
     return
   }
@@ -426,11 +467,7 @@ function openMonthCreate(date: string) {
   if (meta.kind !== 'workday') {
     return ElMessage.warning(meta.kind === 'holiday' ? `${meta.name || '法定节假日'}不可预约` : '周末不可预约')
   }
-  if (!canBook.value) {
-    openPersonalCreate({ date, time: '08:30' })
-    return
-  }
-  openCreate({ userId: userStore.profile?.id || 0, date, time: '08:30' })
+  openPersonalCreate({ date, time: '08:30' })
 }
 
 function openDetail(item: Schedule) {
@@ -601,12 +638,12 @@ function allowMonthDrop(event: DragEvent, date: string) {
 }
 
 async function openBatch() {
-  if (!manageableProjects.value.length) {
-    return ElMessage.warning('没有已通过 L3 审批且由你负责的项目')
+  if (!bookableProjects.value.length) {
+    return ElMessage.warning('没有当前权限可预约的已审批项目')
   }
   Object.assign(batchForm, {
     user_ids: [],
-    project_id: manageableProjects.value[0].id,
+    project_id: bookableProjects.value[0].id,
     task_id: 0,
     work_date: anchorDate.value,
     session: 'morning',
@@ -615,6 +652,7 @@ async function openBatch() {
     remark: '',
   })
   batchForm.task_id = batchTasks.value[0]?.id || 0
+  await loadBatchUsers(batchForm.project_id)
   await loadCalendar(dayjs(batchForm.work_date).year())
   batchDialog.value = true
 }
@@ -625,7 +663,7 @@ async function saveBatch() {
   }
   await loadCalendar(dayjs(batchForm.work_date).year())
   if (!batchDateIsWorkday()) return ElMessage.warning('只能预约工作日，法定节假日不能预约')
-  const remaining = manageableProjects.value.find((item) => item.id === batchForm.project_id)?.remaining_hours
+  const remaining = bookableProjects.value.find((item) => item.id === batchForm.project_id)?.remaining_hours
   if (remaining !== undefined && batchHours.value * batchForm.user_ids.length > remaining) {
     return ElMessage.warning('项目剩余工时不足，请先申请追加工时并等待 L3 审批')
   }
@@ -697,7 +735,7 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">任务共享看板</h1>
-        <p class="page-subtitle">每个人都可安排自己的培训、会议或休假；个人占用时段不可预约，项目预约由被预约人本人审批。</p>
+        <p class="page-subtitle">每个人都可安排自己的培训、会议、休假、外出或其他时间；个人占用时段不可预约，项目预约由被预约人本人审批。</p>
       </div>
       <div class="header-actions">
         <el-button @click="openMyTimeDrawer">我的时间安排</el-button>
@@ -721,7 +759,7 @@ onMounted(async () => {
     <section class="surface board-card" v-loading="loading">
       <div class="board-caption">
         <strong>{{ dateTitle }}</strong>
-        <span class="time-legend"><span><i class="legend-work"></i>工作时间</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span></span>
+        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>待处理预约</span><span><i class="legend-accepted"></i>已接受预约</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span></span>
       </div>
       <div v-if="viewMode!=='month'" class="board-scroll">
         <div class="sticky-header">
@@ -732,11 +770,11 @@ onMounted(async () => {
           v-for="user in visibleUsers"
           :key="user.id"
           :user-id="user.id"
-          :user-name="user.name"
+          :user-name="user.id===userStore.profile?.id ? '我的日程' : user.name"
           :days="days"
           :slots="slots"
           :cell-width="cellWidth"
-          :schedules="schedules"
+          :schedules="boardSchedules"
           :personal-blocks="personalBlocks"
           :current-user-id="userStore.profile?.id||0"
           :day-meta="timelineDayMeta"
@@ -761,17 +799,17 @@ onMounted(async () => {
         >
           <div class="month-day-head"><span class="day-number">{{ dayjs(date).date() }}</span><small v-if="scheduleDayMeta(date).kind==='holiday'">{{ scheduleDayMeta(date).name || '法定节假日' }}</small><small v-else-if="scheduleDayMeta(date).kind==='workday'&&scheduleDayMeta(date).name">调休工作日</small></div>
           <button v-for="item in dayPersonalBlocks(date).slice(0,5)" :key="`personal-${item.id}`" class="month-booking month-personal" :class="`personal-${item.time_type}`" @click.stop="openPersonalBlock(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ personalTypeLabel[item.time_type] }}</button>
-          <button v-for="item in daySchedules(date).slice(0,Math.max(5-dayPersonalBlocks(date).length,0))" :key="item.id" class="month-booking" :draggable="item.created_by===userStore.profile?.id&&['pending','rejected','confirmed'].includes(item.status)" @dragstart="startMonthDrag($event,item)" @click.stop="openDetail(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ item.task_name }}</button>
+          <button v-for="item in daySchedules(date).slice(0,Math.max(5-dayPersonalBlocks(date).length,0))" :key="item.id" class="month-booking" :class="`status-${item.status}`" :draggable="item.created_by===userStore.profile?.id&&['pending','confirmed'].includes(item.status)" @dragstart="startMonthDrag($event,item)" @click.stop="openDetail(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ item.task_name }}</button>
           <small v-if="daySchedules(date).length+dayPersonalBlocks(date).length>5">另有 {{ daySchedules(date).length+dayPersonalBlocks(date).length-5 }} 条</small>
         </div>
       </div>
     </section>
-    <ScheduleBookingDialog v-model="bookingDialog" :initial="selected" :slot="initialSlot" :projects="manageableProjects" :tasks="tasks" :users="users" @save="save"/>
+    <ScheduleBookingDialog v-model="bookingDialog" :initial="selected" :slot="initialSlot" :projects="bookableProjects" :tasks="tasks" :users="users" @save="save"/>
     <ScheduleConflictDialog v-model="conflictDialog" :conflicts="conflicts"/>
     <PersonalTimeDialog v-model="personalDialog" :slot="personalInitialSlot" @save="savePersonalTime"/>
 
     <el-drawer v-model="myTimeDrawer" size="720px">
-      <template #header><div class="my-time-header"><div><strong>我的时间安排</strong><small>培训、会议、休假等个人占用会阻止项目经理重复预约。</small></div><el-button type="primary" @click="openPersonalCreate()">新增安排</el-button></div></template>
+      <template #header><div class="my-time-header"><div><strong>我的时间安排</strong><small>培训、会议、休假、外出等个人占用会阻止其他人重复预约。</small></div><el-button type="primary" @click="openPersonalCreate()">新增安排</el-button></div></template>
       <div class="my-time-filter"><el-select v-model="myTimeQuery.status" clearable placeholder="全部状态" style="width:150px" @change="myTimeQuery.page=1;loadMyTimeBlocks()"><el-option label="生效中" value="active"/><el-option label="已撤回" value="withdrawn"/></el-select></div>
       <el-table v-loading="myTimeLoading" :data="myTimeRows">
         <el-table-column label="状态类型" width="105"><template #default="{row}"><el-tag effect="plain" :type="row.time_type==='leave'?'danger':row.time_type==='meeting'?'warning':'info'">{{ personalTypeLabel[row.time_type] }}</el-tag></template></el-table-column>
@@ -824,9 +862,9 @@ onMounted(async () => {
     <el-dialog v-model="batchDialog" title="批量提交人力预约" width="640px">
       <el-alert title="每位被预约人分别审批；总占用工时 = 单人工时 × 人数。" type="info" :closable="false" show-icon/>
       <el-form label-position="top">
-        <el-form-item label="预约人员" required><el-select v-model="batchForm.user_ids" multiple filterable collapse-tags placeholder="可选择多位人员" style="width:100%"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+        <el-form-item label="预约人员" required><el-select v-model="batchForm.user_ids" multiple filterable collapse-tags placeholder="可选择多位项目成员" style="width:100%"><el-option v-for="item in batchUsers" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
         <div class="form-grid">
-          <el-form-item label="项目" required><el-select v-model="batchForm.project_id" filterable style="width:100%" @change="batchForm.task_id=batchTasks[0]?.id||0"><el-option v-for="item in manageableProjects" :key="item.id" :label="`${item.name}（剩余 ${item.remaining_hours}h）`" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="项目" required><el-select v-model="batchForm.project_id" filterable style="width:100%" @change="changeBatchProject"><el-option v-for="item in bookableProjects" :key="item.id" :label="`${item.name}（剩余 ${item.remaining_hours}h）`" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="任务" required><el-select v-model="batchForm.task_id" filterable style="width:100%"><el-option v-for="item in batchTasks" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="工作日期"><el-date-picker v-model="batchForm.work_date" type="date" value-format="YYYY-MM-DD" :disabled-date="disabledBatchDate" style="width:100%"/></el-form-item>
           <el-form-item label="工作时段"><el-radio-group v-model="batchForm.session"><el-radio-button value="morning">上午</el-radio-button><el-radio-button value="afternoon">下午</el-radio-button></el-radio-group></el-form-item>
@@ -867,4 +905,6 @@ onMounted(async () => {
 <style scoped>
 .header-actions,.filters,.date-nav{display:flex;align-items:center;gap:10px}.board-tools{display:flex;align-items:center;justify-content:space-between;padding:14px 16px}.board-card{overflow:hidden}.board-caption{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #e9edf1;color:#657083;font-size:12px}.time-legend,.time-legend>span{display:flex;align-items:center}.time-legend{gap:16px}.time-legend>span{gap:5px}.time-legend i{display:block;width:15px;height:10px;border:1px solid #dfe4e9;border-radius:3px}.legend-work{background:#fff}.legend-off{background:#e9edf1}.legend-holiday{border-color:#f1cccc!important;background:#fde8e8}.legend-personal{border-color:#cfc2e2!important;background:#eee7f7}.board-scroll{max-height:calc(100vh - 290px);overflow:auto}.sticky-header{position:sticky;top:0;z-index:10;display:flex;width:max-content;min-width:100%;box-shadow:0 2px 6px rgba(39,52,70,.06)}.person-head{position:sticky;left:0;z-index:12;display:grid;width:170px;flex:0 0 170px;place-items:center;border-right:1px solid #e2e6eb;background:#fafbfc;color:#7b8595;font-size:11px}.month-grid{display:grid;grid-template-columns:repeat(7,1fr);max-height:calc(100vh - 290px);overflow:auto}.weekday{position:sticky;top:0;z-index:4;border-right:1px solid #edf0f3;border-bottom:1px solid #e5e9ed;background:#fafbfc;padding:9px;text-align:center;color:#7c8796;font-size:11px}.month-day{min-height:125px;border-right:1px solid #edf0f3;border-bottom:1px solid #edf0f3;padding:7px;background:#fff}.month-day.outside,.month-day.weekend{background:#f2f4f6;color:#9da6b1}.month-day.holiday{background:#fff0f0;color:#a75b5b}.month-day.adjusted-workday{box-shadow:inset 0 3px #79ad8d}.month-day.today .day-number{background:#3d6c98;color:#fff}.month-day-head{display:flex;align-items:center;justify-content:space-between;gap:6px}.month-day-head small{overflow:hidden;color:inherit;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.day-number{display:grid;width:23px;height:23px;flex:0 0 23px;place-items:center;border-radius:7px;font-size:11px}.month-booking{display:block;width:100%;overflow:hidden;margin-top:4px;border:0;border-radius:5px;background:#e5edf5;padding:4px 5px;text-align:left;color:#486987;font-size:9px;text-overflow:ellipsis;white-space:nowrap;cursor:grab}.month-booking b{font-weight:650}.month-personal{cursor:pointer}.month-personal.personal-training{background:#eee7f7;color:#694f85}.month-personal.personal-meeting{background:#f7edd9;color:#806238}.month-personal.personal-leave{background:#f9e2e2;color:#985353}.month-personal.personal-other{background:#e9edf1;color:#596573}.month-day>small{display:block;margin-top:4px;color:#8d98a6;font-size:9px}.my-time-header{display:flex;width:100%;align-items:center;justify-content:space-between;gap:18px}.my-time-header>div{display:flex;min-width:0;flex-direction:column}.my-time-header strong{color:#344256;font-size:15px}.my-time-header small{margin-top:4px;color:#8d98a6;font-size:10px}.my-time-filter{display:flex;justify-content:flex-end;margin-bottom:14px}.person-overview{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;border-radius:12px;background:#f6f8fa;padding:13px 15px}.person-summary{display:flex;min-width:0;align-items:center;gap:11px}.overview-avatar{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:11px;background:#dde8f2;color:#315f8e;font-size:14px;font-weight:700}.person-summary>div{display:flex;min-width:0;flex-direction:column}.person-summary strong{color:#344256;font-size:13px}.person-summary small{margin-top:4px;color:#8d98a6;font-size:10px}.person-schedule-table{width:100%}.time-range{display:flex;flex-direction:column}.time-range strong{color:#435166;font-size:11px}.time-range span{margin-top:3px;color:#8190a2;font-size:10px}.person-pagination{display:flex;justify-content:flex-end;padding-top:16px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .month-personal.personal-business_trip{background:#e3f0f7;color:#426b83}
+.month-personal.personal-out_of_office{background:#e4f1e8;color:#4f755a}
+.time-legend{flex-wrap:wrap;justify-content:flex-end}.legend-pending{border-color:#e4bd70!important;background:#fff0d4}.legend-accepted{border-color:#a9cfb7!important;background:#dff1e6}.month-booking.status-pending,.month-booking.status-changed{border:1px solid #e4bd70;background:#fff0d4;color:#795518}.month-booking.status-confirmed,.month-booking.status-running,.month-booking.status-completed{border:1px solid #a9cfb7;background:#dff1e6;color:#356149}
 </style>

@@ -42,10 +42,7 @@ class RiskRepository:
         if visible_project_ids is not None:
             filters.append(
                 (RiskRecord.project_id.in_(visible_project_ids or {-1}))
-                | (
-                    RiskRecord.project_id.is_(None)
-                    & (RiskRecord.user_id == (viewer_id or -1))
-                )
+                | (RiskRecord.user_id == (viewer_id or -1))
             )
         total = db.scalar(select(func.count(RiskRecord.id)).where(*filters)) or 0
         handler = aliased(User)

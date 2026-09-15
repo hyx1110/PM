@@ -140,7 +140,7 @@ async function submit() {
     <el-alert title="保存后该时段将被占用，项目经理不能再预约；你可以随时从“我的时间安排”中撤回。" type="info" :closable="false" show-icon/>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <div class="form-grid">
-        <el-form-item label="时间状态" prop="time_type"><el-select v-model="form.time_type" style="width:100%"><el-option label="培训" value="training"/><el-option label="会议" value="meeting"/><el-option label="休假" value="leave"/><el-option label="出差" value="business_trip"/><el-option label="其他安排" value="other"/></el-select></el-form-item>
+        <el-form-item label="时间状态" prop="time_type"><el-select v-model="form.time_type" style="width:100%"><el-option label="培训" value="training"/><el-option label="会议" value="meeting"/><el-option label="休假" value="leave"/><el-option label="外出" value="out_of_office"/><el-option label="出差" value="business_trip"/><el-option label="其他安排" value="other"/></el-select></el-form-item>
         <el-form-item label="占用工时"><el-input :model-value="`${plannedHours} 小时`" disabled/></el-form-item>
         <el-form-item label="工作日期" prop="work_date"><el-date-picker v-model="form.work_date" type="date" value-format="YYYY-MM-DD" :disabled-date="disabledDate" style="width:100%"/></el-form-item>
         <el-form-item label="工作时段"><el-radio-group v-model="form.session" @change="resetSessionTimes"><el-radio-button value="morning">上午</el-radio-button><el-radio-button value="afternoon">下午</el-radio-button></el-radio-group></el-form-item>

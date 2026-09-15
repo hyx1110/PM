@@ -16,6 +16,8 @@ backend/alembic/versions/20260911_0003_safe_deletion.py
 backend/alembic/versions/20260911_0004_project_approval_and_work_calendar.py
 backend/alembic/versions/20260912_0005_personal_time_blocks.py
 backend/alembic/versions/20260914_0006_employee_profiles_and_role_sources.py
+backend/alembic/versions/20260914_0007_business_rules_alignment.py
+backend/alembic/versions/20260915_0008_project_manager_membership.py
 backend/app/models/employee_profile.py
 backend/app/models/import_job.py
 backend/app/models/notification.py
@@ -34,6 +36,7 @@ backend/app/services/employee_profile_service.py
 backend/app/services/notification_service.py
 backend/app/services/personal_time_service.py
 backend/app/services/risk_service.py
+backend/app/services/visibility_service.py
 backend/app/services/work_calendar_service.py
 backend/app/api/v1/data_exchange.py
 backend/app/api/v1/notifications.py
@@ -46,7 +49,7 @@ backend/app/tasks/notification_tasks.py
 backend/app/tasks/risk_tasks.py
 ```
 
-后端同时修改了用户账号/Schema/Repository/Service/API、角色关联来源、登录认证、人员查找项、项目模型/Schema/Repository/Service/API、任务创建限制、人力预约状态机与配额校验、组织 L3 校验、员工号 Excel 导入、主路由和初始化权限。
+后端同时修改了用户账号/Schema/Repository/Service/API、角色关联来源、登录认证、人员查找项、项目模型/Schema/Repository/Service/API、项目创建成员事务、任务创建限制、人力预约状态机/人员范围/配额校验、组织 L3 校验、员工号 Excel 导入、主路由和初始化权限。
 
 ## 前端新增文件
 
@@ -69,9 +72,10 @@ frontend/src/views/notification/NotificationCenterView.vue
 frontend/src/views/risk/RiskCenterView.vue
 frontend/src/views/workload/WorkloadAnalysisView.vue
 frontend/src/views/schedule/WorkCalendarView.vue
+frontend/src/views/task/MyTaskView.vue
 ```
 
-前端同时修改了员工号登录、用户人员档案与人事职级双页签、人工/自动系统角色来源展示、系统角色说明、项目列表/详情、任务创建、驾驶舱本人预约快捷审批、共享看板个人时间展示/撤回和人员全部安排入口、时间点式半小时时间轴、工作/非工作/法定节假日配色、预约表单、组织 L3 字段、通知中心与右上角未读角标同步、导航/顶栏、路由、项目/排期 API 与类型。
+前端同时修改了员工号登录、用户人员档案与人事职级双页签、人工/自动系统角色来源展示、系统角色说明、项目创建时的层级成员多选与固定经理展示、任务创建、驾驶舱本人预约快捷审批、按 PM/L3/L4 范围显示的共享看板、个人时间展示/撤回和人员全部安排入口、时间点式半小时时间轴、工作/非工作/法定节假日配色、预约表单、组织 L3 字段、通知中心与右上角未读角标同步、导航/顶栏、路由、项目/排期 API 与类型。
 
 ## 文档
 
@@ -81,6 +85,7 @@ backend/README.md
 frontend/README.md
 docs/API.md
 docs/ARCHITECTURE.md
+docs/BUSINESS_RULES_ALIGNMENT.md
 docs/DATABASE.md
 docs/HR_USER_MODEL.md
 docs/V2_SCOPE.md

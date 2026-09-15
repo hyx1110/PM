@@ -51,6 +51,13 @@ class UserCreate(ORMModel):
             return value or None
         return value
 
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        if value not in {"active", "disabled"}:
+            raise ValueError("用户状态只能是 active 或 disabled")
+        return value
+
     @model_validator(mode="after")
     def validate_password_confirmation(self):
         if self.password != self.confirm_password:
@@ -77,6 +84,13 @@ class UserUpdate(ORMModel):
         if isinstance(value, str):
             value = value.strip()
             return value or None
+        return value
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"active", "disabled"}:
+            raise ValueError("用户状态只能是 active 或 disabled")
         return value
 
     @model_validator(mode="after")
