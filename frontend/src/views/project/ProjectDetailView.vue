@@ -23,6 +23,7 @@ import type { Task } from '@/types/task'
 import type { UserOption } from '@/types/user'
 import { formatDate, formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import { beijingNow } from '@/utils/time'
 
 const route = useRoute()
 const router = useRouter()
@@ -64,31 +65,21 @@ const candidateUsers = computed(() =>
   users.value.filter(
     (item) =>
       item.department_id === memberForm.department_id
-      && item.organization_id === memberForm.organization_id
+      && (!memberForm.organization_id || item.organization_id === memberForm.organization_id)
       && !members.value.some((member) => member.user_id === item.id),
   ),
 )
 const canManageProject = computed(() => {
   if (!project.value || !userStore.hasPermission('project:edit')) return false
   const roles = userStore.profile?.roles || []
-  if (
-    roles.includes('super_admin')
-    || (
-      project.value.manager_id === userStore.profile?.id
-      && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
-    )
-  ) {
-    return true
-  }
-  return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
-    && project.value.department_id === userStore.profile?.department_id
+  return project.value.manager_id === userStore.profile?.id && roles.includes('project_manager')
 })
 const canRequestHours = computed(
   () =>
     project.value?.approval_status === 'approved'
     && project.value.manager_id === userStore.profile?.id
     && (userStore.profile?.roles || []).some((role) =>
-      ['project_manager', 'department_manager', 'super_admin'].includes(role),
+      role === 'project_manager',
     ),
 )
 const canReviewHours = (item: ProjectHourRequest) =>
@@ -139,14 +130,13 @@ function openMember() {
     user_id: undefined,
     project_role: 'member',
     allocation_percent: 100,
-    joined_at: new Date().toISOString().slice(0, 10),
+    joined_at: beijingNow().format('YYYY-MM-DD'),
   })
   memberDialog.value = true
 }
 
 async function saveMember() {
   if (!memberForm.department_id) return ElMessage.warning('请先选择部门')
-  if (!memberForm.organization_id) return ElMessage.warning('请选择组织')
   if (!memberForm.user_id) return ElMessage.warning('请选择成员')
   await addProjectMember(projectId.value, {
     user_id: memberForm.user_id,
@@ -267,7 +257,7 @@ onMounted(load)
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`项目任务 (${tasks.length})`" name="tasks">
-          <div class="tab-tools"><span>项目下一级与二级任务</span><el-button size="small" @click="router.push(canManageProject ? '/tasks' : '/my-tasks')">{{ canManageProject ? '进入任务管理' : '进入我的任务' }}</el-button></div>
+          <div class="tab-tools"><span>项目下一级与二级任务</span><el-button size="small" @click="router.push('/tasks')">进入任务管理</el-button></div>
           <el-table :data="tasks">
             <el-table-column prop="name" label="任务" min-width="180"/>
             <el-table-column prop="task_type" label="类型"/>
@@ -305,8 +295,8 @@ onMounted(load)
     <el-dialog v-model="memberDialog" title="添加项目成员" width="500px">
       <el-form :model="memberForm" label-position="top">
         <el-form-item label="部门" required><el-select v-model="memberForm.department_id" filterable style="width:100%" @change="memberForm.organization_id=undefined;memberForm.user_id=undefined"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
-        <el-form-item label="组织" required><el-tree-select v-model="memberForm.organization_id" :data="organizationOptions" :props="{label:'name',children:'children'}" node-key="id" check-strictly filterable :disabled="!memberForm.department_id" style="width:100%" @change="memberForm.user_id=undefined"/></el-form-item>
-        <el-form-item label="成员" required><el-select v-model="memberForm.user_id" filterable :disabled="!memberForm.organization_id" placeholder="可按姓名或工号搜索" style="width:100%"><el-option v-for="item in candidateUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
+        <el-form-item label="组织（可选）"><el-tree-select v-model="memberForm.organization_id" :data="organizationOptions" :props="{label:'name',children:'children'}" node-key="id" check-strictly clearable filterable :disabled="!memberForm.department_id" style="width:100%" @change="memberForm.user_id=undefined"/></el-form-item>
+        <el-form-item label="成员" required><el-select v-model="memberForm.user_id" filterable :disabled="!memberForm.department_id" placeholder="可按姓名或工号搜索" style="width:100%"><el-option v-for="item in candidateUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
         <el-form-item label="项目角色"><el-input v-model="memberForm.project_role"/></el-form-item>
         <el-form-item label="投入比例"><el-input-number v-model="memberForm.allocation_percent" :min="0" :max="100" style="width:100%"/></el-form-item>
         <el-form-item label="加入日期"><el-date-picker v-model="memberForm.joined_at" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>

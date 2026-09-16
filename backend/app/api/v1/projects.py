@@ -26,7 +26,11 @@ def list_projects(
     status: str | None = None,
     manager_id: int | None = None,
     department_id: int | None = None,
+    organization_id: int | None = None,
+    employee_no: str | None = None,
+    name: str | None = None,
     approval_status: str | None = None,
+    approver_id: int | None = None,
     current_user: User = Depends(require_permission("project:view")),
     db: Session = Depends(get_db),
 ):
@@ -40,7 +44,11 @@ def list_projects(
             status,
             manager_id,
             department_id,
+            organization_id,
+            employee_no,
+            name,
             approval_status,
+            approver_id,
         )
     )
 
@@ -53,6 +61,14 @@ def create_project(
 ):
     item = project_service.create_project(db, payload, current_user)
     return success(project_service.project_detail(db, item.id, current_user))
+
+
+@router.get("/hour-requests/pending")
+def list_pending_hour_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return success(project_service.list_pending_hour_requests(db, current_user))
 
 
 @router.get("/{project_id}")

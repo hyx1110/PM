@@ -8,6 +8,8 @@ export interface Task {
   name: string
   task_type: string
   owner_id: number
+  owner_ids: number[]
+  owner_names: string[]
   owner_name?: string
   project_manager_name?: string
   planned_start: string
@@ -22,13 +24,26 @@ export interface Task {
   children?: Task[]
 }
 
-export type TaskPayload = Omit<
-  Task,
-  'id' | 'project_name' | 'owner_name' | 'project_manager_name' | 'booked_hours' | 'effective_status' | 'children'
->
+export interface TaskPayload {
+  project_id: number
+  parent_id?: number
+  name: string
+  task_type: string
+  owner_ids: number[]
+  planned_start: string
+  planned_end: string
+  estimated_hours: number
+  status: string
+  description?: string
+  remark?: string
+}
 
 export interface TaskQuery extends PageQuery {
   project_id?: number
   owner_id?: number
   status?: string
+  department_id?: number
+  organization_id?: number
+  employee_no?: string
+  name?: string
 }

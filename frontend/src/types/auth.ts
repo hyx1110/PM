@@ -1,11 +1,11 @@
 export interface CurrentUser {
   id: number
   employee_no: string
-  username: string
   name: string
-  email?: string
-  department_id?: number
-  organization_id?: number
+  email?: string | null
+  department_id?: number | null
+  organization_id?: number | null
+  supervisor_id?: number | null
   status: string
   roles: string[]
   permissions: string[]

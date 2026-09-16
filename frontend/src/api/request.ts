@@ -29,7 +29,8 @@ client.interceptors.response.use(
       : responseData?.message || error.message || '请求失败'
     if (status === 401) {
       localStorage.removeItem(TOKEN_KEY)
-      if (window.location.pathname !== '/login') window.location.assign('/login')
+      if (window.location.pathname === '/login') ElMessage.error(message)
+      else window.location.assign('/login')
     } else if (status !== 409 || !responseData?.data?.conflicts) {
       ElMessage.error(message)
     }

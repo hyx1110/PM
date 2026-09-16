@@ -7,8 +7,9 @@ import {
   saveWorkCalendarDay,
 } from '@/api/work-calendar'
 import type { WorkCalendarDay } from '@/types/work-calendar'
+import { beijingNow } from '@/utils/time'
 
-const year = ref(new Date().getFullYear())
+const year = ref(beijingNow().year())
 const loading = ref(false)
 const items = ref<WorkCalendarDay[]>([])
 const dialogVisible = ref(false)

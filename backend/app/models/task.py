@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -27,3 +27,12 @@ class Task(TimestampMixin, Base):
     is_deleted: Mapped[bool] = mapped_column(
         nullable=False, default=False, index=True
     )
+
+
+class TaskAssignee(TimestampMixin, Base):
+    __tablename__ = "task_assignees"
+    __table_args__ = (UniqueConstraint("task_id", "user_id", name="uq_task_assignee"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)

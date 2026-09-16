@@ -14,12 +14,10 @@ class TaskBase(ORMModel):
     parent_id: int | None = None
     name: str = Field(min_length=1, max_length=200)
     task_type: str = "Project"
-    owner_id: int
     planned_start: datetime
     planned_end: datetime
     estimated_hours: Decimal = Field(default=0, ge=0)
     status: str = "not_started"
-    priority: str = "medium"
     description: str | None = None
     remark: str | None = None
 
@@ -35,25 +33,28 @@ class TaskBase(ORMModel):
 
 
 class TaskCreate(TaskBase):
-    pass
+    owner_ids: list[int] = Field(min_length=1)
 
 
 class TaskUpdate(ORMModel):
     parent_id: int | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
     task_type: str | None = None
-    owner_id: int | None = None
+    owner_ids: list[int] | None = Field(default=None, min_length=1)
     planned_start: datetime | None = None
     planned_end: datetime | None = None
     estimated_hours: Decimal | None = Field(default=None, ge=0)
     status: str | None = None
-    priority: str | None = None
     description: str | None = None
     remark: str | None = None
 
 
 class TaskResponse(TaskBase):
     id: int
+    owner_id: int
+    owner_ids: list[int] = Field(default_factory=list)
+    owner_names: list[str] = Field(default_factory=list)
+    priority: str = "medium"
     project_name: str | None = None
     owner_name: str | None = None
     project_manager_name: str | None = None

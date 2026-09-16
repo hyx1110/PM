@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Calendar, Collection, Timer, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
+import { Calendar, Collection, Timer, TrendCharts } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDashboardSummary } from '@/api/report'
-import { getProjects } from '@/api/project'
+import { approveProjectHourRequest, getPendingProjectHourRequests, getProjects, rejectProjectHourRequest } from '@/api/project'
+import { getMyTasks } from '@/api/task'
 import { confirmSchedule, getMyPendingSchedules, rejectSchedule } from '@/api/schedule'
 import type { DashboardSummary } from '@/types/report'
 import type { Schedule } from '@/types/schedule'
 import type { Project } from '@/types/project'
+import type { ProjectHourRequest } from '@/types/project'
+import type { Task } from '@/types/task'
+import { formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
@@ -20,6 +24,8 @@ const loading = ref(false)
 const decisionState = ref<{ id: number; action: 'approve' | 'reject' }>()
 const pendingBookings = ref<Schedule[]>([])
 const pendingProjectApprovals = ref<Project[]>([])
+const pendingHourRequests = ref<ProjectHourRequest[]>([])
+const myTasks = ref<Task[]>([])
 const data = ref<DashboardSummary>({
   projects_total: 0, projects_running: 0, projects_completed: 0, projects_delayed: 0,
   delayed_tasks: 0, pending_schedules: 0, pending_project_approvals: 0,
@@ -31,7 +37,7 @@ const cards = computed(() => {
   if (data.value.pending_project_approvals) return [
     { value: data.value.pending_project_approvals, label: '待审批项目', note: '由你作为创建人的直属主管审批', icon: Calendar, color: '#92713c' },
     { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
-    { value: data.value.delayed_tasks, label: '异常任务', note: '已超过计划截止时间', icon: WarningFilled, color: '#a75858' },
+    { value: data.value.my_today_tasks, label: '今日任务', note: '首页直接查看我的任务', icon: Collection, color: '#a75858' },
     { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#4b7b6b' },
   ]
   if (memberOnly.value) return [
@@ -44,7 +50,7 @@ const cards = computed(() => {
     { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
     { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#4b7b6b' },
     { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
-    { value: data.value.open_risks, label: '未关闭风险', note: `今日 ${data.value.today_risks} / 严重 ${data.value.critical_risks}`, icon: WarningFilled, color: '#a75858' },
+    { value: data.value.my_today_tasks, label: '今日任务', note: `${data.value.my_upcoming_tasks} 个任务将在 7 天内到期`, icon: Collection, color: '#a75858' },
   ]
 })
 const maxHours = computed(() => Math.max(...data.value.schedule_trend.map(item => item.planned_hours), 1))
@@ -52,19 +58,35 @@ const maxHours = computed(() => Math.max(...data.value.schedule_trend.map(item =
 async function loadDashboard() {
   loading.value = true
   try {
-    const [summary, pending, projects] = await Promise.all([
+    const [summary, pending, projects, hours, tasks] = await Promise.all([
       getDashboardSummary(),
       getMyPendingSchedules(8),
-      getProjects({ page: 1, page_size: 50, approval_status: 'pending' }),
+      getProjects({ page: 1, page_size: 50, approval_status: 'pending', approver_id: userStore.profile?.id }),
+      getPendingProjectHourRequests(),
+      getMyTasks({ page: 1, page_size: 10 }),
     ])
     data.value = summary
     pendingBookings.value = pending
-    pendingProjectApprovals.value = projects.items.filter(
-      (item) => item.approver_id === userStore.profile?.id,
-    )
+    pendingProjectApprovals.value = projects.items
+    pendingHourRequests.value = hours
+    myTasks.value = tasks.items
   } finally {
     loading.value = false
   }
+}
+
+async function approveHours(item: ProjectHourRequest) {
+  await ElMessageBox.confirm(`确认批准项目“${item.project_name}”追加 ${item.requested_hours} 小时吗？`, 'L3 工时审批', { type: 'warning' })
+  await approveProjectHourRequest(item.project_id, item.id)
+  ElMessage.success('追加工时已批准')
+  await loadDashboard()
+}
+
+async function rejectHours(item: ProjectHourRequest) {
+  const { value } = await ElMessageBox.prompt('请输入驳回原因', 'L3 工时审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
+  await rejectProjectHourRequest(item.project_id, item.id, value)
+  ElMessage.success('追加工时申请已驳回')
+  await loadDashboard()
 }
 
 async function approveBooking(item: Schedule) {
@@ -117,14 +139,23 @@ onMounted(loadDashboard)
 <template>
   <div class="page-shell" v-loading="loading">
     <header class="page-header">
-      <div><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{ userStore.profile?.name }}，这里汇总项目进度、人力排期和实时风险。</p></div>
-      <div class="header-actions"><el-button @click="$router.push('/my-tasks')">我的任务</el-button><el-button v-if="!memberOnly" @click="$router.push('/risks')">风险中心</el-button><el-button type="primary" @click="$router.push('/schedules')">共享看板</el-button></div>
+      <div><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{ userStore.profile?.name }}，这里汇总我的任务、项目进度和人力排期。</p></div>
+      <div class="header-actions"><el-button type="primary" @click="$router.push('/schedules')">共享看板</el-button></div>
     </header>
     <section class="metrics">
       <article v-for="card in cards" :key="card.label" class="surface metric">
         <div class="metric-icon" :style="{ color: card.color, backgroundColor: `${card.color}14` }"><el-icon><component :is="card.icon" /></el-icon></div>
         <div><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></div>
       </article>
+    </section>
+    <section class="surface decision-card">
+      <div class="decision-header"><div><span class="overline">MY TASKS</span><h2>我的任务</h2><p>首页直接展示由你负责的任务。</p></div><el-button text type="primary" @click="$router.push('/tasks')">查看全部任务</el-button></div>
+      <el-empty v-if="!myTasks.length" :image-size="54" description="当前没有由你负责的任务" />
+      <el-table v-else :data="myTasks" size="small" class="dashboard-table"><el-table-column prop="name" label="任务" min-width="180"/><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="owner_name" label="负责人" min-width="120"/><el-table-column label="计划结束" width="165"><template #default="{row}">{{ formatDateTime(row.planned_end) }}</template></el-table-column><el-table-column prop="effective_status" label="状态" width="100"/></el-table>
+    </section>
+    <section v-if="pendingHourRequests.length" class="surface decision-card">
+      <div class="decision-header"><div><span class="overline">HOUR APPROVALS</span><h2>L3 待审批追加工时</h2><p>批准后工时立即计入项目额度。</p></div></div>
+      <div class="decision-list"><article v-for="item in pendingHourRequests" :key="item.id" class="decision-item"><div class="decision-info"><strong>{{ item.project_code }} · {{ item.project_name }}</strong><span>{{ item.requester_name }} 申请追加 {{ item.requested_hours }}h · {{ item.reason }}</span></div><div class="decision-actions"><el-button @click="rejectHours(item)">驳回</el-button><el-button type="success" @click="approveHours(item)">批准</el-button></div></article></div>
     </section>
     <section v-if="pendingProjectApprovals.length" class="surface decision-card">
       <div class="decision-header">

@@ -33,29 +33,21 @@ const query = reactive({
   status: '',
   manager_id: undefined as number | undefined,
   department_id: undefined as number | undefined,
+  organization_id: undefined as number | undefined,
+  employee_no: '',
+  name: '',
 })
 const dialogVisible = ref(false)
 const editingId = ref<number>()
 const editingProject = ref<Project>()
 const formRef = ref<FormInstance>()
 const isProjectManager = computed(() => userStore.profile?.roles.includes('project_manager') || false)
-const isL3 = computed(() => userStore.profile?.roles.includes('department_manager') || false)
-const isSuperAdmin = computed(() => userStore.profile?.roles.includes('super_admin') || false)
-const canCreateProject = computed(() => isProjectManager.value || isL3.value || isSuperAdmin.value)
+const canCreateProject = computed(() => isProjectManager.value)
 const canManageProject = (project: Project) => {
   const roles = userStore.profile?.roles || []
-  return roles.includes('super_admin')
-    || (
-      project.manager_id === userStore.profile?.id
-      && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
-    )
-    || (
-      roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
-      && project.department_id === userStore.profile?.department_id
-    )
+  return project.manager_id === userStore.profile?.id && roles.includes('project_manager')
 }
 const emptyForm = (): ProjectPayload => ({
-  code: '',
   name: '',
   project_type: 'General',
   manager_id: userStore.profile?.id || 0,
@@ -71,7 +63,6 @@ const emptyForm = (): ProjectPayload => ({
 })
 const form = reactive<ProjectPayload>(emptyForm())
 const rules: FormRules = {
-  code: [{ required: true, message: '请输入项目编号' }],
   name: [{ required: true, message: '请输入项目名称' }],
   manager_id: [{ required: true, message: '请选择项目经理' }],
   member_ids: [{ required: true, type: 'array', min: 1, message: '请至少选择一名项目成员' }],
@@ -104,6 +95,15 @@ const availableStatuses = computed(() => {
 })
 const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已审批', rejected: '已驳回' }
 const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
+const flatOrganizations = computed(() => {
+  const result: Array<OrganizationNode & { label: string }> = []
+  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
+    result.push({ ...node, label: `${prefix}${node.name}` })
+    walk(node.children || [], `${prefix}　`)
+  })
+  walk(organizations.value)
+  return result
+})
 const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
   Running: 'primary',
   Completed: 'success',
@@ -153,10 +153,22 @@ function organizationMemberOption(node: OrganizationNode): MemberCascaderOption 
 const memberCascaderOptions = computed<MemberCascaderOption[]>(() =>
   departments.value
     .map((department) => {
-      const children = organizations.value
+      const organizationChildren = organizations.value
         .filter((node) => node.department_id === department.id)
         .map(organizationMemberOption)
         .filter((item): item is MemberCascaderOption => Boolean(item))
+      const unassignedMembers = users.value
+        .filter(
+          (item) =>
+            item.department_id === department.id
+            && !item.organization_id
+            && item.id !== userStore.profile?.id,
+        )
+        .map((item) => ({
+          value: item.id,
+          label: `未分配组织 · ${item.name} (${item.employee_no})`,
+        }))
+      const children = [...organizationChildren, ...unassignedMembers]
       return {
         value: `department-${department.id}`,
         label: department.name,
@@ -173,6 +185,8 @@ async function load() {
       ...query,
       keyword: query.keyword || undefined,
       status: query.status || undefined,
+      employee_no: query.employee_no || undefined,
+      name: query.name || undefined,
     })
     projects.value = result.items
     total.value = result.total
@@ -203,7 +217,6 @@ function openEdit(row: Project) {
   editingId.value = row.id
   editingProject.value = row
   Object.assign(form, {
-    code: row.code,
     name: row.name,
     project_type: row.project_type,
     manager_id: row.manager_id,
@@ -229,7 +242,7 @@ async function save(submitAfterSave = false) {
   }
   let saved: Project
   if (editingId.value) {
-    const { code: _code, member_ids: _memberIds, ...payload } = form
+    const { member_ids: _memberIds, ...payload } = form
     if (editingProject.value?.approval_status === 'approved') {
       const {
         manager_id: _managerId,
@@ -246,7 +259,7 @@ async function save(submitAfterSave = false) {
   }
   if (submitAfterSave && saved.approval_status !== 'approved') {
     await submitProject(saved.id)
-    ElMessage.success(isL3.value || isSuperAdmin.value ? '项目已自动审批通过' : '项目已提交直属主管审批')
+    ElMessage.success('项目已提交直属主管审批')
   } else ElMessage.success(saved.approval_status === 'approved' ? '项目已自动审批通过' : '项目草稿已保存')
   dialogVisible.value = false
   await load()
@@ -255,7 +268,7 @@ async function save(submitAfterSave = false) {
 async function submitExisting(row: Project) {
   await ElMessageBox.confirm(`确认提交项目“${row.name}”审批吗？`, '提交项目', { type: 'warning' })
   await submitProject(row.id)
-  ElMessage.success(isL3.value || isSuperAdmin.value ? '项目已自动审批通过' : '项目已提交直属主管审批')
+  ElMessage.success('项目已提交直属主管审批')
   await load()
 }
 
@@ -300,13 +313,13 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">项目管理</h1>
-        <p class="page-subtitle">项目经理由直属主管审批；L3 或超级管理员提交时系统自动通过，避免自己审批自己。</p>
+        <p class="page-subtitle">所有人均可查看项目；只有项目经理可以新建并维护自己负责的项目。</p>
       </div>
       <el-button v-if="canCreateProject" type="primary" @click="openCreate">新建项目</el-button>
     </header>
     <el-alert
       v-if="userStore.hasPermission('project:edit') && !canCreateProject"
-      title="只有项目经理、L3 或超级管理员可以创建项目。"
+      title="只有项目经理可以创建和维护自己负责的项目。"
       type="info"
       :closable="false"
       show-icon
@@ -322,6 +335,9 @@ onMounted(async () => {
       <el-select v-model="query.department_id" clearable placeholder="所属部门" style="width:160px">
         <el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/>
       </el-select>
+      <el-select v-model="query.organization_id" clearable filterable placeholder="成员组织" style="width:180px"><el-option v-for="item in flatOrganizations" :key="item.id" :label="item.label" :value="item.id"/></el-select>
+      <el-input v-model="query.employee_no" clearable placeholder="成员工号" style="width:150px"/>
+      <el-input v-model="query.name" clearable placeholder="成员姓名" style="width:150px"/>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>
     <section class="surface table-card">
@@ -333,6 +349,8 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="manager_name" label="项目经理" width="110"/>
+        <el-table-column prop="manager_employee_no" label="工号" width="110"/>
+        <el-table-column prop="manager_organization_name" label="组织" min-width="120"/>
         <el-table-column prop="department_name" label="部门" min-width="120"/>
         <el-table-column label="审批" width="115">
           <template #default="{row}">
@@ -375,14 +393,14 @@ onMounted(async () => {
     <el-dialog v-model="dialogVisible" :title="editingId?'编辑项目':'新建项目'" width="720px" destroy-on-close>
       <el-alert
         v-if="!editingId"
-        :title="isL3 || isSuperAdmin ? '请先指定项目成员；L3/超级管理员创建项目后自动通过审批。' : '请先指定项目成员；项目经理提交后由直属主管审批。'"
+        title="项目编号由系统自动生成；请指定项目成员，提交后由直属主管审批。"
         type="info"
         :closable="false"
         show-icon
       />
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
-          <el-form-item label="项目编号" prop="code"><el-input v-model="form.code" :disabled="Boolean(editingId)"/></el-form-item>
+          <el-form-item label="项目编号"><el-input model-value="保存后由系统自动生成" disabled/></el-form-item>
           <el-form-item label="项目名称" prop="name"><el-input v-model="form.name"/></el-form-item>
           <el-form-item label="项目类型"><el-input v-model="form.project_type"/></el-form-item>
           <el-form-item label="项目经理" prop="manager_id">
@@ -429,8 +447,8 @@ onMounted(async () => {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible=false">取消</el-button>
-        <el-button v-if="editingId || !(isL3 || isSuperAdmin)" @click="save(false)">{{ editingProject?.approval_status==='approved' ? '保存' : '保存草稿' }}</el-button>
-        <el-button v-if="editingProject?.approval_status!=='approved'" type="primary" @click="save(true)">{{ isL3 || isSuperAdmin ? (editingId ? '保存并自动通过' : '创建并自动通过') : '保存并提交审批' }}</el-button>
+        <el-button @click="save(false)">{{ editingProject?.approval_status==='approved' ? '保存' : '保存草稿' }}</el-button>
+        <el-button v-if="editingProject?.approval_status!=='approved'" type="primary" @click="save(true)">保存并提交审批</el-button>
       </template>
     </el-dialog>
   </div>

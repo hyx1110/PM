@@ -38,7 +38,6 @@ class ProjectBase(ORMModel):
 
 
 class ProjectCreate(ProjectBase):
-    code: str = Field(min_length=1, max_length=50)
     member_ids: list[int] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -71,6 +70,9 @@ class ProjectResponse(ProjectBase):
     id: int
     code: str
     manager_name: str | None = None
+    manager_employee_no: str | None = None
+    manager_organization_id: int | None = None
+    manager_organization_name: str | None = None
     department_name: str | None = None
     approval_status: str
     created_by: int | None = None
@@ -124,6 +126,8 @@ class ProjectHourRequestResponse(ORMModel):
     status: str
     requested_by: int
     requester_name: str | None = None
+    project_code: str | None = None
+    project_name: str | None = None
     reviewed_by: int | None = None
     reviewer_name: str | None = None
     reviewed_at: datetime | None = None

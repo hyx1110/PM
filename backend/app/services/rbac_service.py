@@ -1,11 +1,10 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import not_found
-from app.models.rbac import Permission, Role
+from app.core.exceptions import bad_request, not_found
+from app.models.rbac import Permission, Role, UserRole
 from app.models.user import User
 from app.repositories.rbac_repository import rbac_repository
-from app.services.employee_profile_service import ensure_default_system_role
 from app.services.operation_log_service import log_operation
 
 
@@ -18,6 +17,20 @@ def list_permissions(db: Session):
         {column.name: getattr(item, column.name) for column in Permission.__table__.columns}
         for item in rbac_repository.list_permissions(db)
     ]
+
+
+def ensure_default_system_role(db: Session, user_id: int) -> None:
+    """Every active system identity must have at least one functional role."""
+    assignment_count = db.scalar(
+        select(func.count(UserRole.id)).where(UserRole.user_id == user_id)
+    ) or 0
+    if assignment_count:
+        return
+    role = db.scalar(select(Role).where(Role.code == "project_member"))
+    if not role:
+        raise bad_request("系统项目成员角色尚未初始化，请先执行初始化脚本")
+    db.add(UserRole(user_id=user_id, role_id=role.id))
+    db.flush()
 
 
 def update_role_permissions(db: Session, role_id: int, permission_ids: list[int], operator_id: int) -> dict:

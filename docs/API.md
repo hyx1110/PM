@@ -8,7 +8,7 @@
 
 Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 
-登录请求统一使用员工号；为兼容升级前客户端，后端仍可接收同值的 `username` 别名：
+登录请求统一使用员工号/登录账号：
 
 ```json
 {
@@ -26,7 +26,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | POST | `/auth/logout` | 已登录 | 退出确认 |
 | GET | `/dashboard/summary` | 已登录 | V2 驾驶舱摘要与 14 日趋势 |
 | GET | `/lookups/users` | 已登录 | 最小用户选项 |
-| GET | `/lookups/schedule-users` | 已登录 | PM 返回本人/项目组、L3 返回全量、L4 返回本人/直属下属、普通成员返回本人 |
+| GET | `/lookups/schedule-users` | 已登录 | 支持项目/姓名/工号/部门/组织筛选；PM 返回本人/项目组、L3 返回全量、L4 返回本人/直属及第二级下属、普通成员返回本人 |
 | GET | `/lookups/departments` | 已登录 | 有效部门选项 |
 
 ## 用户、组织与 RBAC
@@ -35,7 +35,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 |---|---|---|---|
 | GET/POST | `/users` | `user:view` / `user:edit` | 查询/新增用户 |
 | GET/PUT/DELETE | `/users/{id}` | `user:view` / `user:edit` | 用户详情/更新/软删除 |
-| PUT | `/users/{id}/roles` | `role:edit` | 替换人工分配的系统角色，不清除职级自动授权 |
+| PUT | `/users/{id}/roles` | `role:edit` | 替换用户的系统角色；空列表会自动恢复项目成员角色 |
 | GET/POST | `/departments` | `organization:view/edit` | 部门列表/新增 |
 | PUT/DELETE | `/departments/{id}` | `organization:edit` | 更新/删除无组织节点的部门 |
 | GET | `/organizations/tree` | 已登录 | L1-L4 组织树，用于部门→组织→人员级联选择 |
@@ -43,7 +43,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | GET | `/roles`、`/permissions` | `role:view` | 角色和权限 |
 | PUT | `/roles/{id}/permissions` | `role:edit` | 替换角色权限 |
 
-新增用户的 `employee_no` 同时作为登录账号，长度为 2–50，只接受可见 ASCII 字符，必须至少包含一个英文字母或数字，且不能包含空格；`name` 姓名字段不受该字符集限制。`username` 是只读兼容字段，由系统强制保持与 `employee_no` 相同；升级前客户端在新增和登录请求中仍可暂时把同值放在 `username`，但新代码应统一使用 `employee_no`。用户 DELETE 为软删除，活动业务未移交时返回 `40904`。
+新增用户的 `department_id`、`password` 和 `confirm_password` 必填。`employee_no` 同时作为唯一登录账号，长度为 2–50，只接受可见 ASCII 字符，必须至少包含一个英文字母或数字，且不能包含空格；`name` 姓名字段不受该字符集限制。用户列表支持部门和组织筛选。用户 DELETE 为软删除，活动业务未移交时返回 `40904`。
 
 新增用户示例：
 
@@ -53,46 +53,43 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
   "password": "ChangeMe123!",
   "confirm_password": "ChangeMe123!",
   "name": "张三",
+  "email": "zhangsan@example.com",
   "department_id": 10,
   "organization_id": 100,
   "supervisor_id": 8,
-  "role_ids": [5],
-  "employee_profile": {
-    "position_id": "P10001",
-    "preferred_name": "张三",
-    "job_id": "J100",
-    "job_title": "工程师",
-    "hr_management_level": "department_manager"
-  }
+  "role_ids": [5]
 }
 ```
 
-其中 `password` 必须与 `confirm_password` 一致。`role_ids` 只表示人工分配的系统功能角色；未选择任何角色时默认授予 `project_member`。`employee_profile.hr_management_level` 是独立的人事职级：`department_manager` 自动关联系统 L3，`management_manager` 自动关联系统 L4，`employee` 不自动关联管理角色。`manual_*` 和 `hr_*` 字段区分授权来源。`data_source=hrdb` 的人员主数据、部门和组织只读。
+其中 `password` 必须与 `confirm_password` 一致。用户业务字段只包含员工号/登录账号、姓名、邮箱、部门、组织、直属主管和系统角色；未选择任何角色时默认授予 `project_member`。
 
 ## 项目、任务、执行与评价
 
 | Method | Path | 权限 | 说明 |
 |---|---|---|---|
-| GET/POST | `/projects` | `project:view` / 项目经理、L3、超级管理员 | 项目列表/创建；创建必须传至少一名 `member_ids`，经理自动成为固定成员；普通项目经理得到草稿，L3/管理员自动通过 |
-| POST | `/projects/{id}/submit` | 项目创建人 | 项目经理提交给直属主管；L3/管理员重提时自动通过 |
+| GET/POST | `/projects` | `project:view` / 项目经理 | 所有人可查询全部项目；仅项目经理可创建，`code` 自动生成，必须传至少一名 `member_ids` |
+| POST | `/projects/{id}/submit` | 项目创建人 | 项目经理提交给直属主管；兼具 L3/超级管理员角色时自动通过 |
 | GET/PUT/DELETE | `/projects/{id}` | `project:view/edit` | 详情/更新/草稿逻辑删除 |
 | POST | `/projects/{id}/approve` | `approver_id` 对应的直属主管 | 批准项目和初始工时额度 |
 | POST | `/projects/{id}/reject` | `approver_id` 对应的直属主管 | 驳回项目，必须填写 `note` |
 | GET/POST | `/projects/{id}/hour-requests` | `project:edit` 且可管理该项目 / 项目负责人 | 查询/提交追加工时申请 |
+| GET | `/projects/hour-requests/pending` | 当前 L3 | 首页查询本人作为部门 L3 的待审批追加工时 |
 | POST | `/projects/{id}/hour-requests/{request_id}/approve` | 所属部门当前 L3 | 批准追加工时并累加额度 |
 | POST | `/projects/{id}/hour-requests/{request_id}/reject` | 所属部门当前 L3 | 驳回追加工时，必须填写 `note` |
 | GET/POST | `/projects/{id}/members` | `project:view/edit` | 成员列表/加入 |
 | DELETE | `/projects/{id}/members/{user_id}` | `project:edit` | 保留历史地移除普通成员；项目经理固定成员不可移除 |
-| GET/POST | `/tasks` | `task:view/edit` | 两级任务列表/新增 |
+| GET/POST | `/tasks` | `task:view/edit` | 所有人可查看；项目经理为本人项目新增任务，`owner_ids` 支持多人负责人 |
 | GET | `/tasks/mine` | `task:view` | 只返回当前用户负责的“我的任务” |
-| GET/PUT/DELETE | `/tasks/{id}` | `task:view/edit` | 任务详情/更新/受限软删除 |
+| GET/PUT/DELETE | `/tasks/{id}` | `task:view/edit` | 所有人可看详情；只有任务负责人可更新或受限软删除 |
 | GET/POST | `/executions` | `execution:view/edit` | 执行记录列表/新增 |
-| GET/PUT/DELETE | `/executions/{id}` | `execution:view/edit` | 执行详情/更新/软删除 |
-| GET/PUT | `/tasks/{id}/evaluation` | `process_report:view` / `evaluation:edit` | 达成评价 |
+| GET/PUT/DELETE | `/executions/{id}` | `execution:view/edit` | 执行详情；只有记录本人可更新或软删除 |
+| GET/PUT | `/tasks/{id}/evaluation` | `process_report:view` / L3 | 仅 L3 且项目已结束、任务已完成时可评价 |
 
-项目创建必须传入 `department_id` 和大于 0 的 `budget_hours`，`manager_id` 必须是当前用户本人。普通项目经理先得到 `draft`，提交时需要有效 `supervisor_id`；L3/超级管理员创建时直接为 `approved/Planned`。追加工时审批人仍是项目所属部门 L3。
+项目创建必须传入 `department_id` 和大于 0 的 `budget_hours`，`manager_id` 必须是当前项目经理本人；项目编号不由客户端传入。项目经理先得到 `draft`，提交时需要有效 `supervisor_id`；创建人兼具 L3 时可自动通过。追加工时审批人仍是项目所属部门 L3。
 
-系统角色显示名已经更新为 L3/L4，但鉴权代码继续使用 `department_manager`/`functional_manager`，避免破坏已有 Token、用户角色和接口判断。这里的系统角色与人员档案中的正式人事职级相互独立，只有上述自动映射负责建立授权来源。
+项目列表支持 `department_id/organization_id/employee_no/name`，任务列表支持同名四类人员筛选；组织、工号和姓名按当前有效项目成员或任务负责人匹配。任务的 `owner_ids` 是完整负责人集合，旧字段 `owner_id` 仅作为兼容主负责人保留。
+
+系统角色显示名已经更新为 L3/L4，但鉴权代码继续使用 `department_manager`/`functional_manager`，避免破坏已有 Token、用户角色和接口判断。
 
 ## 排期看板
 
@@ -100,8 +97,8 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 |---|---|---|---|
 | GET | `/schedules` | `schedule:view` | 按日期、项目、人员、部门、状态查询，`sort_order=asc|desc` 控制时间顺序 |
 | GET | `/schedules/my-pending` | 当前登录用户 | 首页快捷查询预约到本人且待本人确认的记录 |
-| POST | `/schedules` | 项目经理或 L3/L4 | PM 仅预约本人负责项目成员；L3/L4 仅预约直属下属；直接提交为 `pending` |
-| POST | `/schedules/batch` | 项目经理或 L3/L4 | 对全部目标执行相同范围校验，原子提交且每人分别审批 |
+| POST | `/schedules` | 项目经理 | 仅可使用本人负责且已审批的项目预约有效成员；直接提交为 `pending` |
+| POST | `/schedules/batch` | 项目经理 | 对全部目标执行相同范围校验，原子提交且每人分别审批 |
 | POST | `/schedules/copy-week` | 原提交人 | 逐条重新校验当前项目成员和预约范围，无效项跳过 |
 | GET/PUT/DELETE | `/schedules/{id}` | 可见用户 / 原提交人 | 详情/编辑/取消并保留历史 |
 | POST | `/schedules/{id}/move` | `schedule:edit` | 拖动改期，校验 `expected_version` |
@@ -141,7 +138,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 
 `planned_hours` 即使传入也不会被信任，服务端按开始/结束时间重新计算。一次预约必须同一天、按 30 分钟选择，并完整落在 `08:30-12:00` 或 `13:00-17:30` 内；工作日历中的节假日和普通周末不可预约。待确认预约在提交时即占用项目工时额度，额度不足返回业务错误并提示先申请追加工时。
 
-所有预约对象都必须存在 `project_members.left_at IS NULL` 的成员关系。项目经理还必须是所选项目负责人；L3/L4 走行政预约时，被预约人的 `users.supervisor_id` 必须等于当前用户。该规则在新建、编辑、遗留草稿提交、拖动、批量创建和复制周入口统一执行。
+所有预约对象都必须存在 `project_members.left_at IS NULL` 的成员关系，且当前用户必须是所选项目负责人并具有项目经理角色。该规则在新建、编辑、遗留草稿提交、拖动、批量创建和复制周入口统一执行。
 
 个人时间创建示例：
 
@@ -158,9 +155,9 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 
 驾驶舱的“待我确认的人力预约”仅统计和展示当前登录用户作为被预约人的 `pending/changed` 记录，支持在驾驶舱内直接确认或填写原因拒绝。共享看板的时间文本显示在刻度线上，格子表示两个刻度间的 30 分钟区间。正常工作时间保持白色；工作日上班前、午休、下班后和普通周末使用灰色禁用背景；工作日历明确标记的法定节假日使用红色系背景；调休工作日仍开放正常工作时段。
 
-点击共享看板人员姓名时，前端使用 `user_id`、`sort_order=desc` 单独查询该人员的全部预约，不携带当前看板日期或项目筛选，并通过 `page/page_size` 分页。后端人员范围为：项目经理的自己项目组、L3 全量、L4 的直属下属、普通成员本人；一旦人员可见，就返回其跨项目时间占用，以便准确判断真实可用时间。
+点击共享看板人员姓名时，前端使用 `user_id`、`sort_order=desc` 单独查询该人员的全部预约，不携带当前看板日期或项目筛选，并通过 `page/page_size` 分页。后端人员范围为：项目经理的自己项目组、L3 全量、L4 的直属与第二级下属、普通成员本人；一旦人员可见，就返回其跨项目时间占用。
 
-团队级任务、执行、风险和报表使用“可管理项目”范围：项目经理仅限本人负责项目，L3/L4 限本部门，超级管理员为全局。普通项目成员以及项目经理在仅作为其他项目成员时，仍可通过“我的任务”和本人执行记录查看自己的数据，但不会因此获得该项目的团队数据。
+项目和任务列表对所有已授权用户可见；项目编辑与成员维护只允许本项目经理，任务编辑只允许任务负责人，执行记录写操作只允许记录本人。日程查看继续使用人员关系范围。
 
 时间冲突返回 `40901` 和 `data.conflicts`；其中 `conflict_type=project_booking|personal_time` 用于区分项目预约和个人安排。版本冲突返回 `40903` 和 `data.current_version`。
 
@@ -199,8 +196,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 |---|---|---|---|
 | GET | `/reports/process` | `process_report:view` | 项目过程报表 |
 | GET | `/reports/workload` | `process_report:view` | 日人员负载 |
-| GET | `/reports/workload-summary` | `analytics:view` | 日/周/月负载、人员状态、项目占比 |
-| GET | `/reports/analytics` | `analytics:view` | 计划实际、延期、成员达成、人力占比 |
+| GET | `/reports/workload-summary` | `analytics:view`（兼容权限码） | 隐藏 UI 使用的日/周/月人员负载后台汇总 |
 | GET | `/data-exchange/templates/{users|projects|tasks}` | `import:manage` | 标准导入模板 |
 | POST | `/data-exchange/imports/{users|projects|tasks}` | `import:manage` | 上传 `.xlsx` 并逐行导入 |
 | GET | `/data-exchange/imports` | `import:manage` | 导入任务与错误明细 |
@@ -209,7 +205,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | GET | `/data-exchange/exports/process-report` | `export:download` | 过程报表 Excel |
 | GET | `/operation-logs` | `operation_log:view` | 操作审计 |
 
-三类导出和两类分析接口都要求 `start_date`、`end_date`；负载汇总额外支持 `granularity=day|week|month`。
+三类导出和负载接口要求 `start_date`、`end_date`；负载汇总额外支持 `granularity=day|week|month`。负载、风险和工作日历接口保留供后台使用，当前前端不展示对应页面。
 日负载与负载汇总的 `available_hours` 统一读取工作日历：法定节假日为 0，调休工作日按 `STANDARD_WORK_HOURS` 计入；已完成预约保留在历史负载统计中，已拒绝、已撤回和已取消预约不计入。
 
 ## 错误码

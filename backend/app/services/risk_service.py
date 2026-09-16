@@ -2,7 +2,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -11,14 +11,16 @@ from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.project import Project
 from app.models.risk import RiskRecord
 from app.models.schedule import ScheduleBooking
-from app.models.task import Task
+from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.risk_repository import risk_repository
 from app.schemas.risk import RiskHandleRequest
 from app.services.notification_service import create_notification
 from app.services.operation_log_service import log_operation
 from app.services.project_service import manageable_project_ids
+from app.services.visibility_service import visible_schedule_user_ids
 from app.utils.model import model_to_dict
+from app.utils.time import beijing_now
 
 OPEN_TASK_STATUSES = {"not_started", "running", "suspended"}
 ACTIVE_SCHEDULE_STATUSES = {"pending", "confirmed", "changed", "running"}
@@ -57,7 +59,12 @@ def _risk(
     }
 
 
-def _detect_task_and_project_risks(db: Session, scope: set[int] | None, now: datetime) -> list[dict]:
+def _detect_task_and_project_risks(
+    db: Session,
+    project_scope: set[int] | None,
+    user_scope: set[int] | None,
+    now: datetime,
+) -> list[dict]:
     result: list[dict] = []
     task_filters = [
         Task.status.in_(OPEN_TASK_STATUSES),
@@ -67,9 +74,21 @@ def _detect_task_and_project_risks(db: Session, scope: set[int] | None, now: dat
         ),
     ]
     project_filters = [Project.is_deleted.is_(False), Project.status.notin_({"Completed", "Cancelled"})]
-    if scope is not None:
-        task_filters.append(Task.project_id.in_(scope or {-1}))
-        project_filters.append(Project.id.in_(scope or {-1}))
+    if project_scope is not None or user_scope is not None:
+        task_scope_filters = []
+        if project_scope is not None:
+            task_scope_filters.append(Task.project_id.in_(project_scope or {-1}))
+        if user_scope is not None:
+            task_scope_filters.append(
+                Task.id.in_(
+                    select(TaskAssignee.task_id).where(
+                        TaskAssignee.user_id.in_(user_scope or {-1})
+                    )
+                )
+            )
+        task_filters.append(or_(*task_scope_filters))
+    if project_scope is not None:
+        project_filters.append(Project.id.in_(project_scope or {-1}))
     tasks = db.scalars(select(Task).where(*task_filters)).all()
     for task in tasks:
         if task.planned_end < now:
@@ -123,7 +142,12 @@ def _detect_task_and_project_risks(db: Session, scope: set[int] | None, now: dat
     return result
 
 
-def _detect_schedule_risks(db: Session, scope: set[int] | None, now: datetime) -> list[dict]:
+def _detect_schedule_risks(
+    db: Session,
+    project_scope: set[int] | None,
+    user_scope: set[int] | None,
+    now: datetime,
+) -> list[dict]:
     result: list[dict] = []
     filters = [
         ScheduleBooking.status.in_(ACTIVE_SCHEDULE_STATUSES),
@@ -133,8 +157,17 @@ def _detect_schedule_risks(db: Session, scope: set[int] | None, now: datetime) -
         ScheduleBooking.end_time >= datetime.combine(now.date(), time.min),
         ScheduleBooking.start_time < datetime.combine(now.date() + timedelta(days=31), time.min),
     ]
-    if scope is not None:
-        filters.append(ScheduleBooking.project_id.in_(scope or {-1}))
+    if project_scope is not None or user_scope is not None:
+        schedule_scope_filters = []
+        if project_scope is not None:
+            schedule_scope_filters.append(
+                ScheduleBooking.project_id.in_(project_scope or {-1})
+            )
+        if user_scope is not None:
+            schedule_scope_filters.append(
+                ScheduleBooking.user_id.in_(user_scope or {-1})
+            )
+        filters.append(or_(*schedule_scope_filters))
     schedules = db.scalars(
         select(ScheduleBooking).where(*filters).order_by(ScheduleBooking.user_id, ScheduleBooking.start_time)
     ).all()
@@ -185,9 +218,12 @@ def _detect_schedule_risks(db: Session, scope: set[int] | None, now: datetime) -
 
 
 def sync_risks(db: Session, user: User) -> dict:
-    now = datetime.now()
-    scope = manageable_project_ids(db, user)
-    detected = _detect_task_and_project_risks(db, scope, now) + _detect_schedule_risks(db, scope, now)
+    now = beijing_now()
+    project_scope = manageable_project_ids(db, user)
+    user_scope = visible_schedule_user_ids(db, user)
+    detected = _detect_task_and_project_risks(
+        db, project_scope, user_scope, now
+    ) + _detect_schedule_risks(db, project_scope, user_scope, now)
     created = 0
     refreshed = 0
     reopened = 0
@@ -263,14 +299,15 @@ def list_risks(db: Session, user: User, page: int, page_size: int, **filters) ->
     has_team_scope = bool(get_role_codes(db, user.id) & RISK_TEAM_ROLES)
     if not has_team_scope:
         filters["user_id"] = user.id
+    project_scope = manageable_project_ids(db, user) if has_team_scope else None
+    user_scope = visible_schedule_user_ids(db, user) if has_team_scope else None
     items, total = risk_repository.list(
         db,
         page,
         page_size,
         viewer_id=user.id,
-        visible_project_ids=(
-            manageable_project_ids(db, user) if has_team_scope else None
-        ),
+        visible_project_ids=project_scope,
+        visible_user_ids=user_scope,
         **filters,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -287,22 +324,30 @@ def handle_risk(db: Session, risk_id: int, payload: RiskHandleRequest, user: Use
         if item.user_id != user.id:
             raise forbidden("risk is outside your data scope")
     else:
-        scope = manageable_project_ids(db, user)
+        project_scope = manageable_project_ids(db, user)
+        user_scope = visible_schedule_user_ids(db, user)
         if (
-            scope is not None
-            and item.project_id is not None
-            and item.project_id not in scope
-            and item.user_id != user.id
+            project_scope is not None
+            or user_scope is not None
         ):
-            raise forbidden("risk is outside your data scope")
-        if scope is not None and item.project_id is None and item.user_id != user.id:
-            raise forbidden("risk is outside your data scope")
+            project_allowed = bool(
+                project_scope is not None
+                and item.project_id is not None
+                and item.project_id in project_scope
+            )
+            user_allowed = bool(
+                user_scope is not None
+                and item.user_id is not None
+                and item.user_id in user_scope
+            )
+            if not (project_allowed or user_allowed or item.user_id == user.id):
+                raise forbidden("risk is outside your data scope")
     before = model_to_dict(item)
     item.status = payload.status
     item.handled_by = user.id
-    item.handled_at = datetime.now()
+    item.handled_at = beijing_now()
     item.handling_note = payload.handling_note
-    item.resolved_at = datetime.now() if payload.status in {"resolved", "ignored"} else None
+    item.resolved_at = beijing_now() if payload.status in {"resolved", "ignored"} else None
     log_operation(
         db,
         operator_id=user.id,
@@ -323,12 +368,17 @@ def risk_stats(db: Session, user: User) -> dict:
     if not (get_role_codes(db, user.id) & RISK_TEAM_ROLES):
         filters.append(RiskRecord.user_id == user.id)
     else:
-        scope = manageable_project_ids(db, user)
-        if scope is not None:
-            filters.append(
-                (RiskRecord.project_id.in_(scope or {-1}))
-                | (RiskRecord.user_id == user.id)
-            )
+        project_scope = manageable_project_ids(db, user)
+        user_scope = visible_schedule_user_ids(db, user)
+        if project_scope is not None or user_scope is not None:
+            scope_filters = [RiskRecord.user_id == user.id]
+            if project_scope is not None:
+                scope_filters.append(
+                    RiskRecord.project_id.in_(project_scope or {-1})
+                )
+            if user_scope is not None:
+                scope_filters.append(RiskRecord.user_id.in_(user_scope or {-1}))
+            filters.append(or_(*scope_filters))
     rows = db.execute(
         select(RiskRecord.status, RiskRecord.risk_level, func.count(RiskRecord.id))
         .where(*filters)

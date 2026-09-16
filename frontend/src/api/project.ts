@@ -14,6 +14,8 @@ export const rejectProject = (id: number, note: string) =>
   api.post<Project>(`/projects/${id}/reject`, { note })
 export const getProjectHourRequests = (id: number) =>
   api.get<ProjectHourRequest[]>(`/projects/${id}/hour-requests`)
+export const getPendingProjectHourRequests = () =>
+  api.get<ProjectHourRequest[]>('/projects/hour-requests/pending')
 export const createProjectHourRequest = (id: number, requestedHours: number, reason: string) =>
   api.post<ProjectHourRequest>(`/projects/${id}/hour-requests`, { requested_hours: requestedHours, reason })
 export const approveProjectHourRequest = (projectId: number, requestId: number, note?: string) =>

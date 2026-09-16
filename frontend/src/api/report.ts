@@ -6,7 +6,6 @@ import type {
   ProcessReportItem,
   ProcessReportQuery,
   WorkloadItem,
-  AnalyticsReport,
   WorkloadSummary,
 } from '@/types/report'
 
@@ -18,7 +17,5 @@ export const getEvaluation = (taskId: number) => api.get<EvaluationPayload | nul
 export const updateEvaluation = (taskId: number, payload: EvaluationPayload) =>
   api.put<EvaluationPayload>(`/tasks/${taskId}/evaluation`, payload)
 export const getDashboardSummary = () => api.get<DashboardSummary>('/dashboard/summary')
-export const getAnalyticsReport = (params: { start_date: string; end_date: string }) =>
-  api.get<AnalyticsReport>('/reports/analytics', { params })
 export const getWorkloadSummary = (params: { start_date: string; end_date: string; granularity: string }) =>
   api.get<WorkloadSummary>('/reports/workload-summary', { params })

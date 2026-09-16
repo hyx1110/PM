@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import dayjs from 'dayjs'
+import { beijingNow } from '@/utils/time'
 import type { TagProps } from 'element-plus'
 import { getWorkloadSummary } from '@/api/report'
 import type { WorkloadSummary } from '@/types/report'
 
 const loading = ref(false)
-const form = reactive({ range: [dayjs().startOf('month').format('YYYY-MM-DD'), dayjs().endOf('month').format('YYYY-MM-DD')], granularity: 'week' })
+const form = reactive({ range: [beijingNow().startOf('month').format('YYYY-MM-DD'), beijingNow().endOf('month').format('YYYY-MM-DD')], granularity: 'week' })
 const data = ref<WorkloadSummary>({ range: { start_date: '', end_date: '', granularity: 'week' }, periods: [], users: [], projects: [] })
 const maxPeriod = computed(() => Math.max(...data.value.periods.map(item => item.planned_hours), 1))
 const counts = computed(() => ({ overloaded: data.value.users.filter(item => item.load_status === 'overloaded').length, idle: data.value.users.filter(item => item.load_status === 'idle').length, normal: data.value.users.filter(item => item.load_status === 'normal').length }))

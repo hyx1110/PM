@@ -18,10 +18,14 @@ def list_tasks(
     project_id: int | None = None,
     owner_id: int | None = None,
     status: str | None = None,
+    department_id: int | None = None,
+    organization_id: int | None = None,
+    employee_no: str | None = None,
+    name: str | None = None,
     current_user: User = Depends(require_permission("task:view")),
     db: Session = Depends(get_db),
 ):
-    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status))
+    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name))
 
 
 @router.post("")

@@ -3,14 +3,17 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import not_found
+from app.core.dependencies import get_role_codes
+from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.evaluation import TaskEvaluation
+from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.evaluation import EvaluationUpsert
 from app.services.operation_log_service import log_operation
-from app.services.project_service import assert_project_manageable, assert_project_visible
+from app.services.project_service import assert_project_visible
 from app.utils.model import model_to_dict
+from app.utils.time import beijing_now
 
 
 def get_evaluation(db: Session, task_id: int, user: User) -> dict | None:
@@ -36,19 +39,25 @@ def upsert_evaluation(db: Session, task_id: int, payload: EvaluationUpsert, user
     task = db.get(Task, task_id)
     if not task or task.is_deleted:
         raise not_found("task not found")
-    assert_project_manageable(db, task.project_id, user)
+    if "department_manager" not in get_role_codes(db, user.id):
+        raise forbidden("只有 L3 可以进行任务达成评价")
+    project = db.get(Project, task.project_id)
+    if not project or project.status != "Completed":
+        raise bad_request("项目执行完成后才能进行评价")
+    if task.status != "completed":
+        raise bad_request("任务完成后才能进行评价")
     evaluation = db.scalar(select(TaskEvaluation).where(TaskEvaluation.task_id == task_id))
     before = model_to_dict(evaluation) if evaluation else None
     if evaluation:
         for key, value in payload.model_dump().items():
             setattr(evaluation, key, value)
         evaluation.evaluator_id = user.id
-        evaluation.evaluated_at = datetime.now()
+        evaluation.evaluated_at = beijing_now()
     else:
         evaluation = TaskEvaluation(
             task_id=task_id,
             evaluator_id=user.id,
-            evaluated_at=datetime.now(),
+            evaluated_at=beijing_now(),
             **payload.model_dump(),
         )
         db.add(evaluation)

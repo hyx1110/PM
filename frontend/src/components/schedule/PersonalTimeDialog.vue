@@ -5,6 +5,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { getWorkCalendar } from '@/api/work-calendar'
 import type { PersonalTimePayload, PersonalTimeType } from '@/types/personal-time'
 import type { WorkCalendarDay } from '@/types/work-calendar'
+import { beijingNow } from '@/utils/time'
 
 const props = defineProps<{
   modelValue: boolean
@@ -86,7 +87,7 @@ watch(
   () => props.modelValue,
   async (visible) => {
     if (!visible) return
-    const date = props.slot?.date || dayjs().format('YYYY-MM-DD')
+    const date = props.slot?.date || beijingNow().format('YYYY-MM-DD')
     const clock = props.slot?.time || '08:30'
     const session = clock < '12:00' ? 'morning' : 'afternoon'
     const limit = session === 'morning' ? '12:00' : '17:30'

@@ -13,6 +13,7 @@ from app.services.operation_log_service import log_operation
 from app.services.work_calendar_service import calculate_work_hours
 from app.utils.model import model_to_dict
 from app.services.visibility_service import visible_schedule_user_ids
+from app.utils.time import beijing_now
 
 
 def _serialize(item: PersonalTimeBlock, user_name: str | None = None) -> dict:
@@ -115,7 +116,7 @@ def withdraw_block(db: Session, block_id: int, user: User) -> dict:
         raise bad_request("该个人时间安排已经撤回")
     before = model_to_dict(item)
     item.status = "withdrawn"
-    item.withdrawn_at = datetime.now()
+    item.withdrawn_at = beijing_now()
     log_operation(
         db,
         operator_id=user.id,

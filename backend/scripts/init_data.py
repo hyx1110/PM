@@ -3,9 +3,9 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
-from app.models.employee_profile import EmployeeProfile
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.user import User
+from app.utils.employee_no import EMPLOYEE_NO_ERROR, is_valid_employee_no, normalize_employee_no
 
 PERMISSIONS = {
     "dashboard:view": ("查看首页", "dashboard"),
@@ -32,7 +32,9 @@ PERMISSIONS = {
     "notification:view": ("查看站内通知", "notification"),
     "import:manage": ("管理数据导入", "data_exchange"),
     "export:download": ("下载业务报表", "data_exchange"),
-    "analytics:view": ("查看经营分析", "analytics"),
+    # Keep the historical code for compatibility; it now protects only the
+    # hidden personnel-load summary API, not the removed business analytics UI.
+    "analytics:view": ("查看人员负载汇总", "report"),
 }
 
 ROLES = {
@@ -50,9 +52,8 @@ ROLES = {
     "functional_manager": (
         "L4",
         {
-            "dashboard:view", "user:view", "organization:view", "project:view", "project:edit", "task:view",
-            "task:edit", "schedule:view", "schedule:edit", "execution:view", "process_report:view",
-            "evaluation:edit",
+            "dashboard:view", "user:view", "organization:view", "project:view", "task:view",
+            "task:edit", "schedule:view", "execution:view", "execution:edit", "process_report:view",
             "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
             "analytics:view",
         },
@@ -62,30 +63,34 @@ ROLES = {
         {
             "dashboard:view", "project:view", "project:edit", "task:view", "task:edit",
             "schedule:view", "schedule:edit", "execution:view", "execution:edit", "process_report:view",
-            "evaluation:edit",
             "risk:view", "risk:handle", "notification:view", "export:download", "analytics:view",
         },
     ),
     "project_member": (
         "项目成员",
         {
-            "dashboard:view", "project:view", "task:view", "schedule:view", "execution:view",
+            "dashboard:view", "project:view", "task:view", "task:edit", "schedule:view", "execution:view",
             "execution:edit", "risk:view", "notification:view",
         },
     ),
 }
 
 ROLE_DESCRIPTIONS = {
-    "super_admin": "系统最高权限角色，与正式人员职级无关。",
-    "department_manager": "系统 L3 功能角色；可人工分配，也可由 Department Manager 人事职级自动授予。",
-    "functional_manager": "系统 L4 功能角色；可人工分配，也可由 Management Manager 人事职级自动授予。",
-    "project_manager": "项目经理系统功能角色，与正式人员职级独立。",
-    "project_member": "项目成员系统功能角色，与正式人员职级独立。",
+    "super_admin": "系统最高权限角色。",
+    "department_manager": "L3 系统功能角色。",
+    "functional_manager": "L4 系统功能角色。",
+    "project_manager": "项目经理系统功能角色。",
+    "project_member": "项目成员系统功能角色。",
 }
 
 
 def initialize() -> None:
     with SessionLocal() as db:
+        initial_admin_employee_no = normalize_employee_no(
+            settings.initial_admin_username
+        )
+        if not is_valid_employee_no(initial_admin_employee_no):
+            raise ValueError(f"INITIAL_ADMIN_USERNAME 无效：{EMPLOYEE_NO_ERROR}")
         permission_map: dict[str, Permission] = {}
         for code, (name, module) in PERMISSIONS.items():
             permission = db.scalar(select(Permission).where(Permission.code == code))
@@ -112,11 +117,12 @@ def initialize() -> None:
                 [RolePermission(role_id=role.id, permission_id=permission_map[item].id) for item in permission_codes]
             )
 
-        admin = db.scalar(select(User).where(User.username == settings.initial_admin_username))
+        admin = db.scalar(
+            select(User).where(User.employee_no == initial_admin_employee_no)
+        )
         if not admin:
             admin = User(
-                employee_no=settings.initial_admin_username,
-                username=settings.initial_admin_username,
+                employee_no=initial_admin_employee_no,
                 password_hash=hash_password(settings.initial_admin_password),
                 name=settings.initial_admin_name,
                 status="active",
@@ -124,16 +130,6 @@ def initialize() -> None:
             db.add(admin)
             db.flush()
         super_role = role_map["super_admin"]
-        if not db.scalar(
-            select(EmployeeProfile).where(EmployeeProfile.user_id == admin.id)
-        ):
-            db.add(
-                EmployeeProfile(
-                    user_id=admin.id,
-                    preferred_name=admin.name,
-                    hr_management_level="employee",
-                )
-            )
         admin_role = db.scalar(
             select(UserRole).where(
                 UserRole.user_id == admin.id,
@@ -141,16 +137,7 @@ def initialize() -> None:
             )
         )
         if not admin_role:
-            db.add(
-                UserRole(
-                    user_id=admin.id,
-                    role_id=super_role.id,
-                    is_manual=True,
-                    is_hr_auto=False,
-                )
-            )
-        else:
-            admin_role.is_manual = True
+            db.add(UserRole(user_id=admin.id, role_id=super_role.id))
         db.commit()
 
 

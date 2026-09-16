@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from app.models.organization import Department
+from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.user import User
@@ -36,13 +36,18 @@ class ProjectRepository:
         status: str | None = None,
         manager_id: int | None = None,
         department_id: int | None = None,
+        organization_id: int | None = None,
+        employee_no: str | None = None,
+        manager_name: str | None = None,
         approval_status: str | None = None,
+        approver_id: int | None = None,
         visible_project_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         manager = aliased(User)
         creator = aliased(User)
         approver = aliased(User)
         approval_required_user = aliased(User)
+        manager_organization = aliased(Organization)
         booked_hours = booked_hours_expression()
         filters = [Project.is_deleted.is_(False)]
         if keyword:
@@ -53,8 +58,26 @@ class ProjectRepository:
             filters.append(Project.manager_id == manager_id)
         if department_id:
             filters.append(Project.department_id == department_id)
+        people_filter = select(User.id).where(User.is_deleted.is_(False))
+        if organization_id:
+            people_filter = people_filter.where(User.organization_id == organization_id)
+        if employee_no:
+            people_filter = people_filter.where(User.employee_no.like(f"%{employee_no}%"))
+        if manager_name:
+            people_filter = people_filter.where(User.name.like(f"%{manager_name}%"))
+        if organization_id or employee_no or manager_name:
+            filters.append(
+                Project.id.in_(
+                    select(ProjectMember.project_id).where(
+                        ProjectMember.user_id.in_(people_filter),
+                        ProjectMember.left_at.is_(None),
+                    )
+                )
+            )
         if approval_status:
             filters.append(Project.approval_status == approval_status)
+        if approver_id:
+            filters.append(Project.approver_id == approver_id)
         if visible_project_ids is not None:
             filters.append(Project.id.in_(visible_project_ids or {-1}))
         total = db.scalar(select(func.count(Project.id)).where(*filters)) or 0
@@ -62,6 +85,9 @@ class ProjectRepository:
             select(
                 Project,
                 manager.name.label("manager_name"),
+                manager.employee_no.label("manager_employee_no"),
+                manager.organization_id.label("manager_organization_id"),
+                manager_organization.name.label("manager_organization_name"),
                 Department.name.label("department_name"),
                 creator.name.label("creator_name"),
                 approver.name.label("approver_name"),
@@ -69,6 +95,7 @@ class ProjectRepository:
                 booked_hours.label("booked_hours"),
             )
             .join(manager, manager.id == Project.manager_id)
+            .outerjoin(manager_organization, manager_organization.id == manager.organization_id)
             .outerjoin(Department, Department.id == Project.department_id)
             .outerjoin(creator, creator.id == Project.created_by)
             .outerjoin(approver, approver.id == Project.approved_by)
@@ -85,6 +112,9 @@ class ProjectRepository:
         for (
             project,
             manager_name,
+            manager_employee_no,
+            manager_organization_id,
+            manager_organization_name,
             department_name,
             creator_name,
             approver_name,
@@ -95,6 +125,9 @@ class ProjectRepository:
             used = booked or 0
             data.update(
                 manager_name=manager_name,
+                manager_employee_no=manager_employee_no,
+                manager_organization_id=manager_organization_id,
+                manager_organization_name=manager_organization_name,
                 department_name=department_name,
                 creator_name=creator_name,
                 approver_name=approver_name,

@@ -18,7 +18,8 @@ backend/alembic/versions/20260912_0005_personal_time_blocks.py
 backend/alembic/versions/20260914_0006_employee_profiles_and_role_sources.py
 backend/alembic/versions/20260914_0007_business_rules_alignment.py
 backend/alembic/versions/20260915_0008_project_manager_membership.py
-backend/app/models/employee_profile.py
+backend/alembic/versions/20260916_0009_simplify_user_schema.py
+backend/alembic/versions/20260916_0010_task_multi_assignees.py
 backend/app/models/import_job.py
 backend/app/models/notification.py
 backend/app/models/personal_time.py
@@ -26,13 +27,11 @@ backend/app/models/work_calendar.py
 backend/app/repositories/personal_time_repository.py
 backend/app/repositories/risk_repository.py
 backend/app/schemas/import_export.py
-backend/app/schemas/employee_profile.py
 backend/app/schemas/notification.py
 backend/app/schemas/personal_time.py
 backend/app/schemas/risk.py
 backend/app/schemas/work_calendar.py
 backend/app/services/import_export_service.py
-backend/app/services/employee_profile_service.py
 backend/app/services/notification_service.py
 backend/app/services/personal_time_service.py
 backend/app/services/risk_service.py
@@ -47,9 +46,11 @@ backend/app/tasks/__init__.py
 backend/app/tasks/celery_app.py
 backend/app/tasks/notification_tasks.py
 backend/app/tasks/risk_tasks.py
+backend/app/utils/employee_no.py
+backend/app/utils/time.py
 ```
 
-后端同时修改了用户账号/Schema/Repository/Service/API、角色关联来源、登录认证、人员查找项、项目模型/Schema/Repository/Service/API、项目创建成员事务、任务创建限制、人力预约状态机/人员范围/配额校验、组织 L3 校验、员工号 Excel 导入、主路由和初始化权限。
+后端同时修改了用户账号/Schema/Repository/Service/API、系统角色直接关联、登录认证、人员查找项、项目模型/Schema/Repository/Service/API、项目创建成员事务、任务创建限制、人力预约状态机/人员范围/配额校验、组织 L3 校验、员工号 Excel 导入、主路由和初始化权限。旧 `employee_profile` 模型、Schema 和 Service 已由 `20260916_0009` 对应代码删除。
 
 ## 前端新增文件
 
@@ -65,8 +66,8 @@ frontend/src/types/personal-time.ts
 frontend/src/types/risk.ts
 frontend/src/types/work-calendar.ts
 frontend/src/stores/notification.ts
+frontend/src/utils/time.ts
 frontend/src/components/schedule/PersonalTimeDialog.vue
-frontend/src/views/analytics/AnalyticsView.vue
 frontend/src/views/data-exchange/DataExchangeView.vue
 frontend/src/views/notification/NotificationCenterView.vue
 frontend/src/views/risk/RiskCenterView.vue
@@ -75,7 +76,7 @@ frontend/src/views/schedule/WorkCalendarView.vue
 frontend/src/views/task/MyTaskView.vue
 ```
 
-前端同时修改了员工号登录、用户人员档案与人事职级双页签、人工/自动系统角色来源展示、系统角色说明、项目创建时的层级成员多选与固定经理展示、任务创建、驾驶舱本人预约快捷审批、按 PM/L3/L4 范围显示的共享看板、个人时间展示/撤回和人员全部安排入口、时间点式半小时时间轴、工作/非工作/法定节假日配色、预约表单、组织 L3 字段、通知中心与右上角未读角标同步、导航/顶栏、路由、项目/排期 API 与类型。
+前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与全员只读、任务多人负责人、首页任务和 L3 工时审批、共享看板人员联合筛选与分入口预约、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
 
 ## 文档
 

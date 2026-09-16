@@ -49,16 +49,6 @@ def workload_report(
     return success(report_service.workload_report(db, current_user, start_date, end_date, department_id, user_id))
 
 
-@router.get("/analytics")
-def analytics_report(
-    start_date: date,
-    end_date: date,
-    current_user: User = Depends(require_permission("analytics:view")),
-    db: Session = Depends(get_db),
-):
-    return success(report_service.analytics_report(db, current_user, start_date, end_date))
-
-
 @router.get("/workload-summary")
 def workload_summary(
     start_date: date,

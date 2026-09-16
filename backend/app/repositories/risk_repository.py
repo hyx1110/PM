@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.project import Project
@@ -27,6 +27,7 @@ class RiskRepository:
         user_id: int | None = None,
         viewer_id: int | None = None,
         visible_project_ids: set[int] | None = None,
+        visible_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         filters = []
         if status:
@@ -39,11 +40,17 @@ class RiskRepository:
             filters.append(RiskRecord.project_id == project_id)
         if user_id:
             filters.append(RiskRecord.user_id == user_id)
-        if visible_project_ids is not None:
-            filters.append(
-                (RiskRecord.project_id.in_(visible_project_ids or {-1}))
-                | (RiskRecord.user_id == (viewer_id or -1))
-            )
+        if visible_project_ids is not None or visible_user_ids is not None:
+            scope_filters = []
+            if visible_project_ids is not None:
+                scope_filters.append(
+                    RiskRecord.project_id.in_(visible_project_ids or {-1})
+                )
+            if visible_user_ids is not None:
+                scope_filters.append(RiskRecord.user_id.in_(visible_user_ids or {-1}))
+            if viewer_id:
+                scope_filters.append(RiskRecord.user_id == viewer_id)
+            filters.append(or_(*scope_filters))
         total = db.scalar(select(func.count(RiskRecord.id)).where(*filters)) or 0
         handler = aliased(User)
         rows = db.execute(

@@ -1,81 +1,60 @@
-# 正式人员数据与系统用户映射
+# 简化用户模型
 
-## 目的
+## 当前口径
 
-本项目在 MySQL 中先建立可测试的正式人员数据架构，不连接正式库，也不导入真实数据。正式人员属性、人事管理职级和系统权限角色分开保存，避免把组织职级直接当成系统权限。
+当前版本只使用 MySQL。用户模型不再承载人员档案、岗位、人事职级或 HR 角色映射，员工号就是唯一登录账号。
 
-## 核心字段映射
+## 用户字段
 
-| 正式数据含义 | 当前系统字段 | 规则 |
+| 含义 | 数据库字段 | 规则 |
 |---|---|---|
-| 员工内部标识 | `users.id` | 保留 MySQL 自增数字主键，所有业务外键继续引用它 |
-| 员工号 | `users.employee_no` | 唯一，同时作为登录账号；只允许英文、数字和英文符号 |
-| 兼容登录名 | `users.username` | 系统自动写入，与 `employee_no` 强制相等，不再单独维护 |
-| 部门 | `users.department_id` | 直接关联 `departments.id` |
-| 组织 | `users.organization_id` | 直接关联 `organizations.id`，并校验属于所选部门 |
-| 直属上级 | `users.supervisor_id` | 自关联 `users.id`，不能指向本人 |
-| 岗位 | `employee_profiles.position_id` | 一名员工最多一个岗位编号，非空值全局唯一 |
-| 人员属性 | `employee_profiles.*` | 保存姓名拆分、常用姓名、员工类型、职务、学历、地点、成本中心等 |
-| 人事管理职级 | `employee_profiles.hr_management_level` | 与系统角色分离，只负责触发规则化自动授权 |
-| 数据来源 | `employee_profiles.data_source` | `local` 可编辑，`hrdb` 的人员/组织/岗位/主管字段只读 |
+| 内部主键 | `users.id` | 自增数字主键，所有业务外键继续引用它 |
+| 员工号/登录账号 | `users.employee_no` | 唯一；只允许英文字母、数字和英文符号 |
+| 姓名 | `users.name` | 必填，语言不限 |
+| 邮箱 | `users.email` | 可空，非空时唯一 |
+| 部门 | `users.department_id` | 可空，关联 `departments.id` |
+| 组织 | `users.organization_id` | 可空，关联 `organizations.id`，非空时须属于所选部门 |
+| 直属主管 | `users.supervisor_id` | 可空，自关联 `users.id`，不能指向本人 |
+| 系统角色 | `user_roles` | 用户与 `roles` 的多对多直接关联 |
 
-`employee_profiles.user_id` 唯一，因此一个系统用户只会有一条正式人员档案。
+以下字段属于系统运行所需，不作为人员业务资料展示：`password_hash`、`status`、`is_deleted`、`created_at`、`updated_at`。
 
-## 两套概念
+当前用户表不再包含：
 
-### 人事管理职级
+- `username` 兼容登录字段；
+- 手机号；
+- 岗位编号、员工类型、姓名拆分、职务、学历、地点、成本中心等人员档案；
+- 人事职级；
+- HRDB 人员来源和同步时间。
 
-人事职级来自正式人员架构，当前允许三种测试值：
+## 系统角色
 
-- `employee`：普通员工，不自动授予管理角色；
-- `department_manager`：Department Manager 人事职级；
-- `management_manager`：Management Manager 人事职级。
+系统固定保留五类角色：
 
-它们保存在 `employee_profiles`，不是权限判断的直接依据。
+| 角色代码 | 页面名称 |
+|---|---|
+| `super_admin` | 超级管理员 |
+| `department_manager` | L3 |
+| `functional_manager` | L4 |
+| `project_manager` | 项目经理 |
+| `project_member` | 项目成员 |
 
-这里的 `hr_management_level` 是当前 MySQL 测试架构中的归一化结果，不要求正式库存在同名字段。后续接入正式数据时，应根据组织层级数据中 `department_manager`、`management_manager` 所指向的员工号找到对应 `users.employee_no`，再写入归一化职级并触发系统角色同步；本版本不实现这段正式库连接和导入逻辑。
+系统角色由项目管理系统直接分配。`user_roles` 不再包含 `is_manual`、`is_hr_auto`，也不再根据人事职级自动授予 L3/L4。用户没有选择任何角色时，系统自动授予 `project_member`。
 
-### 系统功能角色
+## 登录与删除
 
-以下五类角色继续保存在 `roles`，功能和权限全部保留：
+- 登录接口只接收 `employee_no` 和密码。
+- 员工号创建后不可在用户页面修改，软删除后也继续保留，避免历史身份被新账号复用。
+- 用户删除采用软删除；存在活动项目、任务、排期或项目成员关系时必须先完成移交。
+- 当前账号不能删除自己，最后一个有效超级管理员不能删除。
 
-- `super_admin`：超级管理员；
-- `department_manager`：系统 L3；
-- `functional_manager`：系统 L4；
-- `project_manager`：项目经理；
-- `project_member`：项目成员。
+## 数据库迁移
 
-鉴权仍读取系统角色和权限，不直接读取人事职级。
+`20260916_0009_simplify_user_schema.py` 在历史迁移基础上执行以下收敛：
 
-## 自动映射
+- 删除 `users.username`、`users.phone`；
+- 删除 `employee_profiles`；
+- 删除 `user_roles.is_manual`、`user_roles.is_hr_auto`；
+- 保留现有用户数字主键、员工号、组织关系、直属主管和五类系统角色关联。
 
-| 人事管理职级 | 自动授予的系统角色 | 页面显示 |
-|---|---|---|
-| `employee` | 无 | 普通员工 |
-| `department_manager` | `department_manager` | L3 |
-| `management_manager` | `functional_manager` | L4 |
-
-`user_roles.is_manual` 表示人工分配，`user_roles.is_hr_auto` 表示来自上述映射。同一关联的两个标记可以同时为 `true`：
-
-- 人工分配项目经理、项目成员、超级管理员或 L3/L4，不受人事职级修改影响；
-- 修改人事职级时，只增加或撤销对应的自动来源；
-- 自动来源撤销后，如果人工来源仍存在，系统角色继续有效；
-- 两个来源都不存在时，才删除该用户角色关联。
-- 如果用户最终没有任何角色，系统自动授予 `project_member`。
-
-## HRDB 只读同步边界
-
-`employee_profiles`、`departments` 和 `organizations` 都使用 `data_source=local|hrdb` 区分来源。标记为 `hrdb` 后：
-
-- 用户姓名、邮箱、手机、部门、组织、岗位、人事职级和直属主管不接受业务 API 修改；
-- 部门和组织不接受业务 API 编辑或删除；
-- 账号密码、启用/禁用状态和人工系统角色仍由项目管理系统管理；
-- 直属主管 `users.supervisor_id` 是普通项目经理提交项目时的审批人来源。
-
-## 当前实施边界
-
-- 数据库只使用 MySQL 8，本轮结构在 Alembic 迁移 `20260914_0006` 和 `20260914_0007` 中。
-- 当前部门、组织、直属上级字段沿用现有外键，不新增第二套重复关系。
-- 本版本没有离职同步逻辑。
-- 本版本没有正式库连接器、定时同步任务或真实数据导入脚本；`data_source` 仅完成未来同步的数据所有权边界。
-- 用户 Excel 模板可用于人工创建测试数据，使用员工号关联直属上级、项目经理和任务负责人。
+升级会永久移除旧人员档案数据，维护者执行迁移前应自行备份数据库。

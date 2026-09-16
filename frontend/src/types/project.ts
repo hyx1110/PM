@@ -9,6 +9,9 @@ export interface Project {
   project_type: string
   manager_id: number
   manager_name?: string
+  manager_employee_no?: string
+  manager_organization_id?: number | null
+  manager_organization_name?: string
   department_id: number
   department_name?: string
   status: string
@@ -34,7 +37,6 @@ export interface Project {
 }
 
 export interface ProjectPayload {
-  code: string
   name: string
   project_type: string
   manager_id: number
@@ -56,7 +58,11 @@ export interface ProjectQuery extends PageQuery {
   status?: string
   manager_id?: number
   department_id?: number
+  organization_id?: number
+  employee_no?: string
+  name?: string
   approval_status?: ProjectApprovalStatus
+  approver_id?: number
 }
 
 export interface ProjectMember {
@@ -78,6 +84,8 @@ export interface ProjectHourRequest {
   status: 'pending' | 'approved' | 'rejected'
   requested_by: number
   requester_name?: string
+  project_code?: string
+  project_name?: string
   reviewed_by?: number
   reviewer_name?: string
   reviewed_at?: string

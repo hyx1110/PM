@@ -11,6 +11,7 @@ import type { Task } from '@/types/task'
 import type { UserOption } from '@/types/user'
 import type { WorkCalendarDay } from '@/types/work-calendar'
 import { useUserStore } from '@/stores/user'
+import { beijingNow } from '@/utils/time'
 
 const props = defineProps<{
   modelValue: boolean
@@ -38,6 +39,7 @@ const form = reactive({
 })
 const calendar = ref<WorkCalendarDay[]>([])
 const projectUsers = ref<UserOption[]>([])
+const currentProjectMemberIds = ref(new Set<number>())
 const loadedYears = new Set<number>()
 const rules: FormRules = {
   user_id: [{ required: true, message: '请选择人员' }],
@@ -85,13 +87,7 @@ function canBookUserForProject(item: UserOption, project?: Project) {
   if (!project) return false
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
-  if (roles.includes('super_admin')) return true
-  if (
-    project.manager_id === currentUserId
-    && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
-  ) return true
-  return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
-    && item.supervisor_id === currentUserId
+  return project.manager_id === currentUserId && roles.includes('project_manager')
 }
 
 async function loadProjectUsers(projectId: number) {
@@ -101,11 +97,16 @@ async function loadProjectUsers(projectId: number) {
   }
   const members = await getProjectMembers(projectId)
   const ids = new Set(members.map((item) => item.user_id))
+  currentProjectMemberIds.value = ids
   const project = props.projects.find((item) => item.id === projectId)
-  projectUsers.value = props.users.filter(
+  const eligible = props.users.filter(
     (item) => ids.has(item.id) && canBookUserForProject(item, project),
   )
-  if (!projectUsers.value.some((item) => item.id === form.user_id)) form.user_id = 0
+  const lockedUser = props.slot?.userId ? props.users.find((item) => item.id === props.slot?.userId) : undefined
+  projectUsers.value = lockedUser && !eligible.some((item) => item.id === lockedUser.id)
+    ? [lockedUser, ...eligible]
+    : eligible
+  if (!props.slot?.userId && !projectUsers.value.some((item) => item.id === form.user_id)) form.user_id = 0
 }
 
 async function changeProject(projectId: number) {
@@ -156,7 +157,7 @@ watch(
         remark: props.initial.remark || '',
       })
     } else {
-      const date = props.slot?.date || dayjs().format('YYYY-MM-DD')
+      const date = props.slot?.date || beijingNow().format('YYYY-MM-DD')
       const clock = props.slot?.time || '08:30'
       const session = clock < '12:00' ? 'morning' : 'afternoon'
       Object.assign(form, {
@@ -200,6 +201,9 @@ watch(
 
 async function submit() {
   if (!(await formRef.value?.validate())) return
+  if (!currentProjectMemberIds.value.has(form.user_id)) {
+    return ElMessage.warning('当前人员不是所选项目的有效成员，请更换项目')
+  }
   if (!isValidWorkday(form.work_date)) {
     return ElMessage.warning('只能预约工作日，法定节假日不能预约')
   }
@@ -227,7 +231,7 @@ async function submit() {
     destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <el-alert title="预约对象必须是当前项目成员；项目经理可预约本项目成员，L3/L4 可预约直属下属，提交后由被预约人本人审批。" type="info" :closable="false" show-icon/>
+    <el-alert title="只能使用自己负责且已通过审批的项目预约有效项目成员，提交后由被预约人本人确认。" type="info" :closable="false" show-icon/>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <div class="form-grid">
         <el-form-item label="项目" prop="project_id">
@@ -241,7 +245,7 @@ async function submit() {
           </el-select>
         </el-form-item>
         <el-form-item label="人员" prop="user_id">
-          <el-select v-model="form.user_id" filterable style="width:100%">
+          <el-select v-model="form.user_id" filterable :disabled="Boolean(slot?.userId)" style="width:100%">
             <el-option v-for="item in projectUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/>
           </el-select>
         </el-form-item>

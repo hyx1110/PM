@@ -7,7 +7,7 @@ from app.models.evaluation import TaskEvaluation
 from app.models.execution import ExecutionRecord
 from app.models.project import Project
 from app.models.schedule import ScheduleBooking
-from app.models.task import Task
+from app.models.task import Task, TaskAssignee
 from app.models.user import User
 
 
@@ -33,7 +33,13 @@ class ReportRepository:
         if project_id:
             filters.append(Task.project_id == project_id)
         if owner_id:
-            filters.append(Task.owner_id == owner_id)
+            filters.append(
+                Task.id.in_(
+                    select(TaskAssignee.task_id).where(
+                        TaskAssignee.user_id == owner_id
+                    )
+                )
+            )
         if start_date:
             filters.append(Task.planned_end >= datetime.combine(start_date, time.min))
         if end_date:
@@ -48,6 +54,7 @@ class ReportRepository:
             select(
                 Project.id.label("project_id"),
                 Project.name.label("project_name"),
+                Project.status.label("project_status"),
                 case((Task.parent_id.is_(None), Task.name), else_=parent.name).label("level1_task"),
                 case((Task.parent_id.is_not(None), Task.name), else_=None).label("level2_task"),
                 Task.id.label("task_id"),
@@ -76,6 +83,7 @@ class ReportRepository:
             .group_by(
                 Project.id,
                 Project.name,
+                Project.status,
                 Task.id,
                 Task.name,
                 Task.parent_id,
@@ -93,7 +101,23 @@ class ReportRepository:
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
-        return [dict(row._mapping) for row in db.execute(statement).all()], total
+        items = [dict(row._mapping) for row in db.execute(statement).all()]
+        task_ids = [item["task_id"] for item in items]
+        if task_ids:
+            assignee_rows = db.execute(
+                select(TaskAssignee.task_id, User.name)
+                .join(User, User.id == TaskAssignee.user_id)
+                .where(TaskAssignee.task_id.in_(task_ids))
+                .order_by(TaskAssignee.id)
+            ).all()
+            owner_names: dict[int, list[str]] = {}
+            for task_id, owner_name in assignee_rows:
+                owner_names.setdefault(task_id, []).append(owner_name)
+            for item in items:
+                item["owner_name"] = "、".join(
+                    owner_names.get(item["task_id"], [item["owner_name"]])
+                )
+        return items, total
 
     def workload(
         self,
@@ -103,6 +127,7 @@ class ReportRepository:
         department_id: int | None = None,
         user_id: int | None = None,
         visible_project_ids: set[int] | None = None,
+        visible_user_ids: set[int] | None = None,
     ) -> list[dict]:
         filters = [
             ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
@@ -118,6 +143,8 @@ class ReportRepository:
             filters.append(ScheduleBooking.user_id == user_id)
         if visible_project_ids is not None:
             filters.append(ScheduleBooking.project_id.in_(visible_project_ids or {-1}))
+        if visible_user_ids is not None:
+            filters.append(ScheduleBooking.user_id.in_(visible_user_ids or {-1}))
         booking_date = func.date(ScheduleBooking.start_time)
         rows = db.execute(
             select(

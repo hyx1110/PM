@@ -24,25 +24,23 @@ from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
 from app.models.rbac import Role, UserRole
 from app.models.schedule import ScheduleBooking
-from app.models.task import Task
+from app.models.task import Task, TaskAssignee
 from app.models.user import User
-from app.schemas.employee_profile import EmployeeProfileCreate
 from app.schemas.project import ProjectCreate
 from app.schemas.task import TaskCreate
 from app.schemas.user import UserCreate
 from app.services.operation_log_service import log_operation
 from app.services.notification_service import create_notification
-from app.services.employee_profile_service import (
-    ensure_default_system_role,
-    upsert_employee_profile,
-)
 from app.services.project_service import (
     PROJECT_CREATOR_ROLES,
     _add_initial_project_members,
+    _generate_project_code,
     _validate_initial_project_members,
     manageable_project_ids,
 )
+from app.services.rbac_service import ensure_default_system_role
 from app.services.visibility_service import visible_schedule_user_ids
+from app.utils.time import beijing_now
 
 RESOURCE_HEADERS = {
     "users": [
@@ -50,21 +48,14 @@ RESOURCE_HEADERS = {
         ("name", "姓名*"),
         ("password", "初始密码"),
         ("email", "邮箱"),
-        ("phone", "手机"),
-        ("department_code", "部门编码"),
+        ("department_code", "部门编码*"),
         ("organization_code", "组织编码"),
         ("supervisor_employee_no", "直属上级员工号"),
-        ("role_codes", "手工系统角色编码(逗号分隔)"),
+        ("role_codes", "系统角色编码(逗号分隔)"),
         ("status", "状态"),
-        ("position_id", "岗位编号"),
-        ("preferred_name", "常用姓名"),
-        ("employee_type", "员工类型"),
-        ("job_id", "职务编号"),
-        ("job_title", "职务名称"),
-        ("hr_management_level", "人事管理职级"),
     ],
     "projects": [
-        ("code", "项目编号*"),
+        ("code", "项目编号（系统自动生成，导入值忽略）"),
         ("name", "项目名称*"),
         ("project_type", "项目类型"),
         ("manager_employee_no", "项目经理员工号*"),
@@ -82,21 +73,20 @@ RESOURCE_HEADERS = {
         ("parent_task_name", "上级任务名称"),
         ("name", "任务名称*"),
         ("task_type", "任务类型"),
-        ("owner_employee_no", "负责人员工号*"),
+        ("owner_employee_nos", "负责人员工号*(逗号分隔)"),
         ("planned_start", "计划开始*"),
         ("planned_end", "计划结束*"),
         ("estimated_hours", "预计工时"),
         ("status", "状态"),
-        ("priority", "优先级"),
         ("description", "描述"),
         ("remark", "备注"),
     ],
 }
 
 EXAMPLES = {
-    "users": ["E10001", "张三", "", "zhangsan@example.com", "13800000000", "", "", "", "project_member", "active", "P10001", "张三", "E", "J100", "工程师", "employee"],
+    "users": ["E10001", "张三", "", "zhangsan@example.com", "D001", "", "", "project_member", "active"],
     "projects": ["P-2026-001", "示例项目", "General", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "high", "", ""],
-    "tasks": ["P-2026-001", "", "需求分析", "Project", "admin", datetime(2026, 10, 1, 9), datetime(2026, 10, 3, 18), 24, "not_started", "high", "", ""],
+    "tasks": ["P-2026-001", "", "需求分析", "Project", "E10002,E10003", datetime(2026, 10, 1, 9), datetime(2026, 10, 3, 18), 24, "not_started", "", ""],
 }
 
 
@@ -155,13 +145,6 @@ def create_template(resource_type: str) -> bytes:
         _add_list_validation(book, sheet, field_index["priority"], ["low", "medium", "high", "critical"])
     if "task_type" in field_index:
         _add_list_validation(book, sheet, field_index["task_type"], ["Project", "Routine", "Training", "Leave", "Other"])
-    if "hr_management_level" in field_index:
-        _add_list_validation(
-            book,
-            sheet,
-            field_index["hr_management_level"],
-            ["employee", "department_manager", "management_manager"],
-        )
     notes = book.create_sheet("填写说明", 1)
     notes.append(["规则", "说明"])
     notes.append(["必填字段", "标题包含 * 的列必须填写；请勿修改标题行。"])
@@ -169,6 +152,8 @@ def create_template(resource_type: str) -> bytes:
     notes.append(["数字", "工时等数值请使用真实数字单元格，不要添加单位。"])
     if resource_type == "projects":
         notes.append(["项目成员", "创建项目时必须填写至少一名项目成员；多个员工号使用英文逗号分隔，项目经理无需重复填写。"])
+    if resource_type == "tasks":
+        notes.append(["任务负责人", "至少填写一名当前有效项目成员；多个员工号使用英文逗号分隔。"])
     notes.append(["导入策略", "按行校验并导入；失败行会保留错误明细，成功行不会被回滚。"])
     _style_sheet(notes, [20, 76])
     stream = BytesIO()
@@ -250,19 +235,10 @@ def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
         password=row.get("password") or settings.import_default_password,
         confirm_password=row.get("password") or settings.import_default_password,
         email=row.get("email") or None,
-        phone=str(row["phone"]) if row.get("phone") not in (None, "") else None,
         department_id=department.id if department else None,
         organization_id=organization.id if organization else None,
         supervisor_id=supervisor.id if supervisor else None,
         status=row.get("status") or "active",
-        employee_profile=EmployeeProfileCreate(
-            position_id=row.get("position_id") or None,
-            preferred_name=row.get("preferred_name") or None,
-            employee_type=row.get("employee_type") or None,
-            job_id=row.get("job_id") or None,
-            job_title=row.get("job_title") or None,
-            hr_management_level=row.get("hr_management_level") or "employee",
-        ),
     )
     if payload.status not in {"active", "disabled"}:
         raise ValueError("用户状态必须是 active 或 disabled")
@@ -274,29 +250,21 @@ def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
             "password",
             "confirm_password",
             "role_ids",
-            "employee_profile",
         }
     )
     item = User(
         **values,
         employee_no=payload.employee_no,
-        username=payload.employee_no,
         password_hash=hash_password(payload.password),
     )
     db.add(item)
     db.flush()
     db.add_all(
         [
-            UserRole(
-                user_id=item.id,
-                role_id=role.id,
-                is_manual=True,
-                is_hr_auto=False,
-            )
+            UserRole(user_id=item.id, role_id=role.id)
             for role in roles
         ]
     )
-    upsert_employee_profile(db, item.id, payload.employee_profile)
     ensure_default_system_role(db, item.id)
     return item
 
@@ -306,7 +274,7 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
     department = _required_lookup(db, Department, Department.code, row.get("department_code"), "部门编码不能为空且必须存在")
     operator_roles = get_role_codes(db, operator.id)
     if manager.id != operator.id or not (operator_roles & PROJECT_CREATOR_ROLES):
-        raise ValueError("项目只能由项目经理、L3 或超级管理员本人导入")
+        raise ValueError("项目只能由项目经理本人导入")
     if manager.department_id != department.id:
         raise ValueError("项目经理必须属于项目所属部门")
     member_employee_nos = [
@@ -340,7 +308,6 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
     except BusinessException as exc:
         raise ValueError(exc.message) from exc
     payload = ProjectCreate(
-        code=row.get("code"),
         name=row.get("name"),
         project_type=row.get("project_type") or "General",
         manager_id=manager.id,
@@ -354,8 +321,6 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         description=row.get("description") or None,
         remark=row.get("remark") or None,
     )
-    if db.scalar(select(Project.id).where(Project.code == payload.code)):
-        raise ValueError("项目编号已存在")
     auto_approved = bool(operator_roles & {"department_manager", "super_admin"})
     approver = None
     if not auto_approved:
@@ -364,11 +329,12 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
             raise ValueError("当前用户未设置有效直属主管，无法导入并提交项目")
     item = Project(
         **payload.model_dump(exclude={"status", "member_ids"}),
+        code=_generate_project_code(db),
         status="Planned" if auto_approved else "Draft",
         approval_status="approved" if auto_approved else "pending",
         created_by=operator.id,
         approver_id=approver.id if approver else None,
-        approved_at=datetime.now() if auto_approved else None,
+        approved_at=beijing_now() if auto_approved else None,
         approval_note="创建人属于 L3 或超级管理员，系统自动通过" if auto_approved else None,
     )
     db.add(item)
@@ -392,21 +358,54 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
 
 def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     project = _required_lookup(db, Project, Project.code, row.get("project_code"), "项目编号不能为空且必须存在")
+    operator_roles = get_role_codes(db, operator.id)
+    if project.manager_id != operator.id or "project_manager" not in operator_roles:
+        raise ValueError("任务只能由该项目的项目经理本人导入")
     if project.approval_status != "approved":
         raise ValueError("项目尚未通过审批，不能导入任务")
     if project.status in {"Completed", "Cancelled"}:
         raise ValueError("已完成或已取消的项目不能导入任务")
-    owner = _required_lookup(db, User, User.employee_no, row.get("owner_employee_no"), "负责人员工号不能为空且必须存在")
-    if owner.status != "active":
-        raise ValueError("任务负责人必须是启用用户")
-    if owner.id != project.manager_id and not db.scalar(
-        select(ProjectMember.id).where(
-            ProjectMember.project_id == project.id,
-            ProjectMember.user_id == owner.id,
-            ProjectMember.left_at.is_(None),
+    owner_employee_nos = [
+        value.strip()
+        for value in re.split(r"[,，;；]", str(row.get("owner_employee_nos") or ""))
+        if value.strip()
+    ]
+    owner_employee_nos = list(dict.fromkeys(owner_employee_nos))
+    if not owner_employee_nos:
+        raise ValueError("至少填写一名任务负责人的员工号")
+    owners = db.scalars(
+        select(User).where(
+            User.employee_no.in_(owner_employee_nos),
+            User.status == "active",
+            User.is_deleted.is_(False),
         )
-    ):
-        raise ValueError("任务负责人必须是项目经理或当前有效项目成员")
+    ).all()
+    owners_by_no = {owner.employee_no: owner for owner in owners}
+    missing_owner_nos = [
+        employee_no
+        for employee_no in owner_employee_nos
+        if employee_no not in owners_by_no
+    ]
+    if missing_owner_nos:
+        raise ValueError(
+            f"任务负责人员工号不存在或已停用：{', '.join(missing_owner_nos)}"
+        )
+    ordered_owners = [owners_by_no[employee_no] for employee_no in owner_employee_nos]
+    active_member_ids = set(
+        db.scalars(
+            select(ProjectMember.user_id).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.left_at.is_(None),
+            )
+        ).all()
+    )
+    invalid_owners = [
+        owner.employee_no for owner in ordered_owners if owner.id not in active_member_ids
+    ]
+    if invalid_owners:
+        raise ValueError(
+            f"任务负责人必须是当前有效项目成员：{', '.join(invalid_owners)}"
+        )
     parent = None
     if row.get("parent_task_name"):
         parent = db.scalar(
@@ -421,28 +420,33 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         parent_id=parent.id if parent else None,
         name=row.get("name"),
         task_type=row.get("task_type") or "Project",
-        owner_id=owner.id,
+        owner_ids=[owner.id for owner in ordered_owners],
         planned_start=_to_datetime(row.get("planned_start"), "计划开始"),
         planned_end=_to_datetime(row.get("planned_end"), "计划结束"),
         estimated_hours=Decimal(str(row.get("estimated_hours") or 0)),
         status=row.get("status") or "not_started",
-        priority=row.get("priority") or "medium",
         description=row.get("description") or None,
         remark=row.get("remark") or None,
     )
-    item = Task(**payload.model_dump())
+    item = Task(
+        **payload.model_dump(exclude={"owner_ids"}),
+        owner_id=ordered_owners[0].id,
+        priority="medium",
+    )
     db.add(item)
     db.flush()
-    if owner.id != operator.id:
-        create_notification(
-            db,
-            owner.id,
-            "task_assigned",
-            "你收到了一项新任务",
-            f"任务“{item.name}”已通过导入分配给你。",
-            related_type="task",
-            related_id=item.id,
-        )
+    for owner in ordered_owners:
+        db.add(TaskAssignee(task_id=item.id, user_id=owner.id))
+        if owner.id != operator.id:
+            create_notification(
+                db,
+                owner.id,
+                "task_assigned",
+                "你收到了一项新任务",
+                f"任务“{item.name}”已通过导入分配给你。",
+                related_type="task",
+                related_id=item.id,
+            )
     return item
 
 
@@ -591,7 +595,7 @@ def _export_book(title: str, headers: list[str], rows: list[list[Any]], date_col
     summary = book.create_sheet("导出说明")
     summary.append(["项目", "内容"])
     summary.append(["报表", title])
-    summary.append(["生成时间", datetime.now()])
+    summary.append(["生成时间", beijing_now()])
     summary["B3"].number_format = "yyyy-mm-dd hh:mm:ss"
     summary.append(["数据行数", len(rows)])
     _style_sheet(summary, [18, 32])

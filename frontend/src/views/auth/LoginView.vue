@@ -27,9 +27,7 @@ async function submit() {
   try {
     await userStore.login(form)
     ElMessage.success('登录成功')
-    const roles = userStore.profile?.roles || []
-    const memberOnly = roles.length === 1 && roles[0] === 'project_member'
-    await router.replace(String(route.query.redirect || (memberOnly ? '/my-tasks' : '/dashboard')))
+    await router.replace(String(route.query.redirect || '/dashboard'))
   } finally {
     loading.value = false
   }

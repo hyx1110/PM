@@ -11,6 +11,7 @@ from app.core.exceptions import not_found
 from app.models.notification import Notification, NotificationPreference
 from app.models.user import User
 from app.schemas.notification import NotificationPreferenceUpdate
+from app.utils.time import beijing_now
 
 
 def get_or_create_preference(db: Session, user_id: int) -> NotificationPreference:
@@ -98,7 +99,7 @@ def mark_read(db: Session, notification_id: int, user_id: int) -> Notification:
         raise not_found("notification not found")
     if item.status == "unread":
         item.status = "read"
-        item.read_at = datetime.now()
+        item.read_at = beijing_now()
         db.commit()
         db.refresh(item)
     return item
@@ -112,7 +113,7 @@ def mark_all_read(db: Session, user_id: int) -> int:
             Notification.status == "unread",
             Notification.is_deleted.is_(False),
         )
-        .values(status="read", read_at=datetime.now())
+        .values(status="read", read_at=beijing_now())
     )
     db.commit()
     return result.rowcount or 0
@@ -131,7 +132,7 @@ def delete_notification(db: Session, notification_id: int, user_id: int) -> None
     item.is_deleted = True
     if item.status == "unread":
         item.status = "read"
-        item.read_at = datetime.now()
+        item.read_at = beijing_now()
     db.commit()
 
 

@@ -13,15 +13,10 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
         return None
     visible = {user.id}
     if "functional_manager" in roles:
-        visible.update(
-            db.scalars(
-                select(User.id).where(
-                    User.supervisor_id == user.id,
-                    User.status == "active",
-                    User.is_deleted.is_(False),
-                )
-            ).all()
-        )
+        direct_ids = set(db.scalars(select(User.id).where(User.supervisor_id == user.id, User.status == "active", User.is_deleted.is_(False))).all())
+        visible.update(direct_ids)
+        if direct_ids:
+            visible.update(db.scalars(select(User.id).where(User.supervisor_id.in_(direct_ids), User.status == "active", User.is_deleted.is_(False))).all())
     if "project_manager" in roles:
         managed_project_ids = select(Project.id).where(
             Project.manager_id == user.id,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import dayjs from 'dayjs'
+import { beijingNow } from '@/utils/time'
 import { ElMessage } from 'element-plus'
 import type { TagProps } from 'element-plus'
 import { downloadExport, downloadImportTemplate, getImportJobs, uploadImportWorkbook } from '@/api/data-exchange'
@@ -12,7 +12,7 @@ const loading = ref(false), importing = ref(false), detailVisible = ref(false)
 const userStore = useUserStore()
 const jobs = ref<ImportJob[]>([]), total = ref(0), selected = ref<ImportJob>(), selectedFile = ref<File>()
 const resource = ref('users'), importQuery = reactive({ page: 1, page_size: 20, resource_type: undefined as string | undefined })
-const exportForm = reactive({ kind: 'schedules' as 'schedules'|'executions'|'process-report', range: [dayjs().startOf('month').format('YYYY-MM-DD'), dayjs().format('YYYY-MM-DD')] })
+const exportForm = reactive({ kind: 'schedules' as 'schedules'|'executions'|'process-report', range: [beijingNow().startOf('month').format('YYYY-MM-DD'), beijingNow().format('YYYY-MM-DD')] })
 const resources = [{ value: 'users', label: '用户' }, { value: 'projects', label: '项目' }, { value: 'tasks', label: '任务' }]
 const statusTypes: Record<string, TagProps['type']> = { completed: 'success', partial: 'warning', failed: 'danger', processing: 'info' }
 

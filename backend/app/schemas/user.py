@@ -1,49 +1,43 @@
 from datetime import datetime
 
-from pydantic import AliasChoices, EmailStr, Field, field_validator, model_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
-from app.schemas.employee_profile import (
-    EmployeeProfileCreate,
-    EmployeeProfileResponse,
-    EmployeeProfileUpdate,
+from app.utils.employee_no import (
+    EMPLOYEE_NO_ERROR,
+    is_valid_employee_no,
+    normalize_employee_no,
 )
-from app.utils.username import EMPLOYEE_NO_ERROR, is_valid_username, normalize_username
 
 
 class UserCreate(ORMModel):
     employee_no: str = Field(
         min_length=2,
         max_length=50,
-        validation_alias=AliasChoices("employee_no", "username"),
     )
     password: str = Field(min_length=8, max_length=128)
     confirm_password: str = Field(min_length=8, max_length=128)
     name: str = Field(min_length=1, max_length=100)
     email: EmailStr | None = None
-    phone: str | None = Field(default=None, max_length=60)
-    department_id: int | None = None
+    department_id: int
     organization_id: int | None = None
     supervisor_id: int | None = None
     status: str = "active"
-    role_ids: list[int] = []
-    employee_profile: EmployeeProfileCreate = Field(
-        default_factory=EmployeeProfileCreate
-    )
+    role_ids: list[int] = Field(default_factory=list)
 
     @field_validator("employee_no", mode="before")
     @classmethod
     def normalize_employee_no(cls, value):
-        return normalize_username(value) if isinstance(value, str) else value
+        return normalize_employee_no(value) if isinstance(value, str) else value
 
     @field_validator("employee_no")
     @classmethod
     def validate_employee_no(cls, value: str) -> str:
-        if not is_valid_username(value):
+        if not is_valid_employee_no(value):
             raise ValueError(EMPLOYEE_NO_ERROR)
         return value
 
-    @field_validator("email", "phone", mode="before")
+    @field_validator("email", mode="before")
     @classmethod
     def normalize_optional_text(cls, value):
         if isinstance(value, str):
@@ -68,7 +62,6 @@ class UserCreate(ORMModel):
 class UserUpdate(ORMModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     email: EmailStr | None = None
-    phone: str | None = Field(default=None, max_length=60)
     department_id: int | None = None
     organization_id: int | None = None
     supervisor_id: int | None = None
@@ -76,9 +69,8 @@ class UserUpdate(ORMModel):
     password: str | None = Field(default=None, min_length=8, max_length=128)
     confirm_password: str | None = Field(default=None, min_length=8, max_length=128)
     role_ids: list[int] | None = None
-    employee_profile: EmployeeProfileUpdate | None = None
 
-    @field_validator("email", "phone", mode="before")
+    @field_validator("email", mode="before")
     @classmethod
     def normalize_optional_text(cls, value):
         if isinstance(value, str):
@@ -105,10 +97,8 @@ class UserUpdate(ORMModel):
 class UserResponse(ORMModel):
     id: int
     employee_no: str
-    username: str
     name: str
     email: str | None
-    phone: str | None
     department_id: int | None
     department_name: str | None = None
     organization_id: int | None
@@ -116,13 +106,8 @@ class UserResponse(ORMModel):
     supervisor_id: int | None
     supervisor_name: str | None = None
     status: str
-    roles: list[str] = []
-    role_ids: list[int] = []
-    manual_role_ids: list[int] = []
-    hr_role_ids: list[int] = []
-    manual_roles: list[str] = []
-    hr_roles: list[str] = []
-    employee_profile: EmployeeProfileResponse | None = None
+    roles: list[str] = Field(default_factory=list)
+    role_ids: list[int] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

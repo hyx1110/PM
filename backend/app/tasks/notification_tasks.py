@@ -7,11 +7,12 @@ from app.models.notification import Notification
 from app.models.schedule import ScheduleBooking
 from app.services.notification_service import create_notification, dispatch_pending, get_or_create_preference
 from app.tasks.celery_app import celery_app
+from app.utils.time import beijing_now
 
 
 @celery_app.task(name="app.tasks.notification_tasks.create_upcoming_reminders")
 def create_upcoming_reminders() -> dict:
-    now = datetime.now()
+    now = beijing_now()
     created = 0
     with SessionLocal() as db:
         bookings = db.scalars(

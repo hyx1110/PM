@@ -7,6 +7,7 @@ from app.schemas.common import ORMModel
 class ProcessReportItem(ORMModel):
     project_id: int
     project_name: str
+    project_status: str
     level1_task: str | None
     level2_task: str | None
     task_id: int
@@ -21,6 +22,7 @@ class ProcessReportItem(ORMModel):
     achievement_rate: Decimal | None
     achievement_quality: Decimal | None
     effective_status: str
+    task_status: str
 
 
 class WorkloadItem(ORMModel):
@@ -36,9 +38,19 @@ class WorkloadItem(ORMModel):
 class DashboardSummary(ORMModel):
     projects_total: int
     projects_running: int
+    projects_completed: int
+    projects_delayed: int
     delayed_tasks: int
     pending_schedules: int
     pending_project_approvals: int
     my_today_tasks: int
     my_upcoming_tasks: int
     today_schedules: int
+    open_risks: int
+    critical_risks: int
+    today_risks: int
+    weekly_planned_hours: float
+    monthly_planned_hours: float
+    weekly_utilization_rate: float
+    task_completion_rate: float
+    schedule_trend: list[dict]

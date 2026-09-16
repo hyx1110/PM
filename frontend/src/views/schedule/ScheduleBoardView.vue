@@ -18,7 +18,7 @@ import {
 import { getProjectMembers, getProjects } from '@/api/project'
 import { getTasks } from '@/api/task'
 import { getScheduleUserOptions } from '@/api/user'
-import { getDepartmentOptions } from '@/api/organization'
+import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
 import { getWorkCalendar } from '@/api/work-calendar'
 import {
   createPersonalTimeBlock,
@@ -32,7 +32,7 @@ import ScheduleBookingDialog from '@/components/schedule/ScheduleBookingDialog.v
 import ScheduleConflictDialog from '@/components/schedule/ScheduleConflictDialog.vue'
 import PersonalTimeDialog from '@/components/schedule/PersonalTimeDialog.vue'
 import type { ApiResponse } from '@/types/common'
-import type { DepartmentOption } from '@/types/organization'
+import type { DepartmentOption, OrganizationNode } from '@/types/organization'
 import type { Project } from '@/types/project'
 import type { PersonalTimeBlock, PersonalTimePayload } from '@/types/personal-time'
 import type { Schedule, ScheduleConflict, SchedulePayload } from '@/types/schedule'
@@ -41,11 +41,12 @@ import type { UserOption } from '@/types/user'
 import type { ScheduleDayMeta, WorkCalendarDay } from '@/types/work-calendar'
 import { formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import { beijingNow } from '@/utils/time'
 
 const userStore = useUserStore()
 const loading = ref(false)
 const viewMode = ref<'day' | 'week' | 'month'>('week')
-const anchorDate = ref(dayjs().format('YYYY-MM-DD'))
+const anchorDate = ref(beijingNow().format('YYYY-MM-DD'))
 const schedules = ref<Schedule[]>([])
 const hiddenBoardStatuses = new Set(['draft', 'rejected', 'withdrawn', 'cancelled'])
 const boardSchedules = computed(() =>
@@ -56,10 +57,14 @@ const projects = ref<Project[]>([])
 const tasks = ref<Task[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
+const organizations = ref<OrganizationNode[]>([])
 const filter = reactive({
   project_id: undefined as number | undefined,
   user_id: undefined as number | undefined,
   department_id: undefined as number | undefined,
+  organization_id: undefined as number | undefined,
+  employee_no: '',
+  name: '',
 })
 const bookingDialog = ref(false)
 const detailDialog = ref(false)
@@ -175,6 +180,15 @@ const visibleUsers = computed(() => {
     ? [current, ...filtered.filter((item) => item.id !== current.id)]
     : filtered
 })
+const flatOrganizations = computed(() => {
+  const result: Array<OrganizationNode & { label: string }> = []
+  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
+    result.push({ ...node, label: `${prefix}${node.name}` })
+    walk(node.children || [], `${prefix}　`)
+  })
+  walk(organizations.value)
+  return result
+})
 const bookableProjects = computed(() => {
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
@@ -183,20 +197,13 @@ const bookableProjects = computed(() => {
       item.approval_status !== 'approved'
       || ['Completed', 'Cancelled'].includes(item.status)
     ) return false
-    if (roles.includes('super_admin')) return true
-    if (
-      item.manager_id === currentUserId
-      && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
-    ) return true
-    return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
+    return item.manager_id === currentUserId && roles.includes('project_manager')
   })
 })
 const canBook = computed(
   () =>
     userStore.hasPermission('schedule:edit')
-    && userStore.profile?.roles.some((role) =>
-      ['project_manager', 'department_manager', 'functional_manager', 'super_admin'].includes(role),
-    ),
+    && userStore.profile?.roles.includes('project_manager'),
 )
 const dateTitle = computed(() =>
   viewMode.value === 'day'
@@ -213,13 +220,7 @@ function canBookUserForProject(item: UserOption, project?: Project) {
   if (!project) return false
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
-  if (roles.includes('super_admin')) return true
-  if (
-    project.manager_id === currentUserId
-    && roles.some((role) => ['project_manager', 'department_manager'].includes(role))
-  ) return true
-  return roles.some((role) => ['department_manager', 'functional_manager'].includes(role))
-    && item.supervisor_id === currentUserId
+  return project.manager_id === currentUserId && roles.includes('project_manager')
 }
 
 async function loadBatchUsers(projectId: number) {
@@ -286,8 +287,11 @@ const canDelete = computed(
 )
 
 function daySchedules(date: string) {
+  const visibleUserIds = new Set(visibleUsers.value.map((item) => item.id))
   return boardSchedules.value.filter(
-    (item) => dayjs(item.start_time).format('YYYY-MM-DD') === date,
+    (item) =>
+      dayjs(item.start_time).format('YYYY-MM-DD') === date
+      && visibleUserIds.has(item.user_id),
   )
 }
 
@@ -364,16 +368,29 @@ async function load() {
 }
 
 async function loadOptions() {
-  const [projectResult, taskResult, userResult, departmentResult] = await Promise.all([
+  const [projectResult, taskResult, userResult, departmentResult, organizationResult] = await Promise.all([
     getProjects({ page: 1, page_size: 200 }),
     getTasks({ page: 1, page_size: 200 }),
-    getScheduleUserOptions(),
+    getScheduleUserOptions({
+      project_id: filter.project_id,
+      name: filter.name || undefined,
+      employee_no: filter.employee_no || undefined,
+      department_id: filter.department_id,
+      organization_id: filter.organization_id,
+    }),
     getDepartmentOptions(),
+    getOrganizationTree(),
   ])
   projects.value = projectResult.items
   tasks.value = taskResult.items
   users.value = userResult
   departments.value = departmentResult
+  organizations.value = organizationResult
+}
+
+async function applyFilters() {
+  await loadOptions()
+  await load()
 }
 
 function move(step: number) {
@@ -391,6 +408,10 @@ function openCreate(slot: { userId: number; date: string; time: string }) {
   selected.value = undefined
   initialSlot.value = slot
   bookingDialog.value = true
+}
+
+function openBookingButton() {
+  openCreate({ userId: 0, date: anchorDate.value, time: '08:30' })
 }
 
 function openPersonalCreate(slot?: { date: string; time: string }) {
@@ -739,7 +760,7 @@ onMounted(async () => {
       </div>
       <div class="header-actions">
         <el-button @click="openMyTimeDrawer">我的时间安排</el-button>
-        <template v-if="canBook"><el-button @click="copyPreviousWeek">复制上周</el-button><el-button @click="openBatch">批量预约</el-button><el-button type="primary" @click="openCreate({userId:userStore.profile?.id||0,date:anchorDate,time:'08:30'})">预约人力</el-button></template>
+        <template v-if="canBook"><el-button @click="copyPreviousWeek">复制上周</el-button><el-button @click="openBatch">批量预约</el-button><el-button type="primary" @click="openBookingButton">预约人力</el-button></template>
       </div>
     </header>
     <section class="surface board-tools">
@@ -747,7 +768,10 @@ onMounted(async () => {
         <el-select v-model="filter.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select>
         <el-select v-model="filter.user_id" clearable filterable placeholder="人员" style="width:150px"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/></el-select>
         <el-select v-model="filter.department_id" clearable placeholder="部门" style="width:150px"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select>
-        <el-button @click="load">查询</el-button>
+        <el-select v-model="filter.organization_id" clearable filterable placeholder="组织" style="width:170px"><el-option v-for="item in flatOrganizations" :key="item.id" :label="item.label" :value="item.id"/></el-select>
+        <el-input v-model="filter.employee_no" clearable placeholder="工号" style="width:130px"/>
+        <el-input v-model="filter.name" clearable placeholder="姓名" style="width:130px"/>
+        <el-button @click="applyFilters">查询</el-button>
       </div>
       <div class="date-nav">
         <el-button @click="move(-1)">‹</el-button>
@@ -792,7 +816,7 @@ onMounted(async () => {
           v-for="date in monthDays"
           :key="date"
           class="month-day"
-          :class="{outside:dayjs(date).month()!==dayjs(anchorDate).month(),today:date===dayjs().format('YYYY-MM-DD'),weekend:scheduleDayMeta(date).kind==='weekend',holiday:scheduleDayMeta(date).kind==='holiday','adjusted-workday':scheduleDayMeta(date).kind==='workday'&&Boolean(scheduleDayMeta(date).name)}"
+          :class="{outside:dayjs(date).month()!==dayjs(anchorDate).month(),today:date===beijingNow().format('YYYY-MM-DD'),weekend:scheduleDayMeta(date).kind==='weekend',holiday:scheduleDayMeta(date).kind==='holiday','adjusted-workday':scheduleDayMeta(date).kind==='workday'&&Boolean(scheduleDayMeta(date).name)}"
           @dragover="allowMonthDrop($event,date)"
           @drop="dropOnDay($event,date)"
           @dblclick="openMonthCreate(date)"

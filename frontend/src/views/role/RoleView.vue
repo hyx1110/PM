@@ -37,7 +37,7 @@ onMounted(load)
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">角色权限</h1><p class="page-subtitle">这里维护系统功能角色；人事职级单独保存在员工档案中，Department Manager/Management Manager 仅自动关联 L3/L4。</p></div><el-button v-if="userStore.hasPermission('role:edit')" type="primary" :disabled="!selectedRole" @click="save">保存权限</el-button></header>
+    <header class="page-header"><div><h1 class="page-title">角色权限</h1><p class="page-subtitle">统一维护超级管理员、L3、L4、项目经理和项目成员五类系统角色的功能权限。</p></div><el-button v-if="userStore.hasPermission('role:edit')" type="primary" :disabled="!selectedRole" @click="save">保存权限</el-button></header>
     <section class="permission-layout" v-loading="loading">
       <aside class="surface role-list"><button v-for="role in roles" :key="role.id" :class="{active:selectedRoleId===role.id}" @click="selectRole(role)"><div><strong>{{ role.name }}</strong><small>{{ role.code }}</small></div><span>{{ role.permission_ids.length }}</span></button></aside>
       <main class="surface permission-card">

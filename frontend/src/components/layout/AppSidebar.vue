@@ -3,16 +3,13 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Calendar,
-  Bell,
   Collection,
   DataAnalysis,
   Document,
   HomeFilled,
   OfficeBuilding,
   Tickets,
-  TrendCharts,
   UploadFilled,
-  WarningFilled,
   User,
   UserFilled,
 } from '@element-plus/icons-vue'
@@ -20,33 +17,20 @@ import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const userStore = useUserStore()
-const memberOnly = computed(() => {
-  const roles = userStore.profile?.roles || []
-  return roles.length === 1 && roles[0] === 'project_member'
-})
-
 const menuItems = computed(() => [
   { path: '/dashboard', label: '首页', icon: HomeFilled },
-  { path: '/my-tasks', label: '我的任务', icon: Tickets, permission: 'task:view' },
   { path: '/users', label: '用户管理', icon: User, permission: 'user:view' },
   { path: '/organizations', label: '组织管理', icon: OfficeBuilding, permission: 'organization:view' },
   { path: '/roles', label: '角色权限', icon: UserFilled, permission: 'role:view' },
   { path: '/projects', label: '项目管理', icon: Collection, permission: 'project:view' },
-  { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:edit' },
+  { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:view' },
   { path: '/schedules', label: '任务共享看板', icon: Calendar, permission: 'schedule:view' },
-  { path: '/work-calendar', label: '工作日历', icon: Calendar, permission: 'calendar:manage' },
-  { path: '/workload', label: '人员负载分析', icon: TrendCharts, permission: 'analytics:view' },
-  { path: '/risks', label: '风险中心', icon: WarningFilled, permission: 'risk:view' },
   { path: '/executions', label: '任务执行', icon: Document, permission: 'execution:view' },
   { path: '/reports/process', label: '项目过程报表', icon: DataAnalysis, permission: 'process_report:view' },
-  { path: '/reports/analytics', label: '经营分析报表', icon: DataAnalysis, permission: 'analytics:view' },
   { path: '/data-exchange', label: '数据导入导出', icon: UploadFilled, permission: 'export:download' },
-  { path: '/notifications', label: '通知中心', icon: Bell, permission: 'notification:view' },
   { path: '/operation-logs', label: '操作日志', icon: Document, permission: 'operation_log:view' },
 ].filter(
-  (item) =>
-    userStore.hasPermission(item.permission)
-    && (!memberOnly.value || !['/tasks', '/risks'].includes(item.path)),
+  (item) => userStore.hasPermission(item.permission),
 ))
 
 const activePath = computed(() => {
