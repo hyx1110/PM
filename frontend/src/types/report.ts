@@ -17,6 +17,8 @@ export interface ProcessReportItem {
   actual_hours: number
   achievement_rate?: number
   achievement_quality?: number
+  evaluation_id?: number | null
+  evaluated_at?: string | null
   effective_status: string
   task_status: string
 }

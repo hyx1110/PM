@@ -41,9 +41,9 @@ class ReportRepository:
                 )
             )
         if start_date:
-            filters.append(Task.planned_end >= datetime.combine(start_date, time.min))
+            filters.append(Task.planned_end >= start_date)
         if end_date:
-            filters.append(Task.planned_start < datetime.combine(end_date + timedelta(days=1), time.min))
+            filters.append(Task.planned_start <= end_date)
         if visible_project_ids is not None:
             filters.append(Task.project_id.in_(visible_project_ids or {-1}))
         total = db.scalar(select(func.count(Task.id)).where(*filters)) or 0
@@ -69,6 +69,8 @@ class ReportRepository:
                 actual_hours.label("actual_hours"),
                 TaskEvaluation.achievement_rate,
                 TaskEvaluation.achievement_quality,
+                TaskEvaluation.id.label("evaluation_id"),
+                TaskEvaluation.evaluated_at,
             )
             .join(Project, Project.id == Task.project_id)
             .join(User, User.id == Task.owner_id)
@@ -96,6 +98,8 @@ class ReportRepository:
                 Task.status,
                 TaskEvaluation.achievement_rate,
                 TaskEvaluation.achievement_quality,
+                TaskEvaluation.id,
+                TaskEvaluation.evaluated_at,
             )
             .order_by(Project.id, Task.parent_id, Task.id)
             .offset((page - 1) * page_size)

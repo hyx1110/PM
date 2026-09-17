@@ -22,7 +22,9 @@ const organizations = ref<OrganizationNode[]>([])
 const roles = ref<Role[]>([])
 const dialogVisible = ref(false)
 const editingId = ref<number>()
+const editingIsSuper = ref(false)
 const formRef = ref<FormInstance>()
+const assignableRoles = computed(() => roles.value.filter((item) => item.code !== 'super_admin'))
 
 const emptyForm = (): UserPayload => ({
   employee_no: '',
@@ -83,6 +85,9 @@ const flatOrganizations = computed(() => {
   walk(organizations.value)
   return result
 })
+const activeDepartments = computed(() =>
+  departments.value.filter((item) => item.status === 'active'),
+)
 
 function roleLabel(code: string) {
   const systemRoleNames: Record<string, string> = {
@@ -119,12 +124,14 @@ async function loadOptions() {
 
 function openCreate() {
   editingId.value = undefined
+  editingIsSuper.value = false
   Object.assign(form, emptyForm())
   dialogVisible.value = true
 }
 
 function openEdit(row: User) {
   editingId.value = row.id
+  editingIsSuper.value = row.roles.includes('super_admin')
   Object.assign(form, {
     employee_no: row.employee_no,
     password: '',
@@ -168,6 +175,11 @@ async function save() {
   if (!payload.password) {
     delete payload.password
     delete payload.confirm_password
+  }
+  if (!userStore.hasPermission('role:edit')) delete payload.role_ids
+  if (editingIsSuper.value && payload.role_ids) {
+    const superRoleId = roles.value.find((item) => item.code === 'super_admin')?.id
+    if (superRoleId && !payload.role_ids.includes(superRoleId)) payload.role_ids.push(superRoleId)
   }
   try {
     if (editingId.value) {
@@ -238,14 +250,14 @@ onMounted(async () => { await loadOptions(); await load() })
           <el-form-item label="姓名" prop="name"><el-input v-model="form.name" /></el-form-item>
           <el-form-item label="邮箱" prop="email"><el-input v-model="form.email" /></el-form-item>
           <el-form-item label="账号状态"><el-select v-model="form.status" style="width:100%"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select></el-form-item>
-          <el-form-item label="所属部门" prop="department_id" required><el-select v-model="form.department_id" style="width:100%" @change="handleDepartmentChange"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
-          <el-form-item label="所属组织"><el-select v-model="form.organization_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in flatOrganizations.filter(v=>!form.department_id||v.department_id===form.department_id)" :key="item.id" :label="item.label" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="所属部门" prop="department_id" required><el-select v-model="form.department_id" style="width:100%" @change="handleDepartmentChange"><el-option v-for="item in activeDepartments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="所属组织"><el-select v-model="form.organization_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in flatOrganizations.filter(v=>v.status==='active'&&(!form.department_id||v.department_id===form.department_id))" :key="item.id" :label="item.label" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="直属主管"><el-select v-model="form.supervisor_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in userOptions.filter(v=>v.id!==editingId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select></el-form-item>
-          <el-form-item label="系统角色"><el-select v-model="form.role_ids" multiple style="width:100%"><el-option v-for="item in roles" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+          <el-form-item v-if="userStore.hasPermission('role:edit')" label="系统角色"><el-select v-model="form.role_ids" multiple style="width:100%"><el-option v-for="item in assignableRoles" :key="item.id" :label="item.name" :value="item.id" /></el-select><small v-if="editingIsSuper" class="field-hint">初始化超级管理员角色受系统保护，不能在用户管理中新增或移除。</small></el-form-item>
           <el-form-item :label="editingId?'重置密码（留空不修改）':'初始密码'" prop="password" :required="!editingId"><el-input v-model="form.password" type="password" show-password /></el-form-item>
           <el-form-item :label="editingId?'确认新密码':'确认初始密码'" prop="confirm_password" :required="!editingId"><el-input v-model="form.confirm_password" type="password" show-password /></el-form-item>
         </div>
-        <el-alert title="系统角色仅保留超级管理员、L3、L4、项目经理和项目成员；未选择角色时默认授予项目成员。" type="info" :closable="false" show-icon />
+        <el-alert title="用户管理可分配 L3、L4、项目经理和项目成员；超级管理员只能在系统初始化时配置。未选择角色时默认授予项目成员。" type="info" :closable="false" show-icon />
       </el-form>
       <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-dialog>
@@ -255,4 +267,5 @@ onMounted(async () => { await loadOptions(); await load() })
 <style scoped>
 .role-tag { margin: 2px 5px 2px 0; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+.field-hint { display: block; margin-top: 6px; color: #8d98a6; line-height: 1.5; }
 </style>

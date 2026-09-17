@@ -21,3 +21,14 @@ export interface LoginResult {
   token_type: string
   user: CurrentUser
 }
+
+export interface ProfileUpdatePayload {
+  name: string
+  email?: string | null
+}
+
+export interface PasswordChangePayload {
+  current_password: string
+  new_password: string
+  confirm_password: string
+}

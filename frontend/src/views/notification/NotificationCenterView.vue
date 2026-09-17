@@ -4,21 +4,18 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   deleteNotification,
   deleteReadNotifications,
-  getNotificationPreference,
   getNotifications,
   markAllNotificationsRead,
   markNotificationRead,
-  updateNotificationPreference,
 } from '@/api/notification'
-import type { AppNotification, NotificationPreference } from '@/types/notification'
+import type { AppNotification } from '@/types/notification'
 import { formatDateTime } from '@/utils/format'
 import { useNotificationStore } from '@/stores/notification'
 
 const notificationStore = useNotificationStore()
-const loading = ref(false), saving = ref(false), preferenceVisible = ref(false)
+const loading = ref(false)
 const rows = ref<AppNotification[]>([]), total = ref(0)
 const query = reactive({ page: 1, page_size: 20, status: '' })
-const preference = reactive<NotificationPreference>({ in_app_enabled: true, email_enabled: false, wecom_enabled: false, dingtalk_enabled: false, upcoming_hours: 24 })
 
 async function load() { loading.value = true; try { const page = await getNotifications(query); rows.value = page.items; total.value = page.total } finally { loading.value = false } }
 async function read(item: AppNotification) {
@@ -45,8 +42,6 @@ async function remove(item: AppNotification) {
   await load()
 }
 async function clearRead() { await ElMessageBox.confirm('确认清空全部已读通知吗？未读通知会保留。','清空已读通知',{type:'warning',confirmButtonText:'确认清空'});const result=await deleteReadNotifications();ElMessage.success(`已清空 ${result.deleted} 条已读通知`);await load() }
-async function openPreference() { Object.assign(preference, await getNotificationPreference()); preferenceVisible.value = true }
-async function savePreference() { saving.value = true; try { Object.assign(preference, await updateNotificationPreference(preference)); ElMessage.success('通知偏好已保存'); preferenceVisible.value = false } finally { saving.value = false } }
 function levelClass(level: string) { return `level-${level}` }
 onMounted(async () => {
   await Promise.all([load(), notificationStore.refreshUnreadCount()])
@@ -55,7 +50,7 @@ onMounted(async () => {
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">通知中心</h1><p class="page-subtitle">排期新增/变更、确认提醒、临期任务、延期和冲突消息统一归档。</p></div><div><el-button @click="openPreference">通知偏好</el-button><el-button type="primary" plain @click="readAll">全部已读</el-button><el-button type="danger" plain @click="clearRead">清空已读</el-button></div></header>
+    <header class="page-header"><div><h1 class="page-title">通知中心</h1><p class="page-subtitle">排期新增/变更、确认提醒、临期任务、延期和冲突消息统一归档。</p></div><div><el-button type="primary" plain @click="readAll">全部已读</el-button><el-button type="danger" plain @click="clearRead">清空已读</el-button></div></header>
     <section class="surface filter-bar"><el-radio-group v-model="query.status" @change="query.page=1;load()"><el-radio-button value="">全部</el-radio-button><el-radio-button value="unread">未读</el-radio-button><el-radio-button value="read">已读</el-radio-button></el-radio-group></section>
     <section class="surface notifications" v-loading="loading">
       <article v-for="item in rows" :key="item.id" class="notification" :class="[{ unread: item.status==='unread' }, levelClass(item.level)]" role="button" tabindex="0" @click="read(item)" @keydown.enter="read(item)">
@@ -64,7 +59,6 @@ onMounted(async () => {
       <el-empty v-if="!rows.length" description="暂无通知"/>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" :page-size="query.page_size" layout="total, prev, pager, next" :total="total" @change="load"/></div>
     </section>
-    <el-dialog v-model="preferenceVisible" title="通知偏好" width="520px"><el-form label-position="left" label-width="130px"><el-form-item label="站内通知"><el-switch v-model="preference.in_app_enabled"/></el-form-item><el-form-item label="电子邮件"><el-switch v-model="preference.email_enabled"/><span class="hint">需管理员配置 SMTP 且账号已填写邮箱</span></el-form-item><el-form-item label="企业微信机器人"><el-switch v-model="preference.wecom_enabled"/><span class="hint">需配置企业微信 Webhook</span></el-form-item><el-form-item label="钉钉机器人"><el-switch v-model="preference.dingtalk_enabled"/><span class="hint">需配置钉钉 Webhook</span></el-form-item><el-form-item label="临期提醒时间"><el-input-number v-model="preference.upcoming_hours" :min="1" :max="168"/><span class="hint">小时</span></el-form-item></el-form><template #footer><el-button @click="preferenceVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="savePreference">保存</el-button></template></el-dialog>
   </div>
 </template>
 

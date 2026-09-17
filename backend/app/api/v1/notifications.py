@@ -5,7 +5,6 @@ from app.core.database import get_db
 from app.core.dependencies import require_permission
 from app.core.responses import success
 from app.models.user import User
-from app.schemas.notification import NotificationPreferenceUpdate
 from app.services import notification_service
 
 router = APIRouter(prefix="/notifications", tags=["通知中心"])
@@ -28,26 +27,6 @@ def get_unread_count(
     db: Session = Depends(get_db),
 ):
     return success({"count": notification_service.unread_count(db, current_user.id)})
-
-
-@router.get("/preferences")
-def get_preferences(
-    current_user: User = Depends(require_permission("notification:view")),
-    db: Session = Depends(get_db),
-):
-    item = notification_service.get_or_create_preference(db, current_user.id)
-    db.commit()
-    db.refresh(item)
-    return success(item)
-
-
-@router.put("/preferences")
-def update_preferences(
-    payload: NotificationPreferenceUpdate,
-    current_user: User = Depends(require_permission("notification:view")),
-    db: Session = Depends(get_db),
-):
-    return success(notification_service.update_preference(db, current_user.id, payload))
 
 
 @router.post("/read-all")

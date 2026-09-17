@@ -20,12 +20,11 @@ class RoleResponse(ORMModel):
     name: str
     description: str | None
     is_system: bool
-    permission_ids: list[int] = []
-    permissions: list[str] = []
+    permission_ids: list[int] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
 
 class RolePermissionsUpdate(ORMModel):
     permission_ids: list[int] = Field(default_factory=list)
-

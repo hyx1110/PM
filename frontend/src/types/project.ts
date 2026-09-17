@@ -19,7 +19,7 @@ export interface Project {
   planned_end: string
   actual_start?: string | null
   actual_end?: string | null
-  priority: string
+  priority?: string
   description?: string | null
   remark?: string | null
   budget_hours: number
@@ -43,12 +43,8 @@ export interface ProjectPayload {
   member_ids: number[]
   department_id: number
   budget_hours: number
-  status: string
   planned_start: string
   planned_end: string
-  actual_start?: string | null
-  actual_end?: string | null
-  priority: string
   description?: string
   remark?: string
 }

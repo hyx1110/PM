@@ -2,13 +2,13 @@
 import { onMounted, reactive, ref } from 'vue'
 import { getMyTasks } from '@/api/task'
 import type { Task } from '@/types/task'
-import { formatDateTime } from '@/utils/format'
+import { formatDate } from '@/utils/format'
 
 const loading = ref(false)
 const tasks = ref<Task[]>([])
 const total = ref(0)
 const query = reactive({ page: 1, page_size: 20, status: '' })
-const statuses = ['not_started', 'running', 'completed', 'suspended', 'cancelled']
+const statuses = ['not_started', 'running', 'completed', 'suspended', 'cancelled', 'delayed']
 const statusLabel: Record<string, string> = {
   not_started: '未开始',
   running: '进行中',
@@ -52,8 +52,8 @@ onMounted(load)
         <el-table-column prop="name" label="任务名称" min-width="180" />
         <el-table-column prop="project_name" label="所属项目" min-width="160" />
         <el-table-column prop="project_manager_name" label="项目经理" width="110" />
-        <el-table-column label="预计开始" width="155"><template #default="{row}">{{ formatDateTime(row.planned_start) }}</template></el-table-column>
-        <el-table-column label="截止时间" width="155"><template #default="{row}">{{ formatDateTime(row.planned_end) }}</template></el-table-column>
+        <el-table-column label="计划开始" width="130"><template #default="{row}">{{ formatDate(row.planned_start) }}</template></el-table-column>
+        <el-table-column label="计划结束" width="130"><template #default="{row}">{{ formatDate(row.planned_end) }}</template></el-table-column>
         <el-table-column label="预计工时" width="95"><template #default="{row}">{{ row.estimated_hours }}h</template></el-table-column>
         <el-table-column label="预约工时" width="95"><template #default="{row}">{{ row.booked_hours }}h</template></el-table-column>
         <el-table-column label="任务状态" width="105"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{ statusLabel[row.effective_status] }}</el-tag></template></el-table-column>

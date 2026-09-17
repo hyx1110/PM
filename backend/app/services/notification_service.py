@@ -1,5 +1,4 @@
 import smtplib
-from datetime import datetime
 from email.message import EmailMessage
 
 import httpx
@@ -8,21 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import not_found
-from app.models.notification import Notification, NotificationPreference
+from app.models.notification import Notification
 from app.models.user import User
-from app.schemas.notification import NotificationPreferenceUpdate
 from app.utils.time import beijing_now
-
-
-def get_or_create_preference(db: Session, user_id: int) -> NotificationPreference:
-    preference = db.scalar(
-        select(NotificationPreference).where(NotificationPreference.user_id == user_id)
-    )
-    if not preference:
-        preference = NotificationPreference(user_id=user_id)
-        db.add(preference)
-        db.flush()
-    return preference
 
 
 def create_notification(
@@ -36,12 +23,9 @@ def create_notification(
     related_type: str | None = None,
     related_id: int | str | None = None,
 ) -> Notification | None:
-    preference = get_or_create_preference(db, recipient_id)
-    if not preference.in_app_enabled and not any(
-        (preference.email_enabled, preference.wecom_enabled, preference.dingtalk_enabled)
-    ):
-        return None
-    delivered = ["in_app"] if preference.in_app_enabled else []
+    # Notification preferences are no longer user-facing. Every business
+    # notification is therefore persisted to the in-app notification center.
+    delivered = ["in_app"]
     item = Notification(
         recipient_id=recipient_id,
         event_type=event_type,
@@ -150,17 +134,6 @@ def delete_read_notifications(db: Session, user_id: int) -> int:
     return result.rowcount or 0
 
 
-def update_preference(
-    db: Session, user_id: int, payload: NotificationPreferenceUpdate
-) -> NotificationPreference:
-    item = get_or_create_preference(db, user_id)
-    for key, value in payload.model_dump().items():
-        setattr(item, key, value)
-    db.commit()
-    db.refresh(item)
-    return item
-
-
 def _send_email(user: User, item: Notification) -> bool:
     if not settings.smtp_host or not settings.smtp_from or not user.email:
         return False
@@ -191,39 +164,81 @@ def _send_webhook(url: str | None, item: Notification, channel: str) -> bool:
 
 
 def dispatch_pending(db: Session, limit: int = 100) -> dict:
-    rows = db.execute(
-        select(Notification, NotificationPreference, User)
-        .join(User, User.id == Notification.recipient_id)
-        .join(NotificationPreference, NotificationPreference.user_id == Notification.recipient_id)
-        .where(
-            Notification.is_deleted.is_(False),
-            User.status == "active",
-            User.is_deleted.is_(False),
-        )
-        .order_by(Notification.created_at.desc())
-        .limit(limit)
-    ).all()
+    external_channels_configured = bool(
+        (settings.smtp_host and settings.smtp_from)
+        or settings.wecom_webhook_url
+        or settings.dingtalk_webhook_url
+    )
+    if not external_channels_configured:
+        return {"attempted": 0, "delivered": 0, "failed": 0}
     delivered_count = 0
     failed_count = 0
-    for item, preference, user in rows:
-        delivered = list(item.delivered_channels or [])
-        channels = [
-            ("email", preference.email_enabled, lambda: _send_email(user, item)),
-            ("wecom", preference.wecom_enabled, lambda: _send_webhook(settings.wecom_webhook_url, item, "wecom")),
-            ("dingtalk", preference.dingtalk_enabled, lambda: _send_webhook(settings.dingtalk_webhook_url, item, "dingtalk")),
-        ]
-        changed = False
-        for channel, enabled, sender in channels:
-            if not enabled or channel in delivered:
+    attempted_notifications = 0
+    page = 0
+    scan_size = max(limit, 100)
+    while attempted_notifications < limit:
+        rows = db.execute(
+            select(Notification, User)
+            .join(User, User.id == Notification.recipient_id)
+            .where(
+                Notification.is_deleted.is_(False),
+                User.status == "active",
+                User.is_deleted.is_(False),
+            )
+            .order_by(Notification.id.desc())
+            .offset(page * scan_size)
+            .limit(scan_size)
+        ).all()
+        if not rows:
+            break
+        page += 1
+        for item, user in rows:
+            delivered = list(item.delivered_channels or [])
+            channels = [
+                (
+                    "email",
+                    bool(settings.smtp_host and settings.smtp_from and user.email),
+                    lambda: _send_email(user, item),
+                ),
+                (
+                    "wecom",
+                    bool(settings.wecom_webhook_url),
+                    lambda: _send_webhook(
+                        settings.wecom_webhook_url, item, "wecom"
+                    ),
+                ),
+                (
+                    "dingtalk",
+                    bool(settings.dingtalk_webhook_url),
+                    lambda: _send_webhook(
+                        settings.dingtalk_webhook_url, item, "dingtalk"
+                    ),
+                ),
+            ]
+            pending_channels = [
+                (channel, sender)
+                for channel, available, sender in channels
+                if available and channel not in delivered
+            ]
+            if not pending_channels:
                 continue
-            try:
-                if sender():
-                    delivered.append(channel)
-                    delivered_count += 1
-                    changed = True
-            except (OSError, smtplib.SMTPException, httpx.HTTPError):
-                failed_count += 1
-        if changed:
-            item.delivered_channels = delivered
+            attempted_notifications += 1
+            changed = False
+            for channel, sender in pending_channels:
+                try:
+                    if sender():
+                        delivered.append(channel)
+                        delivered_count += 1
+                        changed = True
+                except (OSError, smtplib.SMTPException, httpx.HTTPError):
+                    failed_count += 1
+            if changed:
+                item.delivered_channels = delivered
+            if attempted_notifications >= limit:
+                break
     db.commit()
-    return {"delivered": delivered_count, "failed": failed_count}
+    return {
+        "attempted": attempted_notifications,
+        "delivered": delivered_count,
+        "failed": failed_count,
+    }

@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -11,17 +11,24 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.report_repository import report_repository
 from app.services.task_service import effective_status
+from app.services.project_service import manageable_project_ids
 from app.services.visibility_service import visible_schedule_user_ids
 from app.services.work_calendar_service import is_workday
 from app.utils.time import beijing_now
 
 
 def process_report(db: Session, user: User, page: int, page_size: int, **filters):
+    start_date = filters.get("start_date")
+    end_date = filters.get("end_date")
+    if start_date and end_date and end_date < start_date:
+        from app.core.exceptions import bad_request
+
+        raise bad_request("结束日期不能早于开始日期")
     items, total = report_repository.process_report(
         db,
         page,
         page_size,
-        visible_project_ids=None,
+        visible_project_ids=manageable_project_ids(db, user),
         **filters,
     )
     for item in items:
@@ -31,6 +38,7 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
 
 
 def workload_report(db: Session, user: User, start_date: date, end_date: date, department_id: int | None, user_id: int | None):
+    _validate_range(start_date, end_date)
     rows = report_repository.workload(
         db,
         start_date,
@@ -61,11 +69,25 @@ def workload_report(db: Session, user: User, start_date: date, end_date: date, d
 
 def dashboard_summary(db: Session, user: User) -> dict:
     schedule_user_ids = visible_schedule_user_ids(db, user)
-    project_filters = [Project.is_deleted.is_(False)]
+    project_filters = [
+        Project.is_deleted.is_(False),
+        Project.manager_id == user.id,
+    ]
     active_project_ids = select(Project.id).where(Project.is_deleted.is_(False))
+    managed_project_ids = select(Project.id).where(
+        Project.manager_id == user.id,
+        Project.is_deleted.is_(False),
+    )
+    assigned_task_ids = select(TaskAssignee.task_id).where(
+        TaskAssignee.user_id == user.id
+    )
     task_filters = [
         Task.is_deleted.is_(False),
         Task.project_id.in_(active_project_ids),
+        or_(
+            Task.id.in_(assigned_task_ids),
+            Task.project_id.in_(managed_project_ids),
+        ),
     ]
     schedule_filters = [ScheduleBooking.project_id.in_(active_project_ids)]
     if schedule_user_ids is not None:
@@ -87,7 +109,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
     delayed_tasks = db.scalar(
         select(func.count(Task.id)).where(
             *task_filters,
-            Task.planned_end < now,
+            Task.planned_end < today,
             Task.status.notin_({"completed", "cancelled"}),
         )
     ) or 0
@@ -95,6 +117,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
         select(func.count(ScheduleBooking.id)).where(
             ScheduleBooking.user_id == user.id,
             ScheduleBooking.status.in_({"pending", "changed"}),
+            ScheduleBooking.end_time > now,
         )
     ) or 0
     pending_project_approvals = db.scalar(
@@ -104,15 +127,13 @@ def dashboard_summary(db: Session, user: User) -> dict:
             Project.is_deleted.is_(False),
         )
     ) or 0
-    start_of_today = datetime.combine(today, datetime.min.time())
-    start_of_tomorrow = start_of_today + timedelta(days=1)
     my_today_tasks = db.scalar(
         select(func.count(Task.id)).where(
             Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
             Task.is_deleted.is_(False),
             Task.status.notin_({"completed", "cancelled"}),
-            Task.planned_start < start_of_tomorrow,
-            Task.planned_end >= start_of_today,
+            Task.planned_start <= today,
+            Task.planned_end >= today,
         )
     ) or 0
     my_upcoming_tasks = db.scalar(
@@ -120,8 +141,8 @@ def dashboard_summary(db: Session, user: User) -> dict:
             Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
             Task.is_deleted.is_(False),
             Task.status.notin_({"completed", "cancelled"}),
-            Task.planned_end >= start_of_tomorrow,
-            Task.planned_end < start_of_tomorrow + timedelta(days=7),
+            Task.planned_end > today,
+            Task.planned_end <= today + timedelta(days=7),
         )
     ) or 0
     today_count = db.scalar(

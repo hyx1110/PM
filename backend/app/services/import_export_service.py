@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.dependencies import get_role_codes
-from app.core.exceptions import BusinessException, bad_request
+from app.core.exceptions import BusinessException, bad_request, forbidden
 from app.core.security import hash_password
 from app.models.execution import ExecutionRecord
 from app.models.import_job import ImportJob
@@ -64,7 +64,6 @@ RESOURCE_HEADERS = {
         ("budget_hours", "项目总工时*"),
         ("planned_start", "计划开始*"),
         ("planned_end", "计划结束*"),
-        ("priority", "优先级"),
         ("description", "描述"),
         ("remark", "备注"),
     ],
@@ -77,7 +76,6 @@ RESOURCE_HEADERS = {
         ("planned_start", "计划开始*"),
         ("planned_end", "计划结束*"),
         ("estimated_hours", "预计工时"),
-        ("status", "状态"),
         ("description", "描述"),
         ("remark", "备注"),
     ],
@@ -85,8 +83,8 @@ RESOURCE_HEADERS = {
 
 EXAMPLES = {
     "users": ["E10001", "张三", "", "zhangsan@example.com", "D001", "", "", "project_member", "active"],
-    "projects": ["P-2026-001", "示例项目", "General", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "high", "", ""],
-    "tasks": ["P-2026-001", "", "需求分析", "Project", "E10002,E10003", datetime(2026, 10, 1, 9), datetime(2026, 10, 3, 18), 24, "not_started", "", ""],
+    "projects": ["P-2026-001", "示例项目", "General", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "", ""],
+    "tasks": ["P-2026-001", "", "需求分析", "Project", "E10002,E10003", date(2026, 10, 1), date(2026, 10, 3), 24, "", ""],
 }
 
 
@@ -132,7 +130,7 @@ def create_template(resource_type: str) -> bytes:
     date_fields = {"planned_start", "planned_end"}
     for index, (field, _) in enumerate(headers, 1):
         if field in date_fields:
-            sheet.cell(2, index).number_format = "yyyy-mm-dd hh:mm"
+            sheet.cell(2, index).number_format = "yyyy-mm-dd"
     field_index = {field: index + 1 for index, (field, _) in enumerate(headers)}
     if "status" in field_index:
         status_values = {
@@ -148,7 +146,7 @@ def create_template(resource_type: str) -> bytes:
     notes = book.create_sheet("填写说明", 1)
     notes.append(["规则", "说明"])
     notes.append(["必填字段", "标题包含 * 的列必须填写；请勿修改标题行。"])
-    notes.append(["日期", "请使用 Excel 日期/时间单元格或 YYYY-MM-DD HH:mm 格式。"])
+    notes.append(["日期", "项目和任务计划日期请使用 Excel 日期单元格或 YYYY-MM-DD 格式。"])
     notes.append(["数字", "工时等数值请使用真实数字单元格，不要添加单位。"])
     if resource_type == "projects":
         notes.append(["项目成员", "创建项目时必须填写至少一名项目成员；多个员工号使用英文逗号分隔，项目经理无需重复填写。"])
@@ -190,6 +188,10 @@ def _lookup(db: Session, model, column, value: Any, message: str):
     statement = select(model).where(column == value)
     if model is User:
         statement = statement.where(User.is_deleted.is_(False))
+    elif model is Project:
+        statement = statement.where(Project.is_deleted.is_(False))
+    elif model is Task:
+        statement = statement.where(Task.is_deleted.is_(False))
     item = db.scalar(statement)
     if not item:
         raise ValueError(message)
@@ -206,7 +208,15 @@ def _required_lookup(db: Session, model, column, value: Any, message: str):
 
 
 def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
-    department = _lookup(db, Department, Department.code, row.get("department_code"), "部门编码不存在")
+    department = _required_lookup(
+        db,
+        Department,
+        Department.code,
+        row.get("department_code"),
+        "部门编码不能为空且必须存在",
+    )
+    if department and department.status != "active":
+        raise ValueError("不能把用户导入到已停用的部门")
     organization = None
     if row.get("organization_code"):
         if not department:
@@ -217,6 +227,8 @@ def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
         organization = db.scalar(select(Organization).where(*organization_filters).limit(1))
         if not organization:
             raise ValueError("组织编码不存在或不属于所选部门")
+        if organization.status != "active":
+            raise ValueError("不能把用户导入到已停用的组织")
     supervisor = _lookup(
         db,
         User,
@@ -224,11 +236,15 @@ def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
         row.get("supervisor_employee_no"),
         "直属上级员工号不存在",
     )
+    if supervisor and supervisor.status != "active":
+        raise ValueError("直属上级已停用")
     role_codes = [item.strip() for item in str(row.get("role_codes") or "").split(",") if item.strip()]
     roles = db.scalars(select(Role).where(Role.code.in_(role_codes))).all() if role_codes else []
     missing_roles = set(role_codes) - {role.code for role in roles}
     if missing_roles:
         raise ValueError(f"角色编码不存在：{', '.join(sorted(missing_roles))}")
+    if "super_admin" in role_codes:
+        raise ValueError("超级管理员只能在系统初始化时配置，不能通过导入新增")
     payload = UserCreate(
         employee_no=row.get("employee_no"),
         name=row.get("name"),
@@ -277,6 +293,8 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         raise ValueError("项目只能由项目经理本人导入")
     if manager.department_id != department.id:
         raise ValueError("项目经理必须属于项目所属部门")
+    if department.status != "active":
+        raise ValueError("不能向已停用的部门导入项目")
     member_employee_nos = [
         value.strip()
         for value in re.split(r"[,，;；]", str(row.get("member_employee_nos") or ""))
@@ -314,10 +332,8 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         member_ids=[member.id for member in ordered_member_users],
         department_id=department.id,
         budget_hours=Decimal(str(row.get("budget_hours") or 0)),
-        status="Draft",
         planned_start=_to_date(row.get("planned_start"), "计划开始"),
         planned_end=_to_date(row.get("planned_end"), "计划结束"),
-        priority=row.get("priority") or "medium",
         description=row.get("description") or None,
         remark=row.get("remark") or None,
     )
@@ -327,8 +343,10 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         approver = db.get(User, operator.supervisor_id) if operator.supervisor_id else None
         if not approver or approver.is_deleted or approver.status != "active":
             raise ValueError("当前用户未设置有效直属主管，无法导入并提交项目")
+        if approver.id == operator.id:
+            raise ValueError("项目创建人不能审批自己的项目")
     item = Project(
-        **payload.model_dump(exclude={"status", "member_ids"}),
+        **payload.model_dump(exclude={"member_ids"}),
         code=_generate_project_code(db),
         status="Planned" if auto_approved else "Draft",
         approval_status="approved" if auto_approved else "pending",
@@ -408,30 +426,60 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         )
     parent = None
     if row.get("parent_task_name"):
-        parent = db.scalar(
-            select(Task).where(Task.project_id == project.id, Task.name == row["parent_task_name"])
+        parent_matches = list(
+            db.scalars(
+                select(Task).where(
+                    Task.project_id == project.id,
+                    Task.name == row["parent_task_name"],
+                    Task.is_deleted.is_(False),
+                )
+            ).all()
         )
-        if not parent:
+        if not parent_matches:
             raise ValueError("上级任务名称不存在")
+        if len(parent_matches) > 1:
+            raise ValueError("上级任务名称不唯一，请先调整任务名称后再导入")
+        parent = parent_matches[0]
         if parent.parent_id is not None:
             raise ValueError("系统只支持两级任务，上级任务不能是二级任务")
+        if parent.status in {"completed", "cancelled"}:
+            raise ValueError("不能在已完成或已取消的任务下导入子任务")
+        if db.scalar(
+            select(ExecutionRecord.id).where(
+                ExecutionRecord.task_id == parent.id,
+                ExecutionRecord.is_deleted.is_(False),
+            ).limit(1)
+        ):
+            raise ValueError("已有执行记录的任务不能再作为汇总任务")
+        if db.scalar(
+            select(ScheduleBooking.id).where(
+                ScheduleBooking.task_id == parent.id,
+                ScheduleBooking.status.notin_({"rejected", "cancelled", "withdrawn"}),
+            ).limit(1)
+        ):
+            raise ValueError("已有有效预约记录的任务不能再作为汇总任务")
     payload = TaskCreate(
         project_id=project.id,
         parent_id=parent.id if parent else None,
         name=row.get("name"),
         task_type=row.get("task_type") or "Project",
         owner_ids=[owner.id for owner in ordered_owners],
-        planned_start=_to_datetime(row.get("planned_start"), "计划开始"),
-        planned_end=_to_datetime(row.get("planned_end"), "计划结束"),
+        planned_start=_to_date(row.get("planned_start"), "计划开始"),
+        planned_end=_to_date(row.get("planned_end"), "计划结束"),
         estimated_hours=Decimal(str(row.get("estimated_hours") or 0)),
-        status=row.get("status") or "not_started",
         description=row.get("description") or None,
         remark=row.get("remark") or None,
     )
+    if (
+        payload.planned_start < project.planned_start
+        or payload.planned_end > project.planned_end
+    ):
+        raise ValueError("任务计划时间必须位于项目计划日期范围内")
     item = Task(
         **payload.model_dump(exclude={"owner_ids"}),
         owner_id=ordered_owners[0].id,
         priority="medium",
+        status="not_started",
     )
     db.add(item)
     db.flush()
@@ -484,6 +532,8 @@ def import_workbook(
     handler = IMPORT_HANDLERS.get(resource_type)
     if not headers or not handler:
         raise bad_request("unsupported import resource")
+    if resource_type == "users" and "super_admin" not in get_role_codes(db, operator.id):
+        raise forbidden("只有超级管理员可以导入用户和分配系统角色")
     if not filename.lower().endswith(".xlsx"):
         raise bad_request("only .xlsx files are supported")
     if len(content) > settings.import_max_mb * 1024 * 1024:
@@ -527,6 +577,10 @@ def import_workbook(
             first = exc.errors()[0]
             if len(errors) < 500:
                 errors.append({"row": row_number, "field": ".".join(map(str, first["loc"])), "message": first["msg"]})
+        except BusinessException as exc:
+            failed_rows += 1
+            if len(errors) < 500:
+                errors.append({"row": row_number, "field": None, "message": exc.message})
         except (ValueError, TypeError, IntegrityError) as exc:
             failed_rows += 1
             if len(errors) < 500:
@@ -581,7 +635,13 @@ def list_import_jobs(db: Session, page: int, page_size: int, resource_type: str 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-def _export_book(title: str, headers: list[str], rows: list[list[Any]], date_columns: set[int]) -> bytes:
+def _export_book(
+    title: str,
+    headers: list[str],
+    rows: list[list[Any]],
+    date_columns: set[int],
+    datetime_columns: set[int] | None = None,
+) -> bytes:
     book = Workbook()
     sheet = book.active
     sheet.title = title[:31]
@@ -591,6 +651,8 @@ def _export_book(title: str, headers: list[str], rows: list[list[Any]], date_col
     _style_sheet(sheet, [18] * len(headers))
     for row in sheet.iter_rows(min_row=2):
         for index in date_columns:
+            row[index - 1].number_format = "yyyy-mm-dd"
+        for index in datetime_columns or set():
             row[index - 1].number_format = "yyyy-mm-dd hh:mm"
     summary = book.create_sheet("导出说明")
     summary.append(["项目", "内容"])
@@ -632,26 +694,29 @@ def export_schedules(db: Session, user: User, start_date: date, end_date: date) 
         [item.id, user_name, code, project_name, task_name, item.start_time, item.end_time, float(item.planned_hours), item.status, item.remark]
         for item, user_name, code, project_name, task_name in rows
     ]
-    return _export_book("排期明细", ["预约ID", "人员", "项目编号", "项目", "任务", "开始", "结束", "计划工时", "状态", "备注"], values, {6, 7})
+    return _export_book(
+        "排期明细",
+        ["预约ID", "人员", "项目编号", "项目", "任务", "开始", "结束", "计划工时", "状态", "备注"],
+        values,
+        set(),
+        {6, 7},
+    )
 
 
 def export_executions(db: Session, user: User, start_date: date, end_date: date) -> bytes:
     _validate_export_range(start_date, end_date)
-    scope = manageable_project_ids(db, user)
     filters = [
         ExecutionRecord.is_deleted.is_(False),
         Task.is_deleted.is_(False),
         Project.is_deleted.is_(False),
-        ExecutionRecord.actual_start >= datetime.combine(start_date, time.min),
-        ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), time.min),
-    ]
-    if scope is not None:
-        filters.append(
-            or_(
-                Task.project_id.in_(scope or {-1}),
-                ExecutionRecord.user_id == user.id,
-            )
+        func.coalesce(
+            ExecutionRecord.actual_end,
+            ExecutionRecord.actual_start,
         )
+        >= start_date,
+        ExecutionRecord.actual_start <= end_date,
+        ExecutionRecord.user_id == user.id,
+    ]
     rows = db.execute(
         select(ExecutionRecord, User.name, Project.code, Project.name, Task.name)
         .join(User, User.id == ExecutionRecord.user_id)

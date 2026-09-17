@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,40 +34,42 @@ def get_evaluation(db: Session, task_id: int, user: User) -> dict | None:
 
 
 def upsert_evaluation(db: Session, task_id: int, payload: EvaluationUpsert, user: User) -> TaskEvaluation:
-    task = db.get(Task, task_id)
+    task = db.scalar(
+        select(Task)
+        .where(Task.id == task_id, Task.is_deleted.is_(False))
+        .with_for_update()
+    )
     if not task or task.is_deleted:
         raise not_found("task not found")
-    if "department_manager" not in get_role_codes(db, user.id):
-        raise forbidden("只有 L3 可以进行任务达成评价")
     project = db.get(Project, task.project_id)
+    if (
+        not project
+        or project.manager_id != user.id
+        or "project_manager" not in get_role_codes(db, user.id)
+    ):
+        raise forbidden("只有本项目的项目经理可以进行评价")
     if not project or project.status != "Completed":
         raise bad_request("项目执行完成后才能进行评价")
     if task.status != "completed":
         raise bad_request("任务完成后才能进行评价")
     evaluation = db.scalar(select(TaskEvaluation).where(TaskEvaluation.task_id == task_id))
-    before = model_to_dict(evaluation) if evaluation else None
     if evaluation:
-        for key, value in payload.model_dump().items():
-            setattr(evaluation, key, value)
-        evaluation.evaluator_id = user.id
-        evaluation.evaluated_at = beijing_now()
-    else:
-        evaluation = TaskEvaluation(
-            task_id=task_id,
-            evaluator_id=user.id,
-            evaluated_at=beijing_now(),
-            **payload.model_dump(),
-        )
-        db.add(evaluation)
+        raise bad_request("该任务已完成评价，不能重复评价")
+    evaluation = TaskEvaluation(
+        task_id=task_id,
+        evaluator_id=user.id,
+        evaluated_at=beijing_now(),
+        **payload.model_dump(),
+    )
+    db.add(evaluation)
     db.flush()
     log_operation(
         db,
         operator_id=user.id,
         module="evaluation",
-        action="upsert",
+        action="create",
         object_type="task_evaluation",
         object_id=evaluation.id,
-        before_data=before,
         after_data=model_to_dict(evaluation),
     )
     db.commit()

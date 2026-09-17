@@ -29,6 +29,10 @@ def list_blocks(
     page_size: int,
     **filters,
 ) -> dict:
+    start_date = filters.get("start_date")
+    end_date = filters.get("end_date")
+    if start_date and end_date and end_date < start_date:
+        raise bad_request("结束日期不能早于开始日期")
     items, total = personal_time_repository.list(
         db,
         page,

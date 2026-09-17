@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -12,15 +12,16 @@ import {
   updateDepartment,
   updateOrganization,
 } from '@/api/organization'
-import { getUsers } from '@/api/user'
+import { getL3UserOptions, getUserOptions } from '@/api/user'
 import type { Department, OrganizationNode } from '@/types/organization'
-import type { User } from '@/types/user'
+import type { UserOption } from '@/types/user'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const loading = ref(false)
 const departments = ref<Department[]>([])
-const users = ref<User[]>([])
+const users = ref<UserOption[]>([])
+const l3Users = ref<UserOption[]>([])
 const tree = ref<OrganizationNode[]>([])
 const activeDepartment = ref<number>()
 const departmentDialog = ref(false)
@@ -31,6 +32,40 @@ const departmentForm = reactive({ code: '', name: '', manager_id: null as number
 const organizationForm = reactive({ department_id: 0, parent_id: null as number | null, code: '', name: '', level: 'L1' as OrganizationNode['level'], manager_id: null as number | null, status: 'active' })
 const rules: FormRules = { code: [{ required: true, message: '请输入编码' }], name: [{ required: true, message: '请输入名称' }] }
 const formRef = ref<FormInstance>()
+type DisplayNode = (Omit<OrganizationNode, 'children'> & { node_type: 'organization'; children: DisplayNode[] }) | {
+  id: string; node_type: 'user_group' | 'user'; name: string; employee_no?: string; status?: string; children: DisplayNode[]
+}
+function organizationDisplayNode(node: OrganizationNode): DisplayNode {
+  return {
+    ...node,
+    node_type: 'organization',
+    children: [
+      ...(node.children || []).map(organizationDisplayNode),
+      ...(node.users || []).map((user) => ({
+        id: `user-${user.id}`, node_type: 'user' as const, name: user.name,
+        employee_no: user.employee_no, status: user.status, children: [],
+      })),
+    ],
+  }
+}
+const displayTree = computed<DisplayNode[]>(() => {
+  const result = tree.value.map(organizationDisplayNode)
+  const unassigned = users.value.filter(
+    (item) => item.department_id === activeDepartment.value && !item.organization_id,
+  )
+  if (unassigned.length) {
+    result.push({
+      id: `unassigned-${activeDepartment.value}`,
+      node_type: 'user_group',
+      name: '未分配组织',
+      children: unassigned.map((user) => ({
+        id: `unassigned-user-${user.id}`, node_type: 'user', name: user.name,
+        employee_no: user.employee_no, children: [],
+      })),
+    })
+  }
+  return result
+})
 
 async function load() {
   loading.value = true
@@ -40,7 +75,10 @@ async function load() {
       activeDepartment.value = departments.value[0]?.id
     }
     tree.value = await getOrganizationTree(activeDepartment.value)
-    users.value = (await getUsers({ page: 1, page_size: 200, status: 'active' })).items
+    ;[users.value, l3Users.value] = await Promise.all([
+      getUserOptions(),
+      getL3UserOptions(),
+    ])
   } finally { loading.value = false }
 }
 
@@ -91,7 +129,7 @@ function clearToNull() {
 
 async function removeDepartment(item: Department) {
   await ElMessageBox.confirm(
-    `确认删除部门“${item.name}”吗？部门下必须已无组织节点，用户和项目的部门归属将被清空。`,
+    `确认删除部门“${item.name}”吗？删除前必须先处理部门下的组织、用户和项目。`,
     '删除部门',
     { type: 'warning', confirmButtonText: '确认删除' },
   )
@@ -128,9 +166,11 @@ onMounted(load)
       </aside>
       <main class="surface tree-card" v-loading="loading">
         <div class="tree-head"><div><h3>组织层级</h3><p>展开节点查看下级组织，最多维护到 L4。</p></div></div>
-        <el-tree :data="tree" node-key="id" default-expand-all :expand-on-click-node="false">
+        <el-tree :data="displayTree" node-key="id" default-expand-all :expand-on-click-node="false">
           <template #default="{ data }">
-            <div class="tree-node"><div><el-tag size="small" effect="plain">{{ data.level }}</el-tag><strong>{{ data.name }}</strong><span>{{ data.code }}</span><el-tag v-if="data.data_source==='hrdb'" size="small" type="info" effect="plain">HRDB 只读</el-tag><span v-if="data.manager_name">主管：{{ data.manager_name }}</span></div><div v-if="userStore.hasPermission('organization:edit') && data.data_source!=='hrdb'"><el-button v-if="data.level!=='L4'" link @click.stop="editOrganization(undefined,data)">添加下级</el-button><el-button link @click.stop="editOrganization(data)">编辑</el-button><el-button link type="danger" @click.stop="removeOrganization(data)">删除</el-button></div></div>
+            <div v-if="data.node_type==='user'" class="tree-node user-node"><div><span class="user-dot"></span><strong>{{ data.name }}</strong><span>{{ data.employee_no }}</span><el-tag v-if="data.status==='disabled'" size="small" type="info">已停用</el-tag></div></div>
+            <div v-else-if="data.node_type==='user_group'" class="tree-node group-node"><div><strong>{{ data.name }}</strong><span>{{ data.children.length }} 人</span></div></div>
+            <div v-else class="tree-node"><div><el-tag size="small" effect="plain">{{ data.level }}</el-tag><strong>{{ data.name }}</strong><span>{{ data.code }}</span><el-tag v-if="data.data_source==='hrdb'" size="small" type="info" effect="plain">HRDB 只读</el-tag><span v-if="data.manager_name">主管：{{ data.manager_name }}</span><span>{{ data.users?.length || 0 }} 人</span></div><div v-if="userStore.hasPermission('organization:edit') && data.data_source!=='hrdb'"><el-button v-if="data.level!=='L4'" link @click.stop="editOrganization(undefined,data)">添加下级</el-button><el-button link @click.stop="editOrganization(data)">编辑</el-button><el-button link type="danger" @click.stop="removeOrganization(data)">删除</el-button></div></div>
           </template>
         </el-tree>
         <el-empty v-if="!tree.length" description="该部门暂无组织节点" />
@@ -138,7 +178,7 @@ onMounted(load)
     </section>
 
     <el-dialog v-model="departmentDialog" :title="departmentId?'编辑部门':'新增部门'" width="500px">
-      <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item label="L3（部门负责人/追加工时审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-form>
+      <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item v-if="departmentId" label="L3（部门负责人/追加工时审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in l3Users.filter(user=>user.department_id===departmentId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select></el-form-item><el-alert v-else title="请先创建部门，再把 L3 用户分配到该部门，最后回到编辑部门设置负责人。" type="info" :closable="false" show-icon /></el-form>
       <template #footer><el-button @click="departmentDialog=false">取消</el-button><el-button type="primary" @click="saveDepartment">保存</el-button></template>
     </el-dialog>
     <el-dialog v-model="organizationDialog" :title="organizationId?'编辑组织':'新增组织'" width="540px">
@@ -157,6 +197,6 @@ onMounted(load)
 .department-actions { display:flex;align-items:center; }
 .departments strong,.departments small { display:block; }.departments strong{color:#445064;font-size:13px}.departments small{margin-top:3px;color:#9aa3b1;font-size:10px}
 .tree-card { padding:22px; }.tree-head p{margin:-10px 8px 20px;color:#9aa3b1;font-size:12px}
-.tree-node { display:flex;flex:1;align-items:center;justify-content:space-between;padding:9px 6px; }.tree-node>div{display:flex;align-items:center;gap:12px}.tree-node strong{color:#384559}.tree-node span{color:#8c96a5;font-size:12px}
+.tree-node { display:flex;flex:1;align-items:center;justify-content:space-between;padding:9px 6px; }.tree-node>div{display:flex;align-items:center;gap:12px}.tree-node strong{color:#384559}.tree-node span{color:#8c96a5;font-size:12px}.user-node{padding-block:6px}.user-node strong{font-weight:500}.user-dot{width:7px;height:7px;border-radius:50%;background:#7ca0c2}.group-node{border-radius:7px;background:#f6f8fa;padding-inline:10px}
 .form-grid { display:grid;grid-template-columns:1fr 1fr;gap:0 16px; }
 </style>

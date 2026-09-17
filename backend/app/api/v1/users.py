@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import require_permission
+from app.core.dependencies import get_permission_codes, require_permission
+from app.core.exceptions import forbidden
 from app.core.responses import success
 from app.models.user import User
 from app.schemas.user import AssignRolesRequest, UserCreate, UserUpdate
@@ -31,6 +32,10 @@ def create_user(
     current_user: User = Depends(require_permission("user:edit")),
     db: Session = Depends(get_db),
 ):
+    if payload.role_ids and "role:edit" not in get_permission_codes(
+        db, current_user.id
+    ):
+        raise forbidden("创建用户时分配系统角色需要角色维护权限")
     user = user_service.create_user(db, payload, current_user.id)
     return success(user_service.user_detail(db, user.id))
 
@@ -51,6 +56,10 @@ def update_user(
     current_user: User = Depends(require_permission("user:edit")),
     db: Session = Depends(get_db),
 ):
+    if payload.role_ids is not None and "role:edit" not in get_permission_codes(
+        db, current_user.id
+    ):
+        raise forbidden("修改用户系统角色需要角色维护权限")
     user_service.update_user(db, user_id, payload, current_user.id)
     return success(user_service.user_detail(db, user_id))
 

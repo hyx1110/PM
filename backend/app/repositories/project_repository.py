@@ -7,8 +7,17 @@ from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.user import User
+from app.utils.time import beijing_now
 
-BOOKED_HOUR_STATUSES = {"pending", "confirmed", "changed", "running", "completed"}
+def booked_schedule_predicate():
+    """Count accepted work and only still-actionable approval requests."""
+    return or_(
+        ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+        (
+            ScheduleBooking.status.in_({"pending", "changed"})
+            & (ScheduleBooking.end_time > beijing_now())
+        ),
+    )
 
 
 def booked_hours_expression():
@@ -16,7 +25,7 @@ def booked_hours_expression():
         select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0))
         .where(
             ScheduleBooking.project_id == Project.id,
-            ScheduleBooking.status.in_(BOOKED_HOUR_STATUSES),
+            booked_schedule_predicate(),
         )
         .correlate(Project)
         .scalar_subquery()

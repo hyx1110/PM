@@ -19,7 +19,7 @@ tasks 1 ── 1 task_evaluations
 
 projects/tasks/users 1 ── n risk_records
 users 1 ── n notifications
-users 1 ── 1 notification_preferences
+users 1 ── 1 notification_preferences（历史兼容表，无运行时入口）
 users 1 ── n import_jobs
 users 1 ── n operation_logs
 schedule_bookings 1 ── n schedule_bookings(source_booking_id)
@@ -37,9 +37,9 @@ work_calendar_days             法定节假日/调休日期覆盖
 | `schedule_bookings` | 增加 `version`、`source_booking_id` | 拖动乐观锁；复制周来源追溯 |
 | `risk_records` | 增加 `fingerprint`、标题、来源 JSON、检测/到期/解决时间 | 指纹唯一去重，风险处理闭环 |
 | `notifications` | 新表并增加 `is_deleted` | 收件人、事件、关联对象、渠道、已读状态和软删除标记 |
-| `notification_preferences` | 新表 | `user_id` 唯一，站内/邮件/企业微信/钉钉与提醒小时 |
+| `notification_preferences` | 历史兼容表 | 当前版本不再读写，保留仅用于兼容既有迁移历史 |
 | `import_jobs` | 新表 | 文件名、对象、总计/成功/失败、最多 500 条错误 JSON、操作人 |
-| `projects` | 增加 `budget_hours`、审批状态/创建人/直属审批人字段 | 普通项目经理提交给直属主管；L3/超级管理员创建自动通过；额度控制预约总工时 |
+| `projects` | 增加 `budget_hours`、审批状态/创建人/直属审批人字段 | 普通项目经理提交给直属主管；项目经理兼具 L3/超级管理员时自动通过；额度控制预约总工时 |
 | `project_hour_requests` | 新表 | 项目经理追加工时申请、L3 审批结果与意见 |
 | `work_calendar_days` | 新表 | `holiday/workday` 日期覆盖；迁移内置 2026 法定安排 |
 | `personal_time_blocks` | 新表 | 用户本人的培训/会议/休假/出差/其他占用，支持生效与撤回状态 |
@@ -63,7 +63,7 @@ work_calendar_days             法定节假日/调休日期覆盖
 - `user_roles` 只保留 `user_id`、`role_id` 唯一组合，不记录角色来源。
 - 每个有效用户至少拥有一个系统角色；没有显式角色的升级数据和新用户默认获得 `project_member`。
 - 部门、组织表自身的 `data_source` 字段不参与用户角色分配。
-- 普通项目经理提交项目时将当时有效的 `supervisor_id` 写入 `projects.approver_id`，后续仅该直属主管可批准或驳回；L3 和超级管理员创建项目时直接批准。追加工时仍由项目所属部门 L3 审批。
+- 普通项目经理提交项目时将当时有效的 `supervisor_id` 写入 `projects.approver_id`，后续仅该直属主管可批准或驳回；项目经理同时具备 L3 或超级管理员角色时直接批准。追加工时仍由项目所属部门 L3 审批。
 - 项目创建时必须同时写入至少一名普通成员；项目经理以 `project_role=manager` 写入 `project_members` 并作为不可移除的固定成员，所有任务负责人和预约对象统一校验当前有效成员关系。
 - 任务持久化状态限定为 `not_started/running/completed/suspended/cancelled`；`delayed` 仅根据计划结束时间动态计算，不再作为数据库状态保存。
 - `task_assignees(task_id,user_id)` 唯一；`tasks.owner_id` 保留为兼容主负责人，不再作为完整负责人集合。
@@ -78,7 +78,7 @@ work_calendar_days             法定节假日/调休日期覆盖
 - `risk_records.fingerprint` 唯一索引用于扫描幂等。
 - 通知按 `recipient_id`、`status`、`event_type`、`related_id` 查询。
 - 导入任务按 `resource_type`、`status`、`operator_id` 查询。
-- `notification_preferences.user_id` 唯一。
+- `notification_preferences.user_id` 仍保留唯一约束，但当前版本不提供通知偏好接口或界面。
 - 排期保留 `ix_schedule_user_range` 冲突索引，并新增复制来源索引。
 - 项目审批状态、创建人/审批人、追加工时项目/状态/申请人和工作日历日期均有索引。
 - 个人时间按用户、开始、结束和状态建立组合索引，用于重叠时段查询。

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     wecom_webhook_url: str | None = None
     dingtalk_webhook_url: str | None = None
+    notification_upcoming_hours: int = Field(default=24, ge=1, le=168)
     initial_admin_username: str = "admin"
     initial_admin_password: str = "ChangeMe123!"
     initial_admin_name: str = "系统管理员"

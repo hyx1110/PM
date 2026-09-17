@@ -122,8 +122,10 @@ class ScheduleBatchCreate(ORMModel):
 class ScheduleCopyWeek(ORMModel):
     source_week_start: datetime
     target_week_start: datetime
-    user_ids: list[int] = []
-    include_statuses: list[str] = ["pending", "confirmed"]
+    user_ids: list[int] = Field(default_factory=list)
+    include_statuses: list[str] = Field(
+        default_factory=lambda: ["pending", "confirmed"]
+    )
 
     @model_validator(mode="after")
     def validate_weeks(self):

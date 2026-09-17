@@ -16,8 +16,8 @@ import {
   withdrawSchedule,
 } from '@/api/schedule'
 import { getProjectMembers, getProjects } from '@/api/project'
-import { getTasks } from '@/api/task'
-import { getScheduleUserOptions } from '@/api/user'
+import { getAllTasks } from '@/api/task'
+import { getScheduleProjectOptions, getScheduleUserOptions } from '@/api/user'
 import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
 import { getWorkCalendar } from '@/api/work-calendar'
 import {
@@ -54,17 +54,16 @@ const boardSchedules = computed(() =>
 )
 const personalBlocks = ref<PersonalTimeBlock[]>([])
 const projects = ref<Project[]>([])
+const filterProjects = ref<Array<{ id: number; code: string; name: string }>>([])
 const tasks = ref<Task[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
 const filter = reactive({
   project_id: undefined as number | undefined,
-  user_id: undefined as number | undefined,
   department_id: undefined as number | undefined,
   organization_id: undefined as number | undefined,
-  employee_no: '',
-  name: '',
+  person_keyword: '',
 })
 const bookingDialog = ref(false)
 const detailDialog = ref(false)
@@ -142,6 +141,18 @@ const personalTypeLabel: Record<string, string> = {
   business_trip: '出差',
   other: '其他安排',
 }
+const projectColors = [
+  ['#dfeaf4', '#355878', '#9db9d2'], ['#e4f1e8', '#426b50', '#a7cbb2'],
+  ['#eee7f7', '#694f85', '#cbb8df'], ['#f7edd9', '#806238', '#dfc48e'],
+  ['#e3f0f7', '#426b83', '#a8c9dc'], ['#f3e9e8', '#885d59', '#d8b5b1'],
+]
+function scheduleColorStyle(item: Schedule) {
+  if (['pending', 'changed'].includes(item.status)) {
+    return { background: '#e7eaee', color: '#66717f', borderColor: '#cbd1d8' }
+  }
+  const [background, color, borderColor] = projectColors[Math.abs(item.project_id) % projectColors.length]
+  return { background, color, borderColor }
+}
 const weekDays = computed(() => {
   const current = dayjs(anchorDate.value)
   const monday = current.subtract((current.day() + 6) % 7, 'day')
@@ -172,10 +183,9 @@ const timelineDayMeta = computed<Record<string, ScheduleDayMeta>>(() =>
 const visibleUsers = computed(() => {
   const filtered = users.value.filter(
     (item) =>
-      (!filter.user_id || item.id === filter.user_id)
-      && (!filter.department_id || item.department_id === filter.department_id),
+      !filter.department_id || item.department_id === filter.department_id,
   )
-  const current = users.value.find((item) => item.id === userStore.profile?.id)
+  const current = filtered.find((item) => item.id === userStore.profile?.id)
   return current
     ? [current, ...filtered.filter((item) => item.id !== current.id)]
     : filtered
@@ -340,49 +350,104 @@ function batchDateIsWorkday() {
   return ![0, 6].includes(dayjs(batchForm.work_date).day())
 }
 
+async function loadAllBoardSchedules() {
+  const items: Schedule[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await getSchedules({
+      page,
+      page_size: 500,
+      start_date: range.value.start,
+      end_date: range.value.end,
+      project_id: filter.project_id,
+    })
+    items.push(...result.items)
+    total = result.total
+    page += 1
+    if (!result.items.length) break
+  } while (items.length < total)
+  return items
+}
+
+async function loadAllPersonalBlocks() {
+  const items: PersonalTimeBlock[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await getPersonalTimeBlocks({
+      page,
+      page_size: 500,
+      start_date: range.value.start,
+      end_date: range.value.end,
+      status: 'active',
+    })
+    items.push(...result.items)
+    total = result.total
+    page += 1
+    if (!result.items.length) break
+  } while (items.length < total)
+  return items
+}
+
+async function loadAllProjects() {
+  const items: Project[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await getProjects({ page, page_size: 200 })
+    items.push(...result.items)
+    total = result.total
+    page += 1
+    if (!result.items.length) break
+  } while (items.length < total)
+  return items
+}
+
 async function load() {
   loading.value = true
   try {
     await loadVisibleCalendars()
-    const [scheduleResult, personalResult] = await Promise.all([
-      getSchedules({
-        page: 1,
-        page_size: 500,
-        start_date: range.value.start,
-        end_date: range.value.end,
-        project_id: filter.project_id,
-      }),
-      getPersonalTimeBlocks({
-        page: 1,
-        page_size: 500,
-        start_date: range.value.start,
-        end_date: range.value.end,
-        status: 'active',
-      }),
+    const [scheduleItems, personalItems] = await Promise.all([
+      loadAllBoardSchedules(),
+      loadAllPersonalBlocks(),
     ])
-    schedules.value = scheduleResult.items
-    personalBlocks.value = personalResult.items
+    schedules.value = scheduleItems
+    personalBlocks.value = personalItems
   } finally {
     loading.value = false
   }
 }
 
 async function loadOptions() {
-  const [projectResult, taskResult, userResult, departmentResult, organizationResult] = await Promise.all([
-    getProjects({ page: 1, page_size: 200 }),
-    getTasks({ page: 1, page_size: 200 }),
+  const [projectItems, scheduleProjectItems, userResult, departmentResult, organizationResult] = await Promise.all([
+    loadAllProjects(),
+    getScheduleProjectOptions(),
     getScheduleUserOptions({
       project_id: filter.project_id,
-      name: filter.name || undefined,
-      employee_no: filter.employee_no || undefined,
+      keyword: filter.person_keyword || undefined,
       department_id: filter.department_id,
       organization_id: filter.organization_id,
     }),
     getDepartmentOptions(),
     getOrganizationTree(),
   ])
-  projects.value = projectResult.items
-  tasks.value = taskResult.items
+  const taskGroups = await Promise.all(
+    projectItems.map((project) => getAllTasks({ project_id: project.id, managed_project_scope: true })),
+  )
+  projects.value = projectItems
+  filterProjects.value = scheduleProjectItems
+  const allProjectTasks = taskGroups.flat()
+  const summaryTaskIds = new Set(
+    allProjectTasks
+      .map((task) => task.parent_id)
+      .filter((id): id is number => Boolean(id)),
+  )
+  tasks.value = allProjectTasks.filter(
+    (task) =>
+      !summaryTaskIds.has(task.id)
+      && !['completed', 'cancelled'].includes(task.status),
+  )
   users.value = userResult
   departments.value = departmentResult
   organizations.value = organizationResult
@@ -422,9 +487,27 @@ function openPersonalCreate(slot?: { date: string; time: string }) {
   personalDialog.value = true
 }
 
-function handleBlankSlot(slot: { userId: number; date: string; time: string }) {
+async function handleBlankSlot(slot: { userId: number; date: string; time: string }) {
   if (slot.userId === userStore.profile?.id) {
-    openPersonalCreate({ date: slot.date, time: slot.time })
+    if (!canBook.value || !bookableProjects.value.length) {
+      openPersonalCreate({ date: slot.date, time: slot.time })
+      return
+    }
+    try {
+      await ElMessageBox.confirm(
+        '这个时间段属于你本人，请选择要创建项目工时预约，还是个人时间安排。',
+        '安排自己的时间',
+        {
+          confirmButtonText: '预约项目工时',
+          cancelButtonText: '个人时间安排',
+          distinguishCancelAndClose: true,
+          type: 'info',
+        },
+      )
+      openCreate(slot)
+    } catch (action) {
+      if (action === 'cancel') openPersonalCreate({ date: slot.date, time: slot.time })
+    }
     return
   }
   openCreate(slot)
@@ -716,7 +799,6 @@ async function copyPreviousWeek() {
   const result = await copyScheduleWeek({
     source_week_start: target.subtract(7, 'day').format('YYYY-MM-DD HH:mm:ss'),
     target_week_start: target.format('YYYY-MM-DD HH:mm:ss'),
-    user_ids: filter.user_id ? [filter.user_id] : undefined,
   })
   ElMessage.success(`已提交 ${result.created} 条预约，跳过 ${result.skipped.length} 条`)
   await loadOptions()
@@ -765,12 +847,10 @@ onMounted(async () => {
     </header>
     <section class="surface board-tools">
       <div class="filters">
-        <el-select v-model="filter.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select>
-        <el-select v-model="filter.user_id" clearable filterable placeholder="人员" style="width:150px"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/></el-select>
+        <el-select v-model="filter.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in filterProjects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
         <el-select v-model="filter.department_id" clearable placeholder="部门" style="width:150px"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select>
         <el-select v-model="filter.organization_id" clearable filterable placeholder="组织" style="width:170px"><el-option v-for="item in flatOrganizations" :key="item.id" :label="item.label" :value="item.id"/></el-select>
-        <el-input v-model="filter.employee_no" clearable placeholder="工号" style="width:130px"/>
-        <el-input v-model="filter.name" clearable placeholder="姓名" style="width:130px"/>
+        <el-input v-model="filter.person_keyword" clearable placeholder="姓名 / 工号" style="width:180px" @keyup.enter="applyFilters"/>
         <el-button @click="applyFilters">查询</el-button>
       </div>
       <div class="date-nav">
@@ -783,7 +863,7 @@ onMounted(async () => {
     <section class="surface board-card" v-loading="loading">
       <div class="board-caption">
         <strong>{{ dateTitle }}</strong>
-        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>待处理预约</span><span><i class="legend-accepted"></i>已接受预约</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span></span>
+        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>未通过预约（灰色）</span><span><i class="legend-accepted"></i>已接受预约（按项目配色）</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span></span>
       </div>
       <div v-if="viewMode!=='month'" class="board-scroll">
         <div class="sticky-header">
@@ -823,7 +903,7 @@ onMounted(async () => {
         >
           <div class="month-day-head"><span class="day-number">{{ dayjs(date).date() }}</span><small v-if="scheduleDayMeta(date).kind==='holiday'">{{ scheduleDayMeta(date).name || '法定节假日' }}</small><small v-else-if="scheduleDayMeta(date).kind==='workday'&&scheduleDayMeta(date).name">调休工作日</small></div>
           <button v-for="item in dayPersonalBlocks(date).slice(0,5)" :key="`personal-${item.id}`" class="month-booking month-personal" :class="`personal-${item.time_type}`" @click.stop="openPersonalBlock(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ personalTypeLabel[item.time_type] }}</button>
-          <button v-for="item in daySchedules(date).slice(0,Math.max(5-dayPersonalBlocks(date).length,0))" :key="item.id" class="month-booking" :class="`status-${item.status}`" :draggable="item.created_by===userStore.profile?.id&&['pending','confirmed'].includes(item.status)" @dragstart="startMonthDrag($event,item)" @click.stop="openDetail(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ item.task_name }}</button>
+          <button v-for="item in daySchedules(date).slice(0,Math.max(5-dayPersonalBlocks(date).length,0))" :key="item.id" class="month-booking" :class="`status-${item.status}`" :style="scheduleColorStyle(item)" :draggable="item.created_by===userStore.profile?.id&&['pending','confirmed'].includes(item.status)" @dragstart="startMonthDrag($event,item)" @click.stop="openDetail(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ item.task_name }}</button>
           <small v-if="daySchedules(date).length+dayPersonalBlocks(date).length>5">另有 {{ daySchedules(date).length+dayPersonalBlocks(date).length-5 }} 条</small>
         </div>
       </div>
@@ -928,7 +1008,7 @@ onMounted(async () => {
 
 <style scoped>
 .header-actions,.filters,.date-nav{display:flex;align-items:center;gap:10px}.board-tools{display:flex;align-items:center;justify-content:space-between;padding:14px 16px}.board-card{overflow:hidden}.board-caption{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #e9edf1;color:#657083;font-size:12px}.time-legend,.time-legend>span{display:flex;align-items:center}.time-legend{gap:16px}.time-legend>span{gap:5px}.time-legend i{display:block;width:15px;height:10px;border:1px solid #dfe4e9;border-radius:3px}.legend-work{background:#fff}.legend-off{background:#e9edf1}.legend-holiday{border-color:#f1cccc!important;background:#fde8e8}.legend-personal{border-color:#cfc2e2!important;background:#eee7f7}.board-scroll{max-height:calc(100vh - 290px);overflow:auto}.sticky-header{position:sticky;top:0;z-index:10;display:flex;width:max-content;min-width:100%;box-shadow:0 2px 6px rgba(39,52,70,.06)}.person-head{position:sticky;left:0;z-index:12;display:grid;width:170px;flex:0 0 170px;place-items:center;border-right:1px solid #e2e6eb;background:#fafbfc;color:#7b8595;font-size:11px}.month-grid{display:grid;grid-template-columns:repeat(7,1fr);max-height:calc(100vh - 290px);overflow:auto}.weekday{position:sticky;top:0;z-index:4;border-right:1px solid #edf0f3;border-bottom:1px solid #e5e9ed;background:#fafbfc;padding:9px;text-align:center;color:#7c8796;font-size:11px}.month-day{min-height:125px;border-right:1px solid #edf0f3;border-bottom:1px solid #edf0f3;padding:7px;background:#fff}.month-day.outside,.month-day.weekend{background:#f2f4f6;color:#9da6b1}.month-day.holiday{background:#fff0f0;color:#a75b5b}.month-day.adjusted-workday{box-shadow:inset 0 3px #79ad8d}.month-day.today .day-number{background:#3d6c98;color:#fff}.month-day-head{display:flex;align-items:center;justify-content:space-between;gap:6px}.month-day-head small{overflow:hidden;color:inherit;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.day-number{display:grid;width:23px;height:23px;flex:0 0 23px;place-items:center;border-radius:7px;font-size:11px}.month-booking{display:block;width:100%;overflow:hidden;margin-top:4px;border:0;border-radius:5px;background:#e5edf5;padding:4px 5px;text-align:left;color:#486987;font-size:9px;text-overflow:ellipsis;white-space:nowrap;cursor:grab}.month-booking b{font-weight:650}.month-personal{cursor:pointer}.month-personal.personal-training{background:#eee7f7;color:#694f85}.month-personal.personal-meeting{background:#f7edd9;color:#806238}.month-personal.personal-leave{background:#f9e2e2;color:#985353}.month-personal.personal-other{background:#e9edf1;color:#596573}.month-day>small{display:block;margin-top:4px;color:#8d98a6;font-size:9px}.my-time-header{display:flex;width:100%;align-items:center;justify-content:space-between;gap:18px}.my-time-header>div{display:flex;min-width:0;flex-direction:column}.my-time-header strong{color:#344256;font-size:15px}.my-time-header small{margin-top:4px;color:#8d98a6;font-size:10px}.my-time-filter{display:flex;justify-content:flex-end;margin-bottom:14px}.person-overview{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;border-radius:12px;background:#f6f8fa;padding:13px 15px}.person-summary{display:flex;min-width:0;align-items:center;gap:11px}.overview-avatar{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:11px;background:#dde8f2;color:#315f8e;font-size:14px;font-weight:700}.person-summary>div{display:flex;min-width:0;flex-direction:column}.person-summary strong{color:#344256;font-size:13px}.person-summary small{margin-top:4px;color:#8d98a6;font-size:10px}.person-schedule-table{width:100%}.time-range{display:flex;flex-direction:column}.time-range strong{color:#435166;font-size:11px}.time-range span{margin-top:3px;color:#8190a2;font-size:10px}.person-pagination{display:flex;justify-content:flex-end;padding-top:16px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.month-personal.personal-business_trip{background:#e3f0f7;color:#426b83}
+.month-day{border-right-width:2px;border-right-color:#d3d9e0}.month-personal.personal-business_trip{background:#e3f0f7;color:#426b83}
 .month-personal.personal-out_of_office{background:#e4f1e8;color:#4f755a}
-.time-legend{flex-wrap:wrap;justify-content:flex-end}.legend-pending{border-color:#e4bd70!important;background:#fff0d4}.legend-accepted{border-color:#a9cfb7!important;background:#dff1e6}.month-booking.status-pending,.month-booking.status-changed{border:1px solid #e4bd70;background:#fff0d4;color:#795518}.month-booking.status-confirmed,.month-booking.status-running,.month-booking.status-completed{border:1px solid #a9cfb7;background:#dff1e6;color:#356149}
+.time-legend{flex-wrap:wrap;justify-content:flex-end}.legend-pending{border-color:#cbd1d8!important;background:#e7eaee}.legend-accepted{border-color:#9db9d2!important;background:#dfeaf4}.month-booking.status-pending,.month-booking.status-changed{border:1px solid #cbd1d8;background:#e7eaee;color:#66717f}.month-booking.status-confirmed,.month-booking.status-running,.month-booking.status-completed{border-width:1px;border-style:solid}
 </style>

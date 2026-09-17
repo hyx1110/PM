@@ -33,7 +33,6 @@ export interface TaskPayload {
   planned_start: string
   planned_end: string
   estimated_hours: number
-  status: string
   description?: string
   remark?: string
 }
@@ -46,4 +45,5 @@ export interface TaskQuery extends PageQuery {
   organization_id?: number
   employee_no?: string
   name?: string
+  managed_project_scope?: boolean
 }

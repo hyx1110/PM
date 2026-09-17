@@ -71,6 +71,14 @@ def list_pending_hour_requests(
     return success(project_service.list_pending_hour_requests(db, current_user))
 
 
+@router.get("/approvals/pending")
+def list_pending_project_approvals(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return success(project_service.list_pending_project_approvals(db, current_user))
+
+
 @router.get("/{project_id}")
 def get_project(
     project_id: int,
@@ -108,8 +116,10 @@ def approve_project(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project_service.decide_project(db, project_id, payload, current_user, approved=True)
-    return success(project_service.project_detail(db, project_id, current_user))
+    item = project_service.decide_project(
+        db, project_id, payload, current_user, approved=True
+    )
+    return success(model_to_dict(item))
 
 
 @router.post("/{project_id}/reject")
@@ -119,8 +129,10 @@ def reject_project(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project_service.decide_project(db, project_id, payload, current_user, approved=False)
-    return success(project_service.project_detail(db, project_id, current_user))
+    item = project_service.decide_project(
+        db, project_id, payload, current_user, approved=False
+    )
+    return success(model_to_dict(item))
 
 
 @router.get("/{project_id}/hour-requests")

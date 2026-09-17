@@ -2,12 +2,12 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getEvaluation, getProcessReport, updateEvaluation } from '@/api/report'
-import { getProjects } from '@/api/project'
+import { getAllProjects } from '@/api/project'
 import { getUserOptions } from '@/api/user'
 import type { Project } from '@/types/project'
 import type { EvaluationPayload, ProcessReportItem } from '@/types/report'
 import type { UserOption } from '@/types/user'
-import { formatDateTime } from '@/utils/format'
+import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
 
@@ -27,9 +27,10 @@ const evaluationDialog = ref(false)
 const evaluationTaskId = ref<number>()
 const evaluationForm = reactive<EvaluationPayload>({ achievement_rate: 100, achievement_quality: 100, comment: '' })
 const canEvaluate = (row: ProcessReportItem) =>
-  userStore.profile?.roles.includes('department_manager')
+  userStore.profile?.roles.includes('project_manager')
   && row.project_status === 'Completed'
   && row.task_status === 'completed'
+  && !row.evaluation_id
 
 async function loadProcess() {
   loading.value = true
@@ -56,8 +57,8 @@ async function saveEvaluation() {
 }
 
 onMounted(async () => {
-  const [projectData, userData] = await Promise.all([getProjects({ page: 1, page_size: 200 }), getUserOptions()])
-  projects.value = projectData.items
+  const [projectData, userData] = await Promise.all([getAllProjects(), getUserOptions()])
+  projects.value = projectData
   users.value = userData
   await loadProcess()
 })
@@ -66,7 +67,7 @@ onMounted(async () => {
 <template>
   <div class="page-shell">
     <header class="page-header">
-      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">所有人可查看过程数据；仅 L3 可在项目结束且任务完成后评价。</p></div>
+      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">仅展示自己负责的项目；项目结束且任务完成后，由本项目经理进行一次性评价。</p></div>
     </header>
     <section class="surface report-card">
       <div class="report-filter">
@@ -81,16 +82,16 @@ onMounted(async () => {
         <el-table-column prop="level1_task" label="一级任务" fixed min-width="150"/>
         <el-table-column prop="level2_task" label="二级任务" min-width="160"/>
         <el-table-column prop="owner_name" label="负责人" width="120"/>
-        <el-table-column label="计划开始" width="145"><template #default="{row}">{{formatDateTime(row.planned_start)}}</template></el-table-column>
-        <el-table-column label="计划结束" width="145"><template #default="{row}">{{formatDateTime(row.planned_end)}}</template></el-table-column>
-        <el-table-column label="实际开始" width="145"><template #default="{row}">{{formatDateTime(row.actual_start)}}</template></el-table-column>
-        <el-table-column label="实际结束" width="145"><template #default="{row}">{{formatDateTime(row.actual_end)}}</template></el-table-column>
+        <el-table-column label="计划开始" width="120"><template #default="{row}">{{formatDate(row.planned_start)}}</template></el-table-column>
+        <el-table-column label="计划结束" width="120"><template #default="{row}">{{formatDate(row.planned_end)}}</template></el-table-column>
+        <el-table-column label="实际开始" width="120"><template #default="{row}">{{formatDate(row.actual_start)}}</template></el-table-column>
+        <el-table-column label="实际结束" width="120"><template #default="{row}">{{formatDate(row.actual_end)}}</template></el-table-column>
         <el-table-column label="预估人力" width="95"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
         <el-table-column label="实际人力" width="95"><template #default="{row}">{{row.actual_hours}}h</template></el-table-column>
         <el-table-column label="达成率" width="90"><template #default="{row}">{{row.achievement_rate==null?'—':`${row.achievement_rate}%`}}</template></el-table-column>
         <el-table-column label="达成质量" width="100"><template #default="{row}">{{row.achievement_quality==null?'—':`${row.achievement_quality}%`}}</template></el-table-column>
         <el-table-column prop="effective_status" label="状态" width="90"/>
-        <el-table-column label="评价" fixed="right" width="90"><template #default="{row}"><el-button v-if="canEvaluate(row)" link type="primary" @click="openEvaluation(row)">评价</el-button><span v-else>—</span></template></el-table-column>
+        <el-table-column label="评价" fixed="right" width="120"><template #default="{row}"><el-tag v-if="row.evaluation_id" type="success" effect="plain">已完成评价</el-tag><el-button v-else-if="canEvaluate(row)" link type="primary" @click="openEvaluation(row)">评价</el-button><span v-else>—</span></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" layout="total, sizes, prev, pager, next" @change="loadProcess"/></div>
     </section>

@@ -54,10 +54,8 @@ const emptyForm = (): ProjectPayload => ({
   member_ids: [],
   department_id: userStore.profile?.department_id || 0,
   budget_hours: 8,
-  status: 'Draft',
   planned_start: '',
   planned_end: '',
-  priority: 'medium',
   description: '',
   remark: '',
 })
@@ -80,19 +78,6 @@ const statusLabel: Record<string, string> = {
   Completed: '已完成',
   Cancelled: '已取消',
 }
-const statusTransitions: Record<string, string[]> = {
-  Draft: ['Planned', 'Running', 'Cancelled'],
-  Planned: ['Running', 'Suspended', 'Completed', 'Cancelled'],
-  Running: ['Suspended', 'Completed', 'Cancelled'],
-  Suspended: ['Running', 'Completed', 'Cancelled'],
-  Completed: [],
-  Cancelled: [],
-}
-const availableStatuses = computed(() => {
-  if (editingProject.value?.approval_status !== 'approved') return ['Draft']
-  const current = editingProject.value.status
-  return [current, ...(statusTransitions[current] || [])]
-})
 const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已审批', rejected: '已驳回' }
 const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
 const flatOrganizations = computed(() => {
@@ -166,9 +151,12 @@ const memberCascaderOptions = computed<MemberCascaderOption[]>(() =>
         )
         .map((item) => ({
           value: item.id,
-          label: `未分配组织 · ${item.name} (${item.employee_no})`,
+          label: `${item.name} (${item.employee_no})`,
         }))
-      const children = [...organizationChildren, ...unassignedMembers]
+      const children = [
+        ...organizationChildren,
+        ...unassignedMembers,
+      ]
       return {
         value: `department-${department.id}`,
         label: department.name,
@@ -223,12 +211,8 @@ function openEdit(row: Project) {
     member_ids: [],
     department_id: row.department_id,
     budget_hours: row.budget_hours,
-    status: row.status,
     planned_start: row.planned_start,
     planned_end: row.planned_end,
-    actual_start: row.actual_start,
-    actual_end: row.actual_end,
-    priority: row.priority,
     description: row.description || '',
     remark: row.remark || '',
   })
@@ -313,7 +297,7 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">项目管理</h1>
-        <p class="page-subtitle">所有人均可查看项目；只有项目经理可以新建并维护自己负责的项目。</p>
+        <p class="page-subtitle">仅展示当前用户作为项目经理负责的项目，并由项目经理维护项目与成员。</p>
       </div>
       <el-button v-if="canCreateProject" type="primary" @click="openCreate">新建项目</el-button>
     </header>
@@ -375,7 +359,7 @@ onMounted(async () => {
             <template v-if="userStore.hasPermission('project:edit')">
               <el-button v-if="['draft','rejected'].includes(row.approval_status)&&row.manager_id===userStore.profile?.id" link type="warning" @click="submitExisting(row)">提交审批</el-button>
               <el-button
-                v-if="row.approval_status!=='pending' && canManageProject(row) && (row.approval_status==='approved' || row.manager_id===userStore.profile?.id)"
+                v-if="!['Completed','Cancelled'].includes(row.status) && row.approval_status!=='pending' && canManageProject(row) && (row.approval_status==='approved' || row.manager_id===userStore.profile?.id)"
                 link
                 type="primary"
                 @click="openEdit(row)"
@@ -429,19 +413,10 @@ onMounted(async () => {
           <el-form-item label="项目总工时" prop="budget_hours">
             <el-input-number v-model="form.budget_hours" :min="0.5" :step="0.5" :precision="2" :disabled="editingProject?.approval_status==='approved'" style="width:100%"/>
           </el-form-item>
-          <el-form-item label="项目状态">
-            <el-select v-model="form.status" :disabled="editingProject?.approval_status!=='approved'" style="width:100%">
-              <el-option v-for="item in availableStatuses" :key="item" :label="statusLabel[item]" :value="item"/>
-            </el-select>
-          </el-form-item>
-          <el-form-item label="优先级">
-            <el-select v-model="form.priority" style="width:100%"><el-option label="高" value="high"/><el-option label="中" value="medium"/><el-option label="低" value="low"/></el-select>
-          </el-form-item>
           <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
           <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
-          <el-form-item label="实际开始"><el-date-picker v-model="form.actual_start" value-format="YYYY-MM-DD" type="date" clearable style="width:100%"/></el-form-item>
-          <el-form-item label="实际结束"><el-date-picker v-model="form.actual_end" value-format="YYYY-MM-DD" type="date" clearable style="width:100%"/></el-form-item>
         </div>
+        <div class="field-hint">项目实际起止日期由任务执行记录自动汇总，无需手工填写。</div>
         <el-form-item label="项目描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2"/></el-form-item>
       </el-form>
@@ -456,4 +431,5 @@ onMounted(async () => {
 
 <style scoped>
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.field-hint{margin:-2px 0 18px;color:var(--el-text-color-secondary);font-size:12px}
 </style>

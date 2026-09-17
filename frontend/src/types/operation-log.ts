@@ -4,6 +4,7 @@ export interface OperationLog {
   id: number
   operator_id?: number
   operator_name?: string
+  change_summary: string
   module: string
   action: string
   object_type: string
@@ -21,4 +22,3 @@ export interface OperationLogQuery extends PageQuery {
   start_date?: string
   end_date?: string
 }
-

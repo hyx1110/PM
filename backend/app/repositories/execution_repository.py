@@ -1,6 +1,6 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.execution import ExecutionRecord
@@ -83,16 +83,20 @@ class ExecutionRepository:
         if project_id:
             filters.append(Task.project_id == project_id)
         if start_date:
-            filters.append(ExecutionRecord.actual_start >= datetime.combine(start_date, time.min))
+            filters.append(
+                func.coalesce(
+                    ExecutionRecord.actual_end,
+                    ExecutionRecord.actual_start,
+                )
+                >= start_date
+            )
         if end_date:
-            filters.append(ExecutionRecord.actual_start < datetime.combine(end_date + timedelta(days=1), time.min))
+            filters.append(ExecutionRecord.actual_start <= end_date)
         if visible_project_ids is not None:
             project_scope = Task.project_id.in_(visible_project_ids or {-1})
-            filters.append(
-                or_(project_scope, ExecutionRecord.user_id == own_user_id)
-                if own_user_id is not None
-                else project_scope
-            )
+            filters.append(project_scope)
+        if own_user_id is not None:
+            filters.append(ExecutionRecord.user_id == own_user_id)
         count_query = (
             select(func.count(ExecutionRecord.id))
             .join(Task, Task.id == ExecutionRecord.task_id)

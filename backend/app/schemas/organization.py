@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.schemas.common import ORMModel
 
@@ -11,11 +11,25 @@ class DepartmentCreate(ORMModel):
     manager_id: int | None = None
     status: str = "active"
 
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        if value not in {"active", "disabled"}:
+            raise ValueError("status must be active or disabled")
+        return value
+
 
 class DepartmentUpdate(ORMModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     manager_id: int | None = None
     status: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None) -> str | None:
+        if value is not None and value not in {"active", "disabled"}:
+            raise ValueError("status must be active or disabled")
+        return value
 
 
 class DepartmentResponse(ORMModel):
@@ -40,9 +54,11 @@ class OrganizationCreate(ORMModel):
     status: str = "active"
 
     @model_validator(mode="after")
-    def validate_level(self):
+    def validate_values(self):
         if self.level not in {"L1", "L2", "L3", "L4"}:
             raise ValueError("level must be L1, L2, L3 or L4")
+        if self.status not in {"active", "disabled"}:
+            raise ValueError("status must be active or disabled")
         return self
 
 
@@ -52,6 +68,21 @@ class OrganizationUpdate(ORMModel):
     level: str | None = None
     manager_id: int | None = None
     status: str | None = None
+
+    @model_validator(mode="after")
+    def validate_values(self):
+        if self.level is not None and self.level not in {"L1", "L2", "L3", "L4"}:
+            raise ValueError("level must be L1, L2, L3 or L4")
+        if self.status is not None and self.status not in {"active", "disabled"}:
+            raise ValueError("status must be active or disabled")
+        return self
+
+
+class OrganizationUserNode(ORMModel):
+    id: int
+    employee_no: str
+    name: str
+    status: str
 
 
 class OrganizationNode(ORMModel):
@@ -65,4 +96,5 @@ class OrganizationNode(ORMModel):
     manager_name: str | None = None
     status: str
     data_source: str
-    children: list["OrganizationNode"] = []
+    users: list[OrganizationUserNode] = Field(default_factory=list)
+    children: list["OrganizationNode"] = Field(default_factory=list)

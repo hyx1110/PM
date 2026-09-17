@@ -26,5 +26,6 @@ export interface OrganizationNode {
   manager_name?: string | null
   status: string
   data_source: 'local' | 'hrdb'
+  users: Array<{ id: number; employee_no: string; name: string; status: string }>
   children: OrganizationNode[]
 }

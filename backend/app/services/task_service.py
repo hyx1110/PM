@@ -1,29 +1,45 @@
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, conflict, forbidden, not_found
-from app.models.project import ProjectMember
+from app.models.execution import ExecutionRecord
+from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
+from app.repositories.project_repository import booked_schedule_predicate
 from app.repositories.task_repository import task_repository
-from app.schemas.task import TASK_STATUSES, TASK_TYPES, TaskCreate, TaskUpdate
+from app.schemas.task import TASK_FILTER_STATUSES, TASK_STATUSES, TASK_TYPES, TaskCreate, TaskUpdate
 from app.services.operation_log_service import log_operation
 from app.services.notification_service import create_notification
 from app.services.project_service import (
     assert_project_approved,
     assert_project_manageable,
-    assert_project_visible,
+)
+from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
+from app.services.status_sync_service import (
+    synchronize_parent_status,
+    synchronize_project_status,
+    synchronize_task_status,
 )
 from app.utils.model import model_to_dict
-from app.utils.time import beijing_now
+from app.utils.time import beijing_now, beijing_today
+
+TASK_STATUS_TRANSITIONS = {
+    "not_started": {"running", "completed", "suspended", "cancelled"},
+    "running": {"completed", "suspended", "cancelled"},
+    "suspended": {"running", "completed", "cancelled"},
+    "completed": set(),
+    "cancelled": set(),
+}
 
 
-def effective_status(task_status: str, planned_end: datetime, now: datetime | None = None) -> str:
-    current = now or beijing_now()
+def effective_status(task_status: str, planned_end: date, now: date | None = None) -> str:
+    current = now or beijing_today()
     if current > planned_end and task_status not in {"completed", "cancelled"}:
         return "delayed"
     return task_status
@@ -60,7 +76,17 @@ def _assert_task_assignee(db: Session, task: Task, user: User) -> None:
         raise forbidden("只有任务负责人可以编辑或删除该任务")
 
 
-def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None):
+def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False):
+    if status and status not in TASK_FILTER_STATUSES:
+        raise bad_request("invalid task status filter")
+    project = db.get(Project, project_id) if project_id else None
+    can_view_all_project_tasks = bool(
+        managed_project_scope
+        and project
+        and not project.is_deleted
+        and project.manager_id == user.id
+        and "project_manager" in get_role_codes(db, user.id)
+    )
     items, total = task_repository.list(
         db,
         page,
@@ -72,6 +98,7 @@ def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: i
         organization_id,
         employee_no,
         owner_name,
+        own_user_id=None if can_view_all_project_tasks else user.id,
     )
     for item in items:
         item["effective_status"] = effective_status(item["status"], item["planned_end"])
@@ -85,6 +112,8 @@ def list_my_tasks(
     page_size: int,
     status: str | None,
 ):
+    if status and status not in TASK_FILTER_STATUSES:
+        raise bad_request("invalid task status filter")
     items, total = task_repository.list(
         db,
         page,
@@ -103,9 +132,7 @@ def _active_booking_hours(db: Session, task_id: int) -> Decimal:
     return db.scalar(
         select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(
             ScheduleBooking.task_id == task_id,
-            ScheduleBooking.status.in_(
-                {"pending", "confirmed", "changed", "running", "completed"}
-            ),
+            booked_schedule_predicate(),
         )
     ) or Decimal("0")
 
@@ -114,8 +141,19 @@ def task_detail(db: Session, task_id: int, user: User) -> dict:
     task = task_repository.get(db, task_id)
     if not task:
         raise not_found("task not found")
-    assert_project_visible(db, task.project_id, user)
+    project = db.get(Project, task.project_id)
+    if not project or project.is_deleted:
+        raise not_found("project not found")
+    if project.manager_id != user.id and user.id not in _assignee_ids(db, task.id):
+        raise forbidden("只能查看自己负责的任务")
+    return task_response(db, task_id)
+
+
+def task_response(db: Session, task_id: int) -> dict:
+    """Build an enriched response after access has already been checked."""
     match = task_repository.detail(db, task_id)
+    if not match:
+        raise not_found("task not found")
     match["effective_status"] = effective_status(match["status"], match["planned_end"])
     return match
 
@@ -126,6 +164,31 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
     parent = task_repository.get(db, parent_id)
     if not parent or parent.project_id != project_id:
         raise bad_request("parent task must belong to the same project")
+    if current_task_id is None and parent.status in {"completed", "cancelled"}:
+        raise bad_request("不能在已完成或已取消的任务下新增子任务")
+    if current_task_id is None and db.scalar(
+        select(ExecutionRecord.id).where(
+            ExecutionRecord.task_id == parent.id,
+            ExecutionRecord.is_deleted.is_(False),
+        ).limit(1)
+    ):
+        raise bad_request("已有执行记录的任务不能再作为汇总任务，请先删除执行记录")
+    if current_task_id is None and db.scalar(
+        select(ScheduleBooking.id).where(
+            ScheduleBooking.task_id == parent.id,
+            ScheduleBooking.status.notin_({"rejected", "cancelled", "withdrawn"}),
+        ).limit(1)
+    ):
+        raise bad_request("已有有效预约记录的任务不能再作为汇总任务")
+    if parent.parent_id is not None:
+        raise bad_request("系统只支持两级任务，上级任务必须是一级任务")
+    if current_task_id and db.scalar(
+        select(Task.id).where(
+            Task.parent_id == current_task_id,
+            Task.is_deleted.is_(False),
+        ).limit(1)
+    ):
+        raise bad_request("已有子任务的一级任务不能再设置上级任务")
     cursor = parent
     while cursor:
         if current_task_id and cursor.id == current_task_id:
@@ -133,13 +196,37 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
         cursor = task_repository.get(db, cursor.parent_id) if cursor.parent_id else None
 
 
+def _validate_task_window(
+    db: Session,
+    project_id: int,
+    planned_start: date,
+    planned_end: date,
+) -> None:
+    project = db.get(Project, project_id)
+    if not project or project.is_deleted:
+        raise not_found("project not found")
+    if planned_start < project.planned_start or planned_end > project.planned_end:
+        raise bad_request("任务计划时间必须位于项目计划日期范围内")
+
+
 def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
     assert_project_manageable(db, payload.project_id, user)
     assert_project_approved(db, payload.project_id)
     owner_ids = _validate_owners(db, payload.project_id, payload.owner_ids)
     _validate_parent(db, payload.project_id, payload.parent_id)
+    _validate_task_window(
+        db,
+        payload.project_id,
+        payload.planned_start,
+        payload.planned_end,
+    )
     values = payload.model_dump(exclude={"owner_ids"})
-    task = Task(**values, owner_id=owner_ids[0], priority="medium")
+    task = Task(
+        **values,
+        owner_id=owner_ids[0],
+        priority="medium",
+        status="not_started",
+    )
     db.add(task)
     db.flush()
     for owner_id in owner_ids:
@@ -165,19 +252,113 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
     if not task:
         raise not_found("task not found")
     _assert_task_assignee(db, task, user)
+    assert_project_approved(db, task.project_id)
+    if task.status in {"completed", "cancelled"}:
+        raise bad_request("已完成或已取消的任务不能再修改")
     before = model_to_dict(task)
+    previous_parent_id = task.parent_id
     values = payload.model_dump(exclude_unset=True)
+    required_fields = {
+        "name",
+        "task_type",
+        "owner_ids",
+        "planned_start",
+        "planned_end",
+        "estimated_hours",
+        "status",
+    }
+    if any(values.get(key) is None for key in required_fields if key in values):
+        raise bad_request("任务名称、类型、负责人、计划时间、工时和状态不能为空")
     owner_ids = values.pop("owner_ids", None)
     normalized_owner_ids = _validate_owners(db, task.project_id, owner_ids) if owner_ids is not None else _assignee_ids(db, task.id)
-    _validate_parent(db, task.project_id, values.get("parent_id", task.parent_id), task.id)
+    target_parent_id = values.get("parent_id", task.parent_id)
+    _validate_parent(db, task.project_id, target_parent_id, task.id)
+    if target_parent_id != previous_parent_id and target_parent_id and db.scalar(
+        select(ExecutionRecord.id).where(
+            ExecutionRecord.task_id == target_parent_id,
+            ExecutionRecord.is_deleted.is_(False),
+        ).limit(1)
+    ):
+        raise bad_request("已有执行记录的任务不能再作为汇总任务，请先删除执行记录")
+    if target_parent_id != previous_parent_id and target_parent_id and db.scalar(
+        select(ScheduleBooking.id).where(
+            ScheduleBooking.task_id == target_parent_id,
+            ScheduleBooking.status.notin_({"rejected", "cancelled", "withdrawn"}),
+        ).limit(1)
+    ):
+        raise bad_request("已有有效预约记录的任务不能再作为汇总任务")
     planned_start = values.get("planned_start", task.planned_start)
     planned_end = values.get("planned_end", task.planned_end)
     if planned_end < planned_start:
         raise bad_request("planned_end must be on or after planned_start")
+    _validate_task_window(db, task.project_id, planned_start, planned_end)
+    if {"planned_start", "planned_end"} & values.keys() and db.scalar(
+        select(ScheduleBooking.id).where(
+            ScheduleBooking.task_id == task.id,
+            booked_schedule_predicate(),
+            or_(
+                ScheduleBooking.start_time < datetime.combine(planned_start, time.min),
+                ScheduleBooking.end_time >= datetime.combine(
+                    planned_end + timedelta(days=1), time.min
+                ),
+            ),
+        ).limit(1)
+    ):
+        raise bad_request("任务计划时间不能排除已有预约时间")
     if values.get("task_type") and values["task_type"] not in TASK_TYPES:
         raise bad_request("invalid task type")
     if values.get("status") and values["status"] not in TASK_STATUSES:
         raise bad_request("invalid task status")
+    if "status" in values and values["status"] != task.status:
+        if values["status"] != "cancelled":
+            raise bad_request("任务状态由执行记录自动关联，任务管理仅允许手动取消")
+        if values["status"] not in TASK_STATUS_TRANSITIONS.get(task.status, set()):
+            raise bad_request(
+                f"任务状态不能从 {task.status} 变更为 {values['status']}"
+            )
+        if values["status"] in {"completed", "cancelled"}:
+            if db.scalar(
+                select(Task.id).where(
+                    Task.parent_id == task.id,
+                    Task.is_deleted.is_(False),
+                    Task.status.notin_({"completed", "cancelled"}),
+                ).limit(1)
+            ):
+                raise conflict(
+                    "请先完成或取消所有子任务，再结束上级任务",
+                    40934,
+                    {"dependencies": ["active child tasks"]},
+                )
+            if db.scalar(
+                select(ExecutionRecord.id).where(
+                    ExecutionRecord.task_id == task.id,
+                    ExecutionRecord.status.in_({"running", "paused"}),
+                    ExecutionRecord.is_deleted.is_(False),
+                ).limit(1)
+            ):
+                raise conflict(
+                    "请先完成或删除进行中、暂停中的执行记录，再结束任务",
+                    40935,
+                    {"dependencies": ["active execution records"]},
+                )
+            synchronize_schedule_statuses(db)
+            if db.scalar(
+                select(ScheduleBooking.id).where(
+                    ScheduleBooking.task_id == task.id,
+                    or_(
+                        ScheduleBooking.status.in_({"pending", "changed"}),
+                        (
+                            ScheduleBooking.status.in_({"confirmed", "running"})
+                            & (ScheduleBooking.end_time > beijing_now())
+                        ),
+                    ),
+                ).limit(1)
+            ):
+                raise conflict(
+                    "请先处理该任务所有待确认或未结束的预约，再结束任务",
+                    40933,
+                    {"dependencies": ["active schedules"]},
+                )
     if "estimated_hours" in values:
         booked_hours = _active_booking_hours(db, task.id)
         if values["estimated_hours"] < booked_hours:
@@ -198,6 +379,13 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
             db.add(TaskAssignee(task_id=task.id, user_id=owner_id))
         task.owner_id = normalized_owner_ids[0]
     db.flush()
+    if previous_parent_id != task.parent_id:
+        synchronize_parent_status(db, previous_parent_id)
+    if owner_changed and task.status != "cancelled":
+        synchronize_task_status(db, task.id)
+    else:
+        synchronize_parent_status(db, task.parent_id)
+        synchronize_project_status(db, task.project_id)
     if owner_changed:
         for owner_id in previous_owner_ids - set(normalized_owner_ids):
             create_notification(db, owner_id, "task_owner_changed", "任务负责人已变更", f"你已不再负责任务“{task.name}”。", level="warning", related_type="task", related_id=task.id)
@@ -205,7 +393,7 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
             create_notification(db, owner_id, "task_owner_changed", "任务负责人已变更", f"任务“{task.name}”现已由你负责。", level="warning", related_type="task", related_id=task.id)
     if time_changed:
         for owner_id in normalized_owner_ids:
-            create_notification(db, owner_id, "task_time_changed", "任务计划时间发生变化", f"任务“{task.name}”的计划时间已调整为 {task.planned_start:%Y-%m-%d %H:%M} 至 {task.planned_end:%Y-%m-%d %H:%M}。", level="warning", related_type="task", related_id=task.id)
+            create_notification(db, owner_id, "task_time_changed", "任务计划日期发生变化", f"任务“{task.name}”的计划日期已调整为 {task.planned_start:%Y-%m-%d} 至 {task.planned_end:%Y-%m-%d}。", level="warning", related_type="task", related_id=task.id)
     log_operation(db, operator_id=user.id, module="task", action="update", object_type="task", object_id=task.id, before_data=before, after_data=model_to_dict(task))
     db.commit()
     db.refresh(task)
@@ -217,6 +405,7 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
     if not task:
         raise not_found("task not found")
     _assert_task_assignee(db, task, user)
+    assert_project_approved(db, task.project_id)
     if task.status not in {"not_started", "cancelled"}:
         raise bad_request("only not-started or cancelled tasks can be deleted")
     if db.scalar(
@@ -226,6 +415,19 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
     ):
         raise conflict("delete child tasks before deleting this task", 40931)
 
+    if db.scalar(
+        select(ExecutionRecord.id).where(
+            ExecutionRecord.task_id == task_id,
+            ExecutionRecord.is_deleted.is_(False),
+        ).limit(1)
+    ):
+        raise conflict(
+            "delete the task's execution records before deleting it",
+            40936,
+            {"dependencies": ["execution records"]},
+        )
+
+    synchronize_schedule_statuses(db)
     if db.scalar(
         select(ScheduleBooking.id)
         .where(
@@ -243,8 +445,11 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
         )
 
     before = model_to_dict(task)
+    parent_id = task.parent_id
     task.is_deleted = True
     db.flush()
+    synchronize_parent_status(db, parent_id)
+    synchronize_project_status(db, task.project_id)
     log_operation(
         db,
         operator_id=user.id,

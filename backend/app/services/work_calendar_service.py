@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.exceptions import bad_request, not_found
 from app.models.user import User
 from app.models.work_calendar import WorkCalendarDay
@@ -59,6 +60,19 @@ def calculate_work_hours(db: Session, start_time: datetime, end_time: datetime) 
         raise bad_request("预约只能选择 08:30-12:00 或 13:00-17:30，且不能跨午休")
     minutes = int((end_time - start_time).total_seconds() // 60)
     return (Decimal(minutes) / Decimal(60)).quantize(Decimal("0.01"))
+
+
+def calculate_workday_hours(db: Session, start_date: date, end_date: date) -> Decimal:
+    """Calculate normal work capacity for an inclusive date range."""
+    if end_date < start_date:
+        raise bad_request("结束日期不能早于开始日期")
+    workdays = sum(
+        is_workday(db, date.fromordinal(start_date.toordinal() + offset))
+        for offset in range((end_date - start_date).days + 1)
+    )
+    return (
+        Decimal(workdays) * Decimal(str(settings.standard_work_hours))
+    ).quantize(Decimal("0.01"))
 
 
 def upsert_calendar_day(

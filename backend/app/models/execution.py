@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -14,8 +14,8 @@ class ExecutionRecord(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
-    actual_start: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
-    actual_end: Mapped[datetime | None] = mapped_column(DateTime)
+    actual_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    actual_end: Mapped[date | None] = mapped_column(Date)
     actual_hours: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="running", index=True)
     description: Mapped[str | None] = mapped_column(Text)

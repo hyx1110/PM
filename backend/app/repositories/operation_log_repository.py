@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models.operation_log import OperationLog
 from app.models.user import User
+from app.services.operation_log_service import describe_change
 
 
 class OperationLogRepository:
@@ -40,10 +41,19 @@ class OperationLogRepository:
             {
                 **{col.name: getattr(item, col.name) for col in OperationLog.__table__.columns},
                 "operator_name": operator_name,
+                "change_summary": (
+                    f"{operator_name or '系统'} "
+                    + describe_change(
+                        item.action,
+                        item.object_type,
+                        item.object_id,
+                        item.before_data,
+                        item.after_data,
+                    )
+                ),
             }
             for item, operator_name in rows
         ], total
 
 
 operation_log_repository = OperationLogRepository()
-

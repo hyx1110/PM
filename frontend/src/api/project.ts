@@ -3,6 +3,19 @@ import type { PageData } from '@/types/common'
 import type { Project, ProjectHourRequest, ProjectMember, ProjectPayload, ProjectQuery } from '@/types/project'
 
 export const getProjects = (params: ProjectQuery = {}) => api.get<PageData<Project>>('/projects', { params })
+export async function getAllProjects(params: ProjectQuery = {}) {
+  const items: Project[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await getProjects({ ...params, page, page_size: 200 })
+    items.push(...result.items)
+    total = result.total
+    page += 1
+    if (!result.items.length) break
+  } while (items.length < total)
+  return items
+}
 export const getProject = (id: number) => api.get<Project>(`/projects/${id}`)
 export const createProject = (payload: ProjectPayload) => api.post<Project>('/projects', payload)
 export const submitProject = (id: number) => api.post<Project>(`/projects/${id}/submit`)
@@ -16,6 +29,8 @@ export const getProjectHourRequests = (id: number) =>
   api.get<ProjectHourRequest[]>(`/projects/${id}/hour-requests`)
 export const getPendingProjectHourRequests = () =>
   api.get<ProjectHourRequest[]>('/projects/hour-requests/pending')
+export const getPendingProjectApprovals = () =>
+  api.get<Project[]>('/projects/approvals/pending')
 export const createProjectHourRequest = (id: number, requestedHours: number, reason: string) =>
   api.post<ProjectHourRequest>(`/projects/${id}/hour-requests`, { requested_hours: requestedHours, reason })
 export const approveProjectHourRequest = (projectId: number, requestId: number, note?: string) =>

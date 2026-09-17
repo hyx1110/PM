@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -17,8 +17,8 @@ class Task(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     task_type: Mapped[str] = mapped_column(String(30), nullable=False, default="Project", index=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
-    planned_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    planned_end: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    planned_start: Mapped[date] = mapped_column(Date, nullable=False)
+    planned_end: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     estimated_hours: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="not_started", index=True)
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")

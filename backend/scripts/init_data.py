@@ -44,7 +44,7 @@ ROLES = {
         {
             "dashboard:view", "user:view", "organization:view", "role:view", "project:view", "project:edit",
             "task:view", "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit",
-            "process_report:view", "evaluation:edit", "operation_log:view",
+            "process_report:view", "operation_log:view",
             "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
             "analytics:view", "calendar:manage",
         },
@@ -63,6 +63,7 @@ ROLES = {
         {
             "dashboard:view", "project:view", "project:edit", "task:view", "task:edit",
             "schedule:view", "schedule:edit", "execution:view", "execution:edit", "process_report:view",
+            "evaluation:edit",
             "risk:view", "risk:handle", "notification:view", "export:download", "analytics:view",
         },
     ),

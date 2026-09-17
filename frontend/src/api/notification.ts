@@ -1,6 +1,6 @@
 import { api } from './request'
 import type { PageData } from '@/types/common'
-import type { AppNotification, NotificationPreference } from '@/types/notification'
+import type { AppNotification } from '@/types/notification'
 
 export const getNotifications = (params: { page?: number; page_size?: number; status?: string } = {}) =>
   api.get<PageData<AppNotification>>('/notifications', { params })
@@ -9,6 +9,3 @@ export const markNotificationRead = (id: number) => api.post<AppNotification>(`/
 export const markAllNotificationsRead = () => api.post<{ updated: number }>('/notifications/read-all')
 export const deleteNotification = (id: number) => api.delete<void>(`/notifications/${id}`)
 export const deleteReadNotifications = () => api.delete<{ deleted: number }>('/notifications/read')
-export const getNotificationPreference = () => api.get<NotificationPreference>('/notifications/preferences')
-export const updateNotificationPreference = (payload: NotificationPreference) =>
-  api.put<NotificationPreference>('/notifications/preferences', payload)

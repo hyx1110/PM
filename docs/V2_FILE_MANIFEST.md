@@ -20,6 +20,7 @@ backend/alembic/versions/20260914_0007_business_rules_alignment.py
 backend/alembic/versions/20260915_0008_project_manager_membership.py
 backend/alembic/versions/20260916_0009_simplify_user_schema.py
 backend/alembic/versions/20260916_0010_task_multi_assignees.py
+backend/alembic/versions/20260917_0011_task_execution_dates.py
 backend/app/models/import_job.py
 backend/app/models/notification.py
 backend/app/models/personal_time.py
@@ -35,6 +36,8 @@ backend/app/services/import_export_service.py
 backend/app/services/notification_service.py
 backend/app/services/personal_time_service.py
 backend/app/services/risk_service.py
+backend/app/services/schedule_lifecycle_service.py
+backend/app/services/status_sync_service.py
 backend/app/services/visibility_service.py
 backend/app/services/work_calendar_service.py
 backend/app/api/v1/data_exchange.py
@@ -46,6 +49,7 @@ backend/app/tasks/__init__.py
 backend/app/tasks/celery_app.py
 backend/app/tasks/notification_tasks.py
 backend/app/tasks/risk_tasks.py
+backend/app/tasks/schedule_tasks.py
 backend/app/utils/employee_no.py
 backend/app/utils/time.py
 ```
@@ -76,7 +80,7 @@ frontend/src/views/schedule/WorkCalendarView.vue
 frontend/src/views/task/MyTaskView.vue
 ```
 
-前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与全员只读、任务多人负责人、首页任务和 L3 工时审批、共享看板人员联合筛选与分入口预约、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
+前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与本人负责项目范围、任务多人负责人及本人任务范围、首页任务和 L3 工时审批、共享看板人员联合筛选与分入口预约、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
 
 ## 文档
 

@@ -13,14 +13,16 @@ class ProcessReportItem(ORMModel):
     task_id: int
     owner_id: int
     owner_name: str
-    planned_start: datetime
-    planned_end: datetime
-    actual_start: datetime | None
-    actual_end: datetime | None
+    planned_start: date
+    planned_end: date
+    actual_start: date | None
+    actual_end: date | None
     estimated_hours: Decimal
     actual_hours: Decimal
     achievement_rate: Decimal | None
     achievement_quality: Decimal | None
+    evaluation_id: int | None = None
+    evaluated_at: datetime | None = None
     effective_status: str
     task_status: str
 

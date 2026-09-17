@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ArrowDown, Bell } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useNotificationStore } from '@/stores/notification'
+import { changeCurrentPassword, updateCurrentUser } from '@/api/auth'
 
 const router = useRouter()
 const userStore = useUserStore()
 const notificationStore = useNotificationStore()
+const profileVisible = ref(false)
+const passwordVisible = ref(false)
+const saving = ref(false)
+const profileForm = reactive({ name: '', email: '' })
+const passwordForm = reactive({ current_password: '', new_password: '', confirm_password: '' })
 const roleNames: Record<string, string> = {
   super_admin: '超级管理员',
   department_manager: 'L3',
@@ -25,6 +32,39 @@ async function handleCommand(command: string) {
     await userStore.logout()
     await router.push('/login')
   }
+  if (command === 'profile') {
+    Object.assign(profileForm, {
+      name: userStore.profile?.name || '',
+      email: userStore.profile?.email || '',
+    })
+    profileVisible.value = true
+  }
+  if (command === 'password') {
+    Object.assign(passwordForm, { current_password: '', new_password: '', confirm_password: '' })
+    passwordVisible.value = true
+  }
+}
+
+async function saveProfile() {
+  if (!profileForm.name.trim()) return ElMessage.warning('姓名不能为空')
+  saving.value = true
+  try {
+    await updateCurrentUser({ name: profileForm.name.trim(), email: profileForm.email || null })
+    await userStore.fetchProfile()
+    profileVisible.value = false
+    ElMessage.success('个人资料已更新')
+  } finally { saving.value = false }
+}
+
+async function savePassword() {
+  if (passwordForm.new_password.length < 8) return ElMessage.warning('新密码至少 8 位')
+  if (passwordForm.new_password !== passwordForm.confirm_password) return ElMessage.warning('两次输入的新密码不一致')
+  saving.value = true
+  try {
+    await changeCurrentPassword(passwordForm)
+    passwordVisible.value = false
+    ElMessage.success('登录密码已修改')
+  } finally { saving.value = false }
 }
 
 onMounted(async () => {
@@ -50,11 +90,19 @@ onMounted(async () => {
         <el-icon><ArrowDown /></el-icon>
       </button>
       <template #dropdown>
-        <el-dropdown-menu><el-dropdown-item command="logout">退出登录</el-dropdown-item></el-dropdown-menu>
+        <el-dropdown-menu><el-dropdown-item command="profile">修改个人资料</el-dropdown-item><el-dropdown-item command="password">修改登录密码</el-dropdown-item><el-dropdown-item divided command="logout">退出登录</el-dropdown-item></el-dropdown-menu>
       </template>
     </el-dropdown>
     </div>
   </header>
+  <el-dialog v-model="profileVisible" title="修改个人资料" width="460px">
+    <el-form :model="profileForm" label-position="top"><el-form-item label="员工号 / 登录账号"><el-input :model-value="userStore.profile?.employee_no" disabled/></el-form-item><el-form-item label="姓名" required><el-input v-model="profileForm.name" maxlength="100"/></el-form-item><el-form-item label="邮箱"><el-input v-model="profileForm.email" type="email"/></el-form-item></el-form>
+    <template #footer><el-button @click="profileVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveProfile">保存</el-button></template>
+  </el-dialog>
+  <el-dialog v-model="passwordVisible" title="修改登录密码" width="460px">
+    <el-form :model="passwordForm" label-position="top"><el-form-item label="当前密码" required><el-input v-model="passwordForm.current_password" type="password" show-password/></el-form-item><el-form-item label="新密码" required><el-input v-model="passwordForm.new_password" type="password" show-password/></el-form-item><el-form-item label="确认新密码" required><el-input v-model="passwordForm.confirm_password" type="password" show-password/></el-form-item></el-form>
+    <template #footer><el-button @click="passwordVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="savePassword">确认修改</el-button></template>
+  </el-dialog>
 </template>
 
 <style scoped>

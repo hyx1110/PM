@@ -2,10 +2,11 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.notification import Notification
 from app.models.schedule import ScheduleBooking
-from app.services.notification_service import create_notification, dispatch_pending, get_or_create_preference
+from app.services.notification_service import create_notification, dispatch_pending
 from app.tasks.celery_app import celery_app
 from app.utils.time import beijing_now
 
@@ -20,13 +21,11 @@ def create_upcoming_reminders() -> dict:
             .where(
                 ScheduleBooking.status.in_({"pending", "confirmed", "changed"}),
                 ScheduleBooking.start_time > now,
-                ScheduleBooking.start_time <= now + timedelta(hours=168),
+                ScheduleBooking.start_time
+                <= now + timedelta(hours=settings.notification_upcoming_hours),
             )
         ).all()
         for booking in bookings:
-            preference = get_or_create_preference(db, booking.user_id)
-            if booking.start_time > now + timedelta(hours=preference.upcoming_hours):
-                continue
             exists = db.scalar(
                 select(Notification.id).where(
                     Notification.recipient_id == booking.user_id,

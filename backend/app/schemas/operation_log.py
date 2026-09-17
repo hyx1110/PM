@@ -8,6 +8,7 @@ class OperationLogResponse(ORMModel):
     id: int
     operator_id: int | None
     operator_name: str | None = None
+    change_summary: str
     module: str
     action: str
     object_type: str
@@ -17,4 +18,3 @@ class OperationLogResponse(ORMModel):
     reason: str | None
     ip_address: str | None
     created_at: datetime
-

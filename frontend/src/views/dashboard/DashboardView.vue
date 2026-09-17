@@ -4,7 +4,7 @@ import { Calendar, Collection, Timer, TrendCharts } from '@element-plus/icons-vu
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDashboardSummary } from '@/api/report'
-import { approveProjectHourRequest, getPendingProjectHourRequests, getProjects, rejectProjectHourRequest } from '@/api/project'
+import { approveProject, approveProjectHourRequest, getPendingProjectApprovals, getPendingProjectHourRequests, rejectProject, rejectProjectHourRequest } from '@/api/project'
 import { getMyTasks } from '@/api/task'
 import { confirmSchedule, getMyPendingSchedules, rejectSchedule } from '@/api/schedule'
 import type { DashboardSummary } from '@/types/report'
@@ -12,7 +12,7 @@ import type { Schedule } from '@/types/schedule'
 import type { Project } from '@/types/project'
 import type { ProjectHourRequest } from '@/types/project'
 import type { Task } from '@/types/task'
-import { formatDateTime } from '@/utils/format'
+import { formatDate, formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
@@ -61,13 +61,13 @@ async function loadDashboard() {
     const [summary, pending, projects, hours, tasks] = await Promise.all([
       getDashboardSummary(),
       getMyPendingSchedules(8),
-      getProjects({ page: 1, page_size: 50, approval_status: 'pending', approver_id: userStore.profile?.id }),
+      getPendingProjectApprovals(),
       getPendingProjectHourRequests(),
       getMyTasks({ page: 1, page_size: 10 }),
     ])
     data.value = summary
     pendingBookings.value = pending
-    pendingProjectApprovals.value = projects.items
+    pendingProjectApprovals.value = projects
     pendingHourRequests.value = hours
     myTasks.value = tasks.items
   } finally {
@@ -86,6 +86,20 @@ async function rejectHours(item: ProjectHourRequest) {
   const { value } = await ElMessageBox.prompt('请输入驳回原因', 'L3 工时审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
   await rejectProjectHourRequest(item.project_id, item.id, value)
   ElMessage.success('追加工时申请已驳回')
+  await loadDashboard()
+}
+
+async function approvePendingProject(item: Project) {
+  await ElMessageBox.confirm(`确认批准项目“${item.name}”吗？`, '项目审批', { type: 'warning' })
+  await approveProject(item.id)
+  ElMessage.success('项目已批准')
+  await loadDashboard()
+}
+
+async function rejectPendingProject(item: Project) {
+  const { value } = await ElMessageBox.prompt('请输入驳回原因', '项目审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
+  await rejectProject(item.id, value)
+  ElMessage.success('项目已驳回')
   await loadDashboard()
 }
 
@@ -151,7 +165,7 @@ onMounted(loadDashboard)
     <section class="surface decision-card">
       <div class="decision-header"><div><span class="overline">MY TASKS</span><h2>我的任务</h2><p>首页直接展示由你负责的任务。</p></div><el-button text type="primary" @click="$router.push('/tasks')">查看全部任务</el-button></div>
       <el-empty v-if="!myTasks.length" :image-size="54" description="当前没有由你负责的任务" />
-      <el-table v-else :data="myTasks" size="small" class="dashboard-table"><el-table-column prop="name" label="任务" min-width="180"/><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="owner_name" label="负责人" min-width="120"/><el-table-column label="计划结束" width="165"><template #default="{row}">{{ formatDateTime(row.planned_end) }}</template></el-table-column><el-table-column prop="effective_status" label="状态" width="100"/></el-table>
+      <el-table v-else :data="myTasks" size="small" class="dashboard-table"><el-table-column prop="name" label="任务" min-width="180"/><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="owner_name" label="负责人" min-width="120"/><el-table-column label="计划结束" width="130"><template #default="{row}">{{ formatDate(row.planned_end) }}</template></el-table-column><el-table-column prop="effective_status" label="状态" width="100"/></el-table>
     </section>
     <section v-if="pendingHourRequests.length" class="surface decision-card">
       <div class="decision-header"><div><span class="overline">HOUR APPROVALS</span><h2>L3 待审批追加工时</h2><p>批准后工时立即计入项目额度。</p></div></div>
@@ -160,13 +174,11 @@ onMounted(loadDashboard)
     <section v-if="pendingProjectApprovals.length" class="surface decision-card">
       <div class="decision-header">
         <div><span class="overline">PROJECT APPROVALS</span><h2>待我审批的项目</h2><p>你是这些项目创建人的直属主管。</p></div>
-        <el-button text type="primary" @click="$router.push('/projects')">进入项目审批</el-button>
       </div>
       <div class="decision-list">
         <article v-for="item in pendingProjectApprovals.slice(0,8)" :key="item.id" class="decision-item">
           <div class="decision-info"><strong>{{ item.name }}</strong><span>{{ item.code }} · 申请人 {{ item.creator_name || item.manager_name }}</span></div>
-          <el-tag type="warning" effect="plain">待审批</el-tag>
-          <el-button type="primary" plain @click="$router.push('/projects')">去审批</el-button>
+          <el-tag type="warning" effect="plain">待审批</el-tag><div class="decision-actions"><el-button @click="rejectPendingProject(item)">驳回</el-button><el-button type="success" @click="approvePendingProject(item)">批准</el-button></div>
         </article>
       </div>
     </section>

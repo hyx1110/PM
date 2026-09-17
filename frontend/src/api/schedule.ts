@@ -3,6 +3,19 @@ import type { PageData } from '@/types/common'
 import type { Schedule, ScheduleBatchPayload, ScheduleCopyResult, ScheduleCopyWeekPayload, SchedulePayload, ScheduleQuery } from '@/types/schedule'
 
 export const getSchedules = (params: ScheduleQuery = {}) => api.get<PageData<Schedule>>('/schedules', { params })
+export async function getAllSchedules(params: ScheduleQuery = {}) {
+  const items: Schedule[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await getSchedules({ ...params, page, page_size: 500 })
+    items.push(...result.items)
+    total = result.total
+    page += 1
+    if (!result.items.length) break
+  } while (items.length < total)
+  return items
+}
 export const getMyPendingSchedules = (limit = 10) =>
   api.get<Schedule[]>('/schedules/my-pending', { params: { limit } })
 export const getSchedule = (id: number) => api.get<Schedule>(`/schedules/${id}`)

@@ -12,8 +12,8 @@ import {
   rejectProjectHourRequest,
   removeProjectMember,
 } from '@/api/project'
-import { getTasks } from '@/api/task'
-import { getSchedules } from '@/api/schedule'
+import { getAllTasks } from '@/api/task'
+import { getAllSchedules } from '@/api/schedule'
 import { getUserOptions } from '@/api/user'
 import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
 import type { DepartmentOption, OrganizationNode } from '@/types/organization'
@@ -74,9 +74,13 @@ const canManageProject = computed(() => {
   const roles = userStore.profile?.roles || []
   return project.value.manager_id === userStore.profile?.id && roles.includes('project_manager')
 })
+const canModifyProject = computed(
+  () => canManageProject.value && !['Completed', 'Cancelled'].includes(project.value?.status || ''),
+)
 const canRequestHours = computed(
   () =>
     project.value?.approval_status === 'approved'
+    && !['Completed', 'Cancelled'].includes(project.value?.status || '')
     && project.value.manager_id === userStore.profile?.id
     && (userStore.profile?.roles || []).some((role) =>
       role === 'project_manager',
@@ -94,13 +98,13 @@ async function load() {
     const [p, m, t, s] = await Promise.all([
       getProject(projectId.value),
       getProjectMembers(projectId.value),
-      getTasks({ project_id: projectId.value, page: 1, page_size: 200 }),
-      getSchedules({ project_id: projectId.value, page: 1, page_size: 200 }),
+      getAllTasks({ project_id: projectId.value, managed_project_scope: true }),
+      getAllSchedules({ project_id: projectId.value }),
     ])
     project.value = p
     members.value = m
-    tasks.value = t.items
-    schedules.value = s.items
+    tasks.value = t
+    schedules.value = s
     if (canManageProject.value) {
       const [h, u, d, o] = await Promise.all([
         getProjectHourRequests(projectId.value),
@@ -234,8 +238,8 @@ onMounted(load)
             <el-descriptions-item label="状态">{{ project.status }}</el-descriptions-item>
             <el-descriptions-item label="项目经理">{{ project.manager_name }}</el-descriptions-item>
             <el-descriptions-item label="所属部门">{{ project.department_name || '—' }}</el-descriptions-item>
-            <el-descriptions-item label="优先级">{{ project.priority }}</el-descriptions-item>
             <el-descriptions-item label="计划周期">{{ formatDate(project.planned_start) }} 至 {{ formatDate(project.planned_end) }}</el-descriptions-item>
+            <el-descriptions-item label="实际周期">{{ formatDate(project.actual_start) }} 至 {{ formatDate(project.actual_end) }}</el-descriptions-item>
             <el-descriptions-item label="审批人">{{ project.approver_name || project.approval_required_name || '—' }}</el-descriptions-item>
             <el-descriptions-item label="审批时间">{{ formatDateTime(project.approved_at) }}</el-descriptions-item>
             <el-descriptions-item label="审批意见" :span="3">{{ project.approval_note || '—' }}</el-descriptions-item>
@@ -246,14 +250,14 @@ onMounted(load)
           <template #label>项目成员 <el-badge :value="members.length" type="info" /></template>
           <div class="tab-tools">
             <span>仅展示当前有效成员</span>
-            <el-button v-if="project?.approval_status==='approved' && canManageProject" type="primary" size="small" @click="openMember">添加成员</el-button>
+            <el-button v-if="project?.approval_status==='approved' && canModifyProject" type="primary" size="small" @click="openMember">添加成员</el-button>
           </div>
           <el-table :data="members">
             <el-table-column prop="user_name" label="成员"/>
             <el-table-column label="项目角色"><template #default="{row}">{{ row.project_role === 'manager' ? '项目经理' : row.project_role }}</template></el-table-column>
             <el-table-column prop="allocation_percent" label="投入比例"><template #default="{row}">{{ row.allocation_percent }}%</template></el-table-column>
             <el-table-column label="加入时间"><template #default="{row}">{{ formatDate(row.joined_at) }}</template></el-table-column>
-            <el-table-column v-if="project?.approval_status==='approved' && canManageProject" label="操作" width="90"><template #default="{row}"><el-button v-if="row.user_id!==project?.manager_id" link type="danger" @click="removeMember(row)">移除</el-button><span v-else>固定成员</span></template></el-table-column>
+            <el-table-column v-if="project?.approval_status==='approved' && canModifyProject" label="操作" width="90"><template #default="{row}"><el-button v-if="row.user_id!==project?.manager_id" link type="danger" @click="removeMember(row)">移除</el-button><span v-else>固定成员</span></template></el-table-column>
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`项目任务 (${tasks.length})`" name="tasks">
@@ -262,7 +266,7 @@ onMounted(load)
             <el-table-column prop="name" label="任务" min-width="180"/>
             <el-table-column prop="task_type" label="类型"/>
             <el-table-column prop="owner_name" label="负责人"/>
-            <el-table-column label="计划时间" width="280"><template #default="{row}">{{ formatDateTime(row.planned_start) }} 至 {{ formatDateTime(row.planned_end) }}</template></el-table-column>
+            <el-table-column label="计划日期" width="220"><template #default="{row}">{{ formatDate(row.planned_start) }} 至 {{ formatDate(row.planned_end) }}</template></el-table-column>
             <el-table-column prop="effective_status" label="状态"/>
           </el-table>
         </el-tab-pane>
@@ -297,7 +301,7 @@ onMounted(load)
         <el-form-item label="部门" required><el-select v-model="memberForm.department_id" filterable style="width:100%" @change="memberForm.organization_id=undefined;memberForm.user_id=undefined"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
         <el-form-item label="组织（可选）"><el-tree-select v-model="memberForm.organization_id" :data="organizationOptions" :props="{label:'name',children:'children'}" node-key="id" check-strictly clearable filterable :disabled="!memberForm.department_id" style="width:100%" @change="memberForm.user_id=undefined"/></el-form-item>
         <el-form-item label="成员" required><el-select v-model="memberForm.user_id" filterable :disabled="!memberForm.department_id" placeholder="可按姓名或工号搜索" style="width:100%"><el-option v-for="item in candidateUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
-        <el-form-item label="项目角色"><el-input v-model="memberForm.project_role"/></el-form-item>
+        <el-form-item label="项目角色"><el-input model-value="项目成员" disabled/></el-form-item>
         <el-form-item label="投入比例"><el-input-number v-model="memberForm.allocation_percent" :min="0" :max="100" style="width:100%"/></el-form-item>
         <el-form-item label="加入日期"><el-date-picker v-model="memberForm.joined_at" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
       </el-form>
