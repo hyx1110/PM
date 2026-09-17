@@ -233,7 +233,7 @@ V2.0 使用：`risk:view`、`risk:handle`、`notification:view`、`import:manage
 - ReDoc：`/redoc`
 - 业务 API 前缀：`/api/v1`
 
-详细清单见 [docs/API.md](docs/API.md)，数据库见 [docs/DATABASE.md](docs/DATABASE.md)，用户模型见 [docs/HR_USER_MODEL.md](docs/HR_USER_MODEL.md)，本轮最终规则见 [docs/BUSINESS_RULES_ALIGNMENT.md](docs/BUSINESS_RULES_ALIGNMENT.md)，架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，V2 验收范围见 [docs/V2_SCOPE.md](docs/V2_SCOPE.md)。
+详细清单见 [docs/API.md](docs/API.md)，角色功能和默认权限见 [docs/ROLE_PERMISSION_GUIDE.md](docs/ROLE_PERMISSION_GUIDE.md)，数据库见 [docs/DATABASE.md](docs/DATABASE.md)，用户模型见 [docs/HR_USER_MODEL.md](docs/HR_USER_MODEL.md)，本轮最终规则见 [docs/BUSINESS_RULES_ALIGNMENT.md](docs/BUSINESS_RULES_ALIGNMENT.md)，架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，V2 验收范围见 [docs/V2_SCOPE.md](docs/V2_SCOPE.md)。
 
 ## 维护者自行验证
 
