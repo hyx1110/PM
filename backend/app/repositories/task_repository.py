@@ -1,7 +1,8 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.project import Project
+from app.models.organization import Department, Organization
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
@@ -43,7 +44,7 @@ class TaskRepository:
     def _serialize_rows(self, db: Session, rows) -> list[dict]:
         assignees = self._assignee_map(db, [row[0].id for row in rows])
         items: list[dict] = []
-        for task, project_name, project_manager_name, booked_hours in rows:
+        for task, project_name, project_manager_name, project_manager_id, booked_hours in rows:
             owners = assignees.get(task.id, [])
             items.append({
                 **{col.name: getattr(task, col.name) for col in Task.__table__.columns},
@@ -52,6 +53,7 @@ class TaskRepository:
                 "owner_names": [owner["name"] for owner in owners],
                 "owner_name": "、".join(owner["name"] for owner in owners),
                 "project_manager_name": project_manager_name,
+                "project_manager_id": project_manager_id,
                 "booked_hours": booked_hours or 0,
             })
         return items
@@ -59,7 +61,7 @@ class TaskRepository:
     def detail(self, db: Session, task_id: int) -> dict | None:
         manager = aliased(User)
         rows = db.execute(
-            select(Task, Project.name, manager.name, self._booked_hours_expression())
+            select(Task, Project.name, manager.name, Project.manager_id, self._booked_hours_expression())
             .join(Project, Project.id == Task.project_id)
             .join(manager, manager.id == Project.manager_id)
             .where(Task.id == task_id, Task.is_deleted.is_(False), Project.is_deleted.is_(False))
@@ -80,6 +82,8 @@ class TaskRepository:
         owner_name: str | None = None,
         visible_project_ids: set[int] | None = None,
         own_user_id: int | None = None,
+        personnel_keyword: str | None = None,
+        organization_keyword: str | None = None,
     ) -> tuple[list[dict], int]:
         filters = [
             Task.is_deleted.is_(False),
@@ -93,7 +97,7 @@ class TaskRepository:
             filters.extend([Task.planned_end < beijing_today(), Task.status.notin_({"completed", "cancelled"})])
         elif status:
             filters.append(Task.status == status)
-        if department_id or organization_id or employee_no or owner_name:
+        if department_id or organization_id or employee_no or owner_name or personnel_keyword or organization_keyword:
             people = select(User.id).where(User.is_deleted.is_(False))
             if department_id:
                 people = people.where(User.department_id == department_id)
@@ -103,6 +107,13 @@ class TaskRepository:
                 people = people.where(User.employee_no.like(f"%{employee_no}%"))
             if owner_name:
                 people = people.where(User.name.like(f"%{owner_name}%"))
+            if personnel_keyword:
+                people = people.where(or_(User.name.like(f"%{personnel_keyword}%"), User.employee_no.like(f"%{personnel_keyword}%")))
+            if organization_keyword:
+                people = people.where(or_(
+                    User.department_id.in_(select(Department.id).where(Department.name.like(f"%{organization_keyword}%"))),
+                    User.organization_id.in_(select(Organization.id).where(Organization.name.like(f"%{organization_keyword}%"))),
+                ))
             filters.append(Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id.in_(people))))
         if visible_project_ids is not None:
             filters.append(Task.project_id.in_(visible_project_ids or {-1}))
@@ -117,7 +128,7 @@ class TaskRepository:
         total = db.scalar(select(func.count(Task.id)).where(*filters)) or 0
         manager = aliased(User)
         rows = db.execute(
-            select(Task, Project.name, manager.name, self._booked_hours_expression())
+            select(Task, Project.name, manager.name, Project.manager_id, self._booked_hours_expression())
             .join(Project, Project.id == Task.project_id)
             .join(manager, manager.id == Project.manager_id)
             .where(*filters)

@@ -202,18 +202,17 @@ const flatOrganizations = computed(() => {
 const bookableProjects = computed(() => {
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
+  const hasGlobalAccess = roles.some((role) => ['super_admin', 'department_manager'].includes(role))
   return projects.value.filter((item) => {
     if (
       item.approval_status !== 'approved'
       || ['Completed', 'Cancelled'].includes(item.status)
     ) return false
-    return item.manager_id === currentUserId && roles.includes('project_manager')
+    return hasGlobalAccess || item.manager_id === currentUserId
   })
 })
 const canBook = computed(
-  () =>
-    userStore.hasPermission('schedule:edit')
-    && userStore.profile?.roles.includes('project_manager'),
+  () => userStore.hasPermission('schedule:edit') && bookableProjects.value.length > 0,
 )
 const dateTitle = computed(() =>
   viewMode.value === 'day'
@@ -230,7 +229,8 @@ function canBookUserForProject(item: UserOption, project?: Project) {
   if (!project) return false
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
-  return project.manager_id === currentUserId && roles.includes('project_manager')
+  return roles.some((role) => ['super_admin', 'department_manager'].includes(role))
+    || project.manager_id === currentUserId
 }
 
 async function loadBatchUsers(projectId: number) {
@@ -629,12 +629,13 @@ function showConflict(error: unknown) {
 
 async function save(payload: SchedulePayload) {
   try {
+    let result: Schedule
     if (selected.value) {
-      await updateSchedule(selected.value.id, payload)
-      ElMessage.success('预约已修改，等待被预约人重新确认')
+      result = await updateSchedule(selected.value.id, payload)
+      ElMessage.success(result.status === 'confirmed' ? '本人项目工时预约已修改并自动确认' : '预约已修改，等待被预约人重新确认')
     } else {
-      await createSchedule(payload)
-      ElMessage.success('预约已提交，等待被预约人本人确认')
+      result = await createSchedule(payload)
+      ElMessage.success(result.status === 'confirmed' ? '本人项目工时预约已创建并自动确认' : '预约已提交，等待被预约人本人确认')
     }
     bookingDialog.value = false
     selected.value = undefined
@@ -700,12 +701,12 @@ async function dropToSlot(payload: {
   const duration = dayjs(item.end_time).diff(dayjs(item.start_time), 'minute')
   const start = dayjs(`${payload.date} ${payload.time}`)
   try {
-    await moveSchedule(item.id, {
+    const result = await moveSchedule(item.id, {
       start_time: start.format('YYYY-MM-DD HH:mm:ss'),
       end_time: start.add(duration, 'minute').format('YYYY-MM-DD HH:mm:ss'),
       expected_version: item.version,
     })
-    ElMessage.success('预约时间已调整，等待本人重新确认')
+    ElMessage.success(result.status === 'confirmed' ? '本人项目工时预约已调整并自动确认' : '预约时间已调整，等待本人重新确认')
     await load()
   } catch (error) {
     showConflict(error)
@@ -782,7 +783,10 @@ async function saveBatch() {
       planned_hours: batchHours.value,
       remark: batchForm.remark,
     })
-    ElMessage.success(`已提交 ${result.created} 条预约，分别等待被预约人确认`)
+    const selfIncluded = batchForm.user_ids.includes(userStore.profile?.id || -1)
+    ElMessage.success(selfIncluded
+      ? `已提交 ${result.created} 条预约；本人预约已自动确认，其余预约等待对应人员确认`
+      : `已提交 ${result.created} 条预约，分别等待被预约人确认`)
     batchDialog.value = false
     await loadOptions()
     await load()
@@ -800,7 +804,7 @@ async function copyPreviousWeek() {
     source_week_start: target.subtract(7, 'day').format('YYYY-MM-DD HH:mm:ss'),
     target_week_start: target.format('YYYY-MM-DD HH:mm:ss'),
   })
-  ElMessage.success(`已提交 ${result.created} 条预约，跳过 ${result.skipped.length} 条`)
+  ElMessage.success(`已提交 ${result.created} 条预约，跳过 ${result.skipped.length} 条；本人预约自动确认，其余预约等待对应人员确认`)
   await loadOptions()
   await load()
 }
@@ -838,7 +842,7 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">任务共享看板</h1>
-        <p class="page-subtitle">每个人都可安排自己的培训、会议、休假、外出或其他时间；个人占用时段不可预约，项目预约由被预约人本人审批。</p>
+        <p class="page-subtitle">每个人都可安排自己的培训、会议、休假、外出或其他时间；个人占用时段不可预约。项目负责人预约本人项目工时自动确认，预约他人仍由被预约人审批。</p>
       </div>
       <div class="header-actions">
         <el-button @click="openMyTimeDrawer">我的时间安排</el-button>
@@ -964,7 +968,7 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="batchDialog" title="批量提交人力预约" width="640px">
-      <el-alert title="每位被预约人分别审批；总占用工时 = 单人工时 × 人数。" type="info" :closable="false" show-icon/>
+      <el-alert title="项目负责人预约本人时自动确认，其余人员分别审批；总占用工时 = 单人工时 × 人数。" type="info" :closable="false" show-icon/>
       <el-form label-position="top">
         <el-form-item label="预约人员" required><el-select v-model="batchForm.user_ids" multiple filterable collapse-tags placeholder="可选择多位项目成员" style="width:100%"><el-option v-for="item in batchUsers" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
         <div class="form-grid">
@@ -991,7 +995,7 @@ onMounted(async () => {
         <el-descriptions-item label="结束">{{ formatDateTime(selected.end_time) }}</el-descriptions-item>
         <el-descriptions-item label="自动工时">{{ selected.planned_hours }}h</el-descriptions-item>
         <el-descriptions-item label="版本">v{{ selected.version }}</el-descriptions-item>
-        <el-descriptions-item label="审批规则" :span="2">仅 {{ selected.user_name }} 本人可以同意或拒绝</el-descriptions-item>
+        <el-descriptions-item label="审批规则" :span="2">{{ selected.created_by===selected.user_id && selected.status==='confirmed' ? '项目负责人预约本人项目工时，系统已自动确认' : `仅 ${selected.user_name} 本人可以同意或拒绝` }}</el-descriptions-item>
         <el-descriptions-item label="备注" :span="2">{{ selected.remark || '—' }}</el-descriptions-item>
         <el-descriptions-item v-if="selected.rejection_reason" label="拒绝原因" :span="2">{{ selected.rejection_reason }}</el-descriptions-item>
       </el-descriptions>

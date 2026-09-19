@@ -10,5 +10,5 @@ export const uploadImportWorkbook = (resource: string, file: File) => {
 }
 export const getImportJobs = (params: { page?: number; page_size?: number; resource_type?: string } = {}) =>
   api.get<PageData<ImportJob>>('/data-exchange/imports', { params })
-export const downloadExport = (kind: 'schedules' | 'executions' | 'process-report', params: { start_date: string; end_date: string }) =>
+export const downloadExport = (kind: 'schedules' | 'executions' | 'process-report', params: { start_date: string; end_date: string; project_id?: number; personnel_keyword?: string; organization_keyword?: string }) =>
   api.download(`/data-exchange/exports/${kind}`, { params })

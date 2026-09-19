@@ -63,7 +63,7 @@ work_calendar_days             法定节假日/调休日期覆盖
 - `user_roles` 只保留 `user_id`、`role_id` 唯一组合，不记录角色来源。
 - 每个有效用户至少拥有一个系统角色；没有显式角色的升级数据和新用户默认获得 `project_member`。
 - 部门、组织表自身的 `data_source` 字段不参与用户角色分配。
-- 普通项目经理提交项目时将当时有效的 `supervisor_id` 写入 `projects.approver_id`，后续仅该直属主管可批准或驳回；项目经理同时具备 L3 或超级管理员角色时直接批准。追加工时仍由项目所属部门 L3 审批。
+- 普通创建人提交项目时将当时有效的 `supervisor_id` 写入 `projects.approver_id`，该直属主管或具有全局项目权限的 L3/超级管理员可批准或驳回；L3/超级管理员创建时直接批准。追加工时仍由项目所属部门 L3 发起审批通知，并允许 L3/超级管理员处理。
 - 项目创建时必须同时写入至少一名普通成员；项目经理以 `project_role=manager` 写入 `project_members` 并作为不可移除的固定成员，所有任务负责人和预约对象统一校验当前有效成员关系。
 - 任务持久化状态限定为 `not_started/running/completed/suspended/cancelled`；`delayed` 仅根据计划结束时间动态计算，不再作为数据库状态保存。
 - `task_assignees(task_id,user_id)` 唯一；`tasks.owner_id` 保留为兼容主负责人，不再作为完整负责人集合。

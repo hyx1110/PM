@@ -34,6 +34,8 @@ export interface Project {
   approver_name?: string | null
   approved_at?: string | null
   approval_note?: string | null
+  can_manage: boolean
+  all_tasks_completed: boolean
 }
 
 export interface ProjectPayload {
@@ -57,6 +59,9 @@ export interface ProjectQuery extends PageQuery {
   organization_id?: number
   employee_no?: string
   name?: string
+  personnel_keyword?: string
+  organization_keyword?: string
+  manageable_only?: boolean
   approval_status?: ProjectApprovalStatus
   approver_id?: number
 }

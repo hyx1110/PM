@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   approveProject,
   createProject,
+  completeProject,
   deleteProject,
   getProjects,
   rejectProject,
@@ -32,21 +33,16 @@ const query = reactive({
   keyword: '',
   status: '',
   manager_id: undefined as number | undefined,
-  department_id: undefined as number | undefined,
-  organization_id: undefined as number | undefined,
-  employee_no: '',
-  name: '',
+  organization_keyword: '',
+  personnel_keyword: '',
 })
 const dialogVisible = ref(false)
 const editingId = ref<number>()
 const editingProject = ref<Project>()
 const formRef = ref<FormInstance>()
-const isProjectManager = computed(() => userStore.profile?.roles.includes('project_manager') || false)
-const canCreateProject = computed(() => isProjectManager.value)
-const canManageProject = (project: Project) => {
-  const roles = userStore.profile?.roles || []
-  return project.manager_id === userStore.profile?.id && roles.includes('project_manager')
-}
+const privileged = computed(() => (userStore.profile?.roles || []).some(role => ['super_admin', 'department_manager'].includes(role)))
+const canCreateProject = computed(() => userStore.hasPermission('project:edit') && (privileged.value || userStore.profile?.roles.includes('project_manager') || userStore.profile?.roles.includes('functional_manager')))
+const canManageProject = (project: Project) => project.can_manage
 const emptyForm = (): ProjectPayload => ({
   name: '',
   project_type: 'General',
@@ -80,15 +76,6 @@ const statusLabel: Record<string, string> = {
 }
 const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已审批', rejected: '已驳回' }
 const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
-const flatOrganizations = computed(() => {
-  const result: Array<OrganizationNode & { label: string }> = []
-  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
-    result.push({ ...node, label: `${prefix}${node.name}` })
-    walk(node.children || [], `${prefix}　`)
-  })
-  walk(organizations.value)
-  return result
-})
 const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
   Running: 'primary',
   Completed: 'success',
@@ -98,7 +85,7 @@ const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> 
 const statusType = (status: string) => statusTypeMap[status] || ''
 const canReview = (row: Project) =>
   row.approval_status === 'pending'
-  && row.approver_id === userStore.profile?.id
+  && (privileged.value || row.approver_id === userStore.profile?.id)
 
 interface MemberCascaderOption {
   value: string | number
@@ -120,7 +107,7 @@ function organizationMemberOption(node: OrganizationNode): MemberCascaderOption 
     .filter(
       (item) =>
         item.organization_id === node.id
-        && item.id !== userStore.profile?.id,
+        && item.id !== form.manager_id,
     )
     .map((item) => ({
       value: item.id,
@@ -147,7 +134,7 @@ const memberCascaderOptions = computed<MemberCascaderOption[]>(() =>
           (item) =>
             item.department_id === department.id
             && !item.organization_id
-            && item.id !== userStore.profile?.id,
+            && item.id !== form.manager_id,
         )
         .map((item) => ({
           value: item.id,
@@ -173,8 +160,8 @@ async function load() {
       ...query,
       keyword: query.keyword || undefined,
       status: query.status || undefined,
-      employee_no: query.employee_no || undefined,
-      name: query.name || undefined,
+      personnel_keyword: query.personnel_keyword || undefined,
+      organization_keyword: query.organization_keyword || undefined,
     })
     projects.value = result.items
     total.value = result.total
@@ -199,6 +186,12 @@ function openCreate() {
   editingProject.value = undefined
   Object.assign(form, emptyForm())
   dialogVisible.value = true
+}
+
+function changeManager(managerId: number) {
+  const manager = users.value.find((item) => item.id === managerId)
+  if (manager?.department_id) form.department_id = manager.department_id
+  form.member_ids = form.member_ids.filter((id) => id !== managerId)
 }
 
 function openEdit(row: Project) {
@@ -286,6 +279,13 @@ async function remove(row: Project) {
   await load()
 }
 
+async function finish(row: Project) {
+  await ElMessageBox.confirm(`项目“${row.name}”的全部任务已完成。确认正式结束项目吗？确认后不能再新增任务。`, '确认项目完成', { type: 'warning', confirmButtonText: '确认完成' })
+  await completeProject(row.id)
+  ElMessage.success('项目已正式完成')
+  await load()
+}
+
 onMounted(async () => {
   await loadOptions()
   await load()
@@ -297,13 +297,13 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">项目管理</h1>
-        <p class="page-subtitle">仅展示当前用户作为项目经理负责的项目，并由项目经理维护项目与成员。</p>
+        <p class="page-subtitle">展示权限范围内的项目；项目负责人维护自己的项目，超级管理员与 L3 可管理全部项目。</p>
       </div>
       <el-button v-if="canCreateProject" type="primary" @click="openCreate">新建项目</el-button>
     </header>
     <el-alert
       v-if="userStore.hasPermission('project:edit') && !canCreateProject"
-      title="只有项目经理可以创建和维护自己负责的项目。"
+      title="作为成员参与的项目可以查看；项目维护由项目负责人、超级管理员或 L3 操作。"
       type="info"
       :closable="false"
       show-icon
@@ -316,12 +316,8 @@ onMounted(async () => {
       <el-select v-if="userStore.hasPermission('project:edit')" v-model="query.manager_id" clearable filterable placeholder="项目经理" style="width:160px">
         <el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/>
       </el-select>
-      <el-select v-model="query.department_id" clearable placeholder="所属部门" style="width:160px">
-        <el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/>
-      </el-select>
-      <el-select v-model="query.organization_id" clearable filterable placeholder="成员组织" style="width:180px"><el-option v-for="item in flatOrganizations" :key="item.id" :label="item.label" :value="item.id"/></el-select>
-      <el-input v-model="query.employee_no" clearable placeholder="成员工号" style="width:150px"/>
-      <el-input v-model="query.name" clearable placeholder="成员姓名" style="width:150px"/>
+      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:190px" @keyup.enter="query.page=1;load()"/>
+      <el-input v-model="query.personnel_keyword" clearable placeholder="姓名 / 工号" style="width:180px" @keyup.enter="query.page=1;load()"/>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>
     <section class="surface table-card">
@@ -357,14 +353,15 @@ onMounted(async () => {
             <el-button v-if="canReview(row)" link type="success" @click="approve(row)">批准</el-button>
             <el-button v-if="canReview(row)" link type="danger" @click="reject(row)">驳回</el-button>
             <template v-if="userStore.hasPermission('project:edit')">
-              <el-button v-if="['draft','rejected'].includes(row.approval_status)&&row.manager_id===userStore.profile?.id" link type="warning" @click="submitExisting(row)">提交审批</el-button>
+              <el-button v-if="['draft','rejected'].includes(row.approval_status)&&canManageProject(row)" link type="warning" @click="submitExisting(row)">提交审批</el-button>
               <el-button
-                v-if="!['Completed','Cancelled'].includes(row.status) && row.approval_status!=='pending' && canManageProject(row) && (row.approval_status==='approved' || row.manager_id===userStore.profile?.id)"
+                v-if="!['Completed','Cancelled'].includes(row.status) && row.approval_status!=='pending' && canManageProject(row)"
                 link
                 type="primary"
                 @click="openEdit(row)"
               >编辑</el-button>
-              <el-button v-if="['draft','rejected'].includes(row.approval_status) && row.manager_id===userStore.profile?.id" link type="danger" @click="remove(row)">删除</el-button>
+              <el-button v-if="['draft','rejected'].includes(row.approval_status) && canManageProject(row)" link type="danger" @click="remove(row)">删除</el-button>
+              <el-button v-if="row.all_tasks_completed && row.approval_status==='approved' && !['Completed','Cancelled'].includes(row.status) && canManageProject(row)" link type="success" @click="finish(row)">确认完成</el-button>
             </template>
           </template>
         </el-table-column>
@@ -388,7 +385,7 @@ onMounted(async () => {
           <el-form-item label="项目名称" prop="name"><el-input v-model="form.name"/></el-form-item>
           <el-form-item label="项目类型"><el-input v-model="form.project_type"/></el-form-item>
           <el-form-item label="项目经理" prop="manager_id">
-            <el-select v-model="form.manager_id" filterable disabled style="width:100%">
+            <el-select v-model="form.manager_id" filterable :disabled="Boolean(editingId) || !privileged" style="width:100%" @change="changeManager">
               <el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/>
             </el-select>
           </el-form-item>

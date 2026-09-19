@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.dependencies import get_role_codes
 from app.core.exceptions import BusinessException, bad_request, conflict, forbidden, not_found
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
@@ -27,6 +28,17 @@ from app.services.schedule_lifecycle_service import synchronize_schedule_statuse
 from app.services.work_calendar_service import calculate_work_hours
 from app.utils.model import model_to_dict
 from app.services.visibility_service import visible_schedule_user_ids
+
+
+def _can_manage_all_schedules(db: Session, user: User) -> bool:
+    return bool(get_role_codes(db, user.id) & {"super_admin", "department_manager"})
+
+
+def _submission_status(project: Project, target_user_id: int, actor: User, previous_status: str | None = None) -> str:
+    """A project owner booking their own time never needs a second approval."""
+    if target_user_id == actor.id == project.manager_id:
+        return "confirmed"
+    return "changed" if previous_status in {"confirmed", "changed"} else "pending"
 
 
 def _validate_relations(
@@ -160,6 +172,8 @@ def _assert_project_capacity(
 
 
 def _notify_assignee(db: Session, item: ScheduleBooking, title: str, content: str) -> None:
+    if item.status not in {"pending", "changed"}:
+        return
     create_notification(
         db,
         item.user_id,
@@ -248,7 +262,7 @@ def create_schedule(db: Session, payload: ScheduleCreate, user: User) -> Schedul
     item = ScheduleBooking(
         **values,
         planned_hours=hours,
-        status="pending",
+        status=_submission_status(project, payload.user_id, user),
         created_by=user.id,
     )
     db.add(item)
@@ -283,9 +297,9 @@ def update_schedule(
     item = _get_schedule_for_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    if item.status not in {"pending", "rejected", "confirmed"}:
+    if item.status not in {"pending", "changed", "rejected", "confirmed"}:
         raise bad_request("current schedule status does not allow editing")
-    if item.created_by != user.id:
+    if item.created_by != user.id and not _can_manage_all_schedules(db, user):
         raise forbidden("只有该预约的提交人可以修改")
     before = model_to_dict(item)
     values = payload.model_dump(exclude_unset=True, exclude={"planned_hours"})
@@ -318,7 +332,7 @@ def update_schedule(
     for key, value in values.items():
         setattr(item, key, value)
     item.planned_hours = hours
-    item.status = "changed" if item.status == "confirmed" else "pending"
+    item.status = _submission_status(project, user_id, user, item.status)
     item.version += 1
     item.rejection_reason = None
     db.flush()
@@ -351,7 +365,7 @@ def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBookin
         raise not_found("schedule not found")
     if item.status not in {"draft", "rejected"}:
         raise bad_request("only legacy draft or rejected schedules can be submitted")
-    if item.created_by != user.id:
+    if item.created_by != user.id and not _can_manage_all_schedules(db, user):
         raise forbidden("只有该预约的提交人可以提交")
     project = assert_project_booking_access(
         db, item.project_id, user, [item.user_id]
@@ -370,7 +384,7 @@ def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBookin
     _assert_project_capacity(db, project, hours, item.id)
     before = model_to_dict(item)
     item.planned_hours = hours
-    item.status = "pending"
+    item.status = _submission_status(project, item.user_id, user)
     item.version += 1
     item.rejection_reason = None
     _notify_assignee(
@@ -394,9 +408,9 @@ def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBookin
     return item
 
 
-def _assert_decision_access(item: ScheduleBooking, user: User) -> None:
-    if item.user_id != user.id:
-        raise forbidden("只有被预约人本人可以确认或拒绝该人力预约")
+def _assert_decision_access(db: Session, item: ScheduleBooking, user: User) -> None:
+    if item.user_id != user.id and "super_admin" not in get_role_codes(db, user.id):
+        raise forbidden("只有被预约人本人或超级管理员可以确认或拒绝该人力预约")
 
 
 def confirm_schedule(
@@ -408,7 +422,7 @@ def confirm_schedule(
     item = _get_schedule_for_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    _assert_decision_access(item, user)
+    _assert_decision_access(db, item, user)
     if item.status not in {"pending", "changed"}:
         raise bad_request("only pending or changed schedules can be confirmed")
     _validate_relations(
@@ -432,7 +446,7 @@ def confirm_schedule(
             item.created_by,
             "schedule_confirmed",
             "人力预约已确认",
-            f"预约 #{item.id} 已由被预约人本人确认。",
+            f"预约 #{item.id} 已由{'被预约人本人' if item.user_id == user.id else '超级管理员'}确认。",
             related_type="schedule",
             related_id=item.id,
         )
@@ -461,7 +475,7 @@ def reject_schedule(
     item = _get_schedule_for_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    _assert_decision_access(item, user)
+    _assert_decision_access(db, item, user)
     if item.status not in {"pending", "changed"}:
         raise bad_request("only pending or changed schedules can be rejected")
     if not payload.reason:
@@ -476,7 +490,7 @@ def reject_schedule(
             item.created_by,
             "schedule_rejected",
             "人力预约被拒绝",
-            f"预约 #{item.id} 被预约人拒绝：{payload.reason}",
+            f"预约 #{item.id} 已由{'被预约人本人' if item.user_id == user.id else '超级管理员'}拒绝：{payload.reason}",
             level="warning",
             related_type="schedule",
             related_id=item.id,
@@ -501,7 +515,7 @@ def withdraw_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBook
     item = _get_schedule_for_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    if item.created_by != user.id:
+    if item.created_by != user.id and not _can_manage_all_schedules(db, user):
         raise forbidden("只有该预约的提交人可以撤回")
     if item.status not in {"pending", "changed"}:
         raise bad_request("只有对方尚未确认的预约可以撤回")
@@ -538,7 +552,7 @@ def delete_schedule(db: Session, schedule_id: int, user: User) -> None:
         raise not_found("schedule not found")
     if item.status not in {"draft", "rejected", "cancelled", "withdrawn"}:
         raise bad_request("only draft, rejected, cancelled or withdrawn schedules can be deleted")
-    if item.created_by != user.id:
+    if item.created_by != user.id and not _can_manage_all_schedules(db, user):
         raise forbidden("只有该预约的提交人可以删除")
     before = model_to_dict(item)
     item.status = "cancelled"
@@ -565,7 +579,7 @@ def move_schedule(
     item = _get_schedule_for_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    if item.created_by != user.id:
+    if item.created_by != user.id and not _can_manage_all_schedules(db, user):
         raise forbidden("只有该预约的提交人可以调整")
     if item.version != payload.expected_version:
         raise conflict(
@@ -573,7 +587,7 @@ def move_schedule(
             40903,
             {"current_version": item.version},
         )
-    if item.status not in {"pending", "rejected", "confirmed"}:
+    if item.status not in {"pending", "changed", "rejected", "confirmed"}:
         raise bad_request("current schedule status does not allow moving")
     project = assert_project_booking_access(
         db, item.project_id, user, [item.user_id]
@@ -595,7 +609,7 @@ def move_schedule(
     item.end_time = payload.end_time
     item.planned_hours = hours
     item.version += 1
-    item.status = "changed" if item.status == "confirmed" else "pending"
+    item.status = _submission_status(project, item.user_id, user, item.status)
     item.rejection_reason = None
     _notify_assignee(
         db,
@@ -658,7 +672,7 @@ def batch_create_schedules(
             end_time=payload.end_time,
             planned_hours=hours,
             remark=payload.remark,
-            status="pending",
+            status=_submission_status(project, user_id, user),
             created_by=user.id,
         )
         db.add(item)
@@ -752,7 +766,7 @@ def copy_week(db: Session, payload: ScheduleCopyWeek, user: User) -> dict:
             end_time=end_time,
             planned_hours=hours,
             remark=source.remark,
-            status="pending",
+            status=_submission_status(project, source.user_id, user),
             created_by=user.id,
             source_booking_id=source.id,
         )

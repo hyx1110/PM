@@ -20,6 +20,8 @@ def process_report(
     owner_id: int | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     current_user: User = Depends(require_permission("process_report:view")),
     db: Session = Depends(get_db),
 ):
@@ -33,6 +35,8 @@ def process_report(
             owner_id=owner_id,
             start_date=start_date,
             end_date=end_date,
+            personnel_keyword=personnel_keyword,
+            organization_keyword=organization_keyword,
         )
     )
 

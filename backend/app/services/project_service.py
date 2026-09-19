@@ -1,7 +1,7 @@
 from datetime import datetime, time, timedelta
 from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.dependencies import get_role_codes
@@ -24,10 +24,11 @@ from app.schemas.project import (
 from app.services.notification_service import create_notification
 from app.services.operation_log_service import log_operation
 from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
+from app.services.visibility_service import has_global_project_access, related_project_ids, related_user_ids
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_now
 
-PROJECT_CREATOR_ROLES = {"project_manager"}
+PROJECT_CREATOR_ROLES = {"project_manager", "functional_manager", "department_manager", "super_admin"}
 PROJECT_CLOSED_STATUSES = {"Completed", "Cancelled"}
 PROJECT_STATUS_TRANSITIONS = {
     "Draft": {"Planned", "Running", "Cancelled"},
@@ -40,19 +41,14 @@ PROJECT_STATUS_TRANSITIONS = {
 
 
 def visible_project_ids(db: Session, user: User) -> set[int] | None:
-    """Normal project lists contain only projects managed by the current user."""
-    return set(
-        db.scalars(
-            select(Project.id).where(
-                Project.manager_id == user.id,
-                Project.is_deleted.is_(False),
-            )
-        ).all()
-    )
+    people = related_user_ids(db, user)
+    return None if people is None else related_project_ids(db, people)
 
 
 def manageable_project_ids(db: Session, user: User) -> set[int] | None:
-    """Project data scope is always the projects managed by this user."""
+    """Global project administrators or the exact project owner may maintain it."""
+    if has_global_project_access(db, user):
+        return None
     return set(
         db.scalars(
             select(Project.id).where(
@@ -70,8 +66,9 @@ def assert_project_visible(db: Session, project_id: int, user: User) -> Project:
     is_pending_approver = (
         project.approval_status == "pending" and project.approver_id == user.id
     )
-    if project.manager_id != user.id and not is_pending_approver:
-        raise forbidden("只能查看自己负责的项目")
+    visible = visible_project_ids(db, user)
+    if visible is not None and project.id not in visible and not is_pending_approver:
+        raise forbidden("只能查看本人参与或权限范围内的项目")
     return project
 
 
@@ -79,10 +76,9 @@ def assert_project_manageable(db: Session, project_id: int, user: User) -> Proje
     project = project_repository.get(db, project_id)
     if not project:
         raise not_found("project not found")
-    roles = get_role_codes(db, user.id)
-    allowed = project.manager_id == user.id and "project_manager" in roles
+    allowed = project.manager_id == user.id or has_global_project_access(db, user)
     if not allowed:
-        raise forbidden("只有该项目的项目经理可以编辑项目或维护成员")
+        raise forbidden("只有项目负责人、L3 或超级管理员可以维护项目")
     return project
 
 
@@ -111,10 +107,7 @@ def assert_project_owner_for_hour_request(
         raise bad_request("项目尚未通过审批，不能执行该操作")
     if project.status in PROJECT_CLOSED_STATUSES:
         raise bad_request("已完成或已取消的项目不能继续预约人力")
-    if (
-        project.manager_id != user.id
-        or "project_manager" not in get_role_codes(db, user.id)
-    ):
+    if project.manager_id != user.id and not has_global_project_access(db, user):
         raise forbidden("只有该项目的项目负责人可以申请追加工时")
     return project
 
@@ -141,8 +134,7 @@ def assert_project_booking_access(
     target_ids = set(target_user_ids)
     if not target_ids:
         raise bad_request("请选择至少一名被预约人")
-    roles = get_role_codes(db, user.id)
-    if project.manager_id != user.id or "project_manager" not in roles:
+    if project.manager_id != user.id and not has_global_project_access(db, user):
         raise forbidden("只能使用自己负责且已审批的项目预约人力")
     member_ids = set(
         db.scalars(
@@ -164,8 +156,8 @@ def _validate_project_manager(db: Session, manager_id: int, department_id: int) 
     manager = db.get(User, manager_id)
     if not manager or manager.is_deleted or manager.status != "active":
         raise not_found("project manager not found")
-    if "project_manager" not in get_role_codes(db, manager.id):
-        raise bad_request("项目负责人必须具有项目经理角色")
+    if not (PROJECT_CREATOR_ROLES & get_role_codes(db, manager.id)):
+        raise bad_request("项目负责人必须具有项目经理、L4、L3 或超级管理员角色")
     if manager.department_id != department_id:
         raise bad_request("项目经理必须属于项目所属部门")
     return manager
@@ -252,6 +244,8 @@ def get_department_l3(db: Session, department_id: int) -> User:
 
 
 def _assert_department_l3(db: Session, project: Project, user: User) -> User:
+    if has_global_project_access(db, user):
+        return user
     if not project.department_id:
         raise bad_request("项目未设置所属部门，无法确定 L3 审批人")
     approver = get_department_l3(db, project.department_id)
@@ -274,6 +268,9 @@ def list_projects(
     manager_name: str | None,
     approval_status: str | None = None,
     approver_id: int | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
+    manageable_only: bool = False,
 ):
     items, total = project_repository.list(
         db,
@@ -288,8 +285,13 @@ def list_projects(
         manager_name,
         approval_status,
         approver_id,
-        visible_project_ids(db, user),
+        manageable_project_ids(db, user) if manageable_only else visible_project_ids(db, user),
+        personnel_keyword=personnel_keyword,
+        organization_keyword=organization_keyword,
     )
+    global_access = has_global_project_access(db, user)
+    for item in items:
+        item["can_manage"] = global_access or item["manager_id"] == user.id
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -299,7 +301,7 @@ def list_pending_project_approvals(db: Session, user: User) -> list[dict]:
         1,
         200,
         approval_status="pending",
-        approver_id=user.id,
+        approver_id=None if has_global_project_access(db, user) else user.id,
         visible_project_ids=None,
     )
     return items
@@ -308,14 +310,16 @@ def list_pending_project_approvals(db: Session, user: User) -> list[dict]:
 def project_detail(db: Session, project_id: int, user: User) -> dict:
     project = assert_project_visible(db, project_id, user)
     items, _ = project_repository.list(db, 1, 1, visible_project_ids={project.id})
-    return items[0]
+    item = items[0]
+    item["can_manage"] = project.manager_id == user.id or has_global_project_access(db, user)
+    return item
 
 
 def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
     roles = get_role_codes(db, user.id)
     if not (roles & PROJECT_CREATOR_ROLES):
-        raise forbidden("只有项目经理可以创建项目")
-    if payload.manager_id != user.id:
+        raise forbidden("只有项目经理、L4、L3 或超级管理员可以创建项目")
+    if payload.manager_id != user.id and not has_global_project_access(db, user):
         raise forbidden("项目负责人必须选择当前创建人本人")
     manager = _validate_project_manager(db, payload.manager_id, payload.department_id)
     members = _validate_initial_project_members(db, payload.member_ids)
@@ -381,8 +385,8 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
     )
     if not project:
         raise not_found("project not found")
-    if project.created_by != user.id or project.manager_id != user.id:
-        raise forbidden("只有项目创建人可以提交审批")
+    if project.manager_id != user.id and not has_global_project_access(db, user):
+        raise forbidden("只有项目负责人、L3 或超级管理员可以提交审批")
     if project.approval_status not in {"draft", "rejected"}:
         raise bad_request("只有草稿或已驳回项目可以提交审批")
     roles = get_role_codes(db, user.id)
@@ -496,14 +500,14 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
     if values.get("status") and values["status"] not in PROJECT_STATUSES:
         raise bad_request("invalid project status")
     if project.approval_status != "approved":
-        if project.manager_id != user.id:
+        if project.manager_id != user.id and not has_global_project_access(db, user):
             raise forbidden("未审批项目只能由项目创建人修改")
         if project.approval_status == "pending":
             raise bad_request("待审批项目不能修改，请先由直属主管审批")
         values["status"] = "Draft"
     elif "status" in values and values["status"] != project.status:
         if values["status"] != "Cancelled":
-            raise bad_request("项目状态由任务执行状态自动汇总，项目管理仅允许手动取消")
+            raise bad_request("请通过确认完成入口结束项目；其他状态随任务进度汇总")
         allowed_statuses = PROJECT_STATUS_TRANSITIONS.get(project.status, set())
         if values["status"] not in allowed_statuses:
             raise bad_request(
@@ -597,9 +601,9 @@ def decide_project(
         raise not_found("project not found")
     if project.approval_status != "pending":
         raise bad_request("only pending projects can be reviewed")
-    if project.approver_id != user.id:
+    if project.approver_id != user.id and not has_global_project_access(db, user):
         raise forbidden("只有项目创建人的直属主管可以审批")
-    if project.created_by == user.id:
+    if project.created_by == user.id and not has_global_project_access(db, user):
         raise forbidden("项目创建人不能审批自己的项目")
     if not approved and not payload.note:
         raise bad_request("驳回项目时必须填写原因")
@@ -645,6 +649,56 @@ def decide_project(
     return project
 
 
+def complete_project(db: Session, project_id: int, user: User) -> Project:
+    project = db.scalar(select(Project).where(
+        Project.id == project_id, Project.is_deleted.is_(False)
+    ).with_for_update())
+    if not project:
+        raise not_found("project not found")
+    assert_project_manageable(db, project_id, user)
+    if project.status == "Completed":
+        raise bad_request("项目已确认完成，请勿重复操作")
+    assert_project_approved(db, project_id)
+    tasks = list(db.scalars(select(Task).where(
+        Task.project_id == project_id, Task.is_deleted.is_(False),
+        Task.status != "cancelled",
+    ).with_for_update()).all())
+    if not tasks or any(task.status != "completed" for task in tasks):
+        raise bad_request("项目至少需要一项有效任务，且所有未取消任务均已完成才能确认完成")
+    if db.scalar(select(ProjectHourRequest.id).where(
+        ProjectHourRequest.project_id == project_id,
+        ProjectHourRequest.status == "pending",
+    ).limit(1)):
+        raise bad_request("请先处理待审批的追加工时申请，再确认项目完成")
+    synchronize_schedule_statuses(db)
+    if db.scalar(select(ScheduleBooking.id).where(
+        ScheduleBooking.project_id == project_id,
+        or_(ScheduleBooking.status.in_({"pending", "changed"}),
+            ScheduleBooking.status.in_({"confirmed", "running"}) & (ScheduleBooking.end_time > beijing_now())),
+    ).limit(1)):
+        raise bad_request("请先处理待确认或尚未结束的预约，再确认项目完成")
+    before = model_to_dict(project)
+    actual_start, actual_end = db.execute(select(
+        func.min(ExecutionRecord.actual_start), func.max(ExecutionRecord.actual_end)
+    ).join(Task, Task.id == ExecutionRecord.task_id).where(
+        Task.project_id == project_id, Task.is_deleted.is_(False),
+        ExecutionRecord.is_deleted.is_(False),
+    )).one()
+    project.status = "Completed"
+    project.actual_start = actual_start
+    project.actual_end = actual_end or beijing_now().date()
+    log_operation(db, operator_id=user.id, module="project", action="complete",
+                  object_type="project", object_id=project.id,
+                  before_data=before, after_data=model_to_dict(project))
+    if project.manager_id != user.id:
+        create_notification(db, project.manager_id, "project_completed", "项目已确认完成",
+                            f"项目“{project.name}”已由 {user.name} 确认完成。",
+                            related_type="project", related_id=project.id)
+    db.commit()
+    db.refresh(project)
+    return project
+
+
 def delete_draft_project(db: Session, project_id: int, user: User) -> None:
     project = assert_project_manageable(db, project_id, user)
     if project.approval_status not in {"draft", "rejected"}:
@@ -664,23 +718,7 @@ def delete_draft_project(db: Session, project_id: int, user: User) -> None:
 
 
 def list_members(db: Session, project_id: int, user: User):
-    project = project_repository.get(db, project_id)
-    if not project:
-        raise not_found("project not found")
-    is_active_member = bool(
-        db.scalar(
-            select(ProjectMember.id).where(
-                ProjectMember.project_id == project_id,
-                ProjectMember.user_id == user.id,
-                ProjectMember.left_at.is_(None),
-            )
-        )
-    )
-    is_pending_approver = (
-        project.approval_status == "pending" and project.approver_id == user.id
-    )
-    if project.manager_id != user.id and not is_active_member and not is_pending_approver:
-        raise forbidden("只能查看本人参与项目的成员")
+    assert_project_visible(db, project_id, user)
     return project_repository.list_members(db, project_id)
 
 
@@ -862,7 +900,7 @@ def create_hour_request(
 
 def list_pending_hour_requests(db: Session, user: User) -> list[dict]:
     """Return the L3 user's actionable hour requests for the dashboard."""
-    if "department_manager" not in get_role_codes(db, user.id):
+    if not has_global_project_access(db, user):
         return []
     requester = aliased(User)
     rows = db.execute(
@@ -877,7 +915,6 @@ def list_pending_hour_requests(db: Session, user: User) -> list[dict]:
         .join(requester, requester.id == ProjectHourRequest.requested_by)
         .where(
             ProjectHourRequest.status == "pending",
-            Department.manager_id == user.id,
             Project.is_deleted.is_(False),
         )
         .order_by(ProjectHourRequest.created_at.asc())

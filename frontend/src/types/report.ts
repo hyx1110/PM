@@ -21,11 +21,14 @@ export interface ProcessReportItem {
   evaluated_at?: string | null
   effective_status: string
   task_status: string
+  can_evaluate: boolean
 }
 
 export interface ProcessReportQuery extends PageQuery {
   project_id?: number
   owner_id?: number
+  personnel_keyword?: string
+  organization_keyword?: string
   start_date?: string
   end_date?: string
 }
@@ -47,6 +50,8 @@ export interface WorkloadItem {
 }
 
 export interface DashboardSummary {
+  planned_hours_scope: string
+  planned_hours_description: string
   projects_total: number
   projects_running: number
   delayed_tasks: number
@@ -61,8 +66,10 @@ export interface DashboardSummary {
   critical_risks: number
   today_risks: number
   weekly_planned_hours: number
+  recent_14_day_planned_hours: number
   monthly_planned_hours: number
   weekly_utilization_rate: number
+  recent_14_day_utilization_rate: number
   task_completion_rate: number
   schedule_trend: Array<{ date: string; planned_hours: number }>
 }

@@ -21,7 +21,7 @@ class UserCreate(ORMModel):
     email: EmailStr | None = None
     department_id: int
     organization_id: int | None = None
-    supervisor_id: int | None = None
+    supervisor_id: int = Field(gt=0)
     status: str = "active"
     role_ids: list[int] = Field(default_factory=list)
 

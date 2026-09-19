@@ -12,6 +12,10 @@ export interface Task {
   owner_names: string[]
   owner_name?: string
   project_manager_name?: string
+  project_manager_id: number
+  can_manage: boolean
+  can_edit: boolean
+  can_delete: boolean
   planned_start: string
   planned_end: string
   estimated_hours: number
@@ -46,4 +50,6 @@ export interface TaskQuery extends PageQuery {
   employee_no?: string
   name?: string
   managed_project_scope?: boolean
+  personnel_keyword?: string
+  organization_keyword?: string
 }

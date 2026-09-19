@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.responses import success
-from app.models.organization import Department
+from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
 from app.models.rbac import Role, UserRole
 from app.models.schedule import ScheduleBooking
@@ -36,6 +36,8 @@ def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_
 def schedule_user_options(
     project_id: int | None = None,
     keyword: str | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     name: str | None = None,
     employee_no: str | None = None,
     department_id: int | None = None,
@@ -56,13 +58,20 @@ def schedule_user_options(
         statement = statement.where(User.id.in_(visible_ids or {-1}))
     if project_id:
         statement = statement.where(User.id.in_(select(ProjectMember.user_id).where(ProjectMember.project_id == project_id, ProjectMember.left_at.is_(None))))
-    if keyword:
+    personnel_keyword = (personnel_keyword or keyword or "").strip()
+    if personnel_keyword:
         statement = statement.where(
             or_(
-                User.name.like(f"%{keyword}%"),
-                User.employee_no.like(f"%{keyword}%"),
+                User.name.like(f"%{personnel_keyword}%"),
+                User.employee_no.like(f"%{personnel_keyword}%"),
             )
         )
+    if organization_keyword and organization_keyword.strip():
+        pattern = f"%{organization_keyword.strip()}%"
+        statement = statement.where(or_(
+            User.department_id.in_(select(Department.id).where(Department.name.like(pattern))),
+            User.organization_id.in_(select(Organization.id).where(Organization.name.like(pattern))),
+        ))
     if name:
         statement = statement.where(User.name.like(f"%{name}%"))
     if employee_no:

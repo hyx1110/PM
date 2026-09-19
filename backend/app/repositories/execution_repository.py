@@ -1,9 +1,10 @@
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.execution import ExecutionRecord
+from app.models.organization import Department, Organization
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
@@ -66,6 +67,8 @@ class ExecutionRepository:
         task_id: int | None = None,
         user_id: int | None = None,
         project_id: int | None = None,
+        personnel_keyword: str | None = None,
+        organization_keyword: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
         visible_project_ids: set[int] | None = None,
@@ -82,6 +85,15 @@ class ExecutionRepository:
             filters.append(ExecutionRecord.user_id == user_id)
         if project_id:
             filters.append(Task.project_id == project_id)
+        if personnel_keyword and personnel_keyword.strip():
+            pattern = f"%{personnel_keyword.strip()}%"
+            filters.append(or_(User.name.like(pattern), User.employee_no.like(pattern)))
+        if organization_keyword and organization_keyword.strip():
+            pattern = f"%{organization_keyword.strip()}%"
+            filters.append(or_(
+                User.department_id.in_(select(Department.id).where(Department.name.like(pattern))),
+                User.organization_id.in_(select(Organization.id).where(Organization.name.like(pattern))),
+            ))
         if start_date:
             filters.append(
                 func.coalesce(
@@ -101,6 +113,7 @@ class ExecutionRepository:
             select(func.count(ExecutionRecord.id))
             .join(Task, Task.id == ExecutionRecord.task_id)
             .join(Project, Project.id == Task.project_id)
+            .join(User, User.id == ExecutionRecord.user_id)
             .where(*filters)
         )
         total = db.scalar(count_query) or 0
@@ -118,7 +131,7 @@ class ExecutionRepository:
             .join(Project, Project.id == Task.project_id)
             .join(User, User.id == ExecutionRecord.user_id)
             .where(*filters)
-            .order_by(ExecutionRecord.actual_start.desc())
+            .order_by(ExecutionRecord.created_at.desc(), ExecutionRecord.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()

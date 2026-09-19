@@ -27,6 +27,9 @@ class RBACRepository:
         db.add_all([RolePermission(role_id=role_id, permission_id=item) for item in set(permission_ids)])
 
     def replace_user_roles(self, db: Session, user_id: int, role_ids: list[int]) -> None:
+        # SessionLocal disables autoflush. Flush staged assignments before
+        # comparing so repeated replacements cannot enqueue duplicate roles.
+        db.flush()
         requested = set(role_ids)
         existing = set(
             db.scalars(
@@ -44,6 +47,7 @@ class RBACRepository:
                 for role_id in requested - existing
             ]
         )
+        db.flush()
 
     def clear_user_roles(self, db: Session, user_id: int) -> None:
         db.query(UserRole).filter(UserRole.user_id == user_id).delete(

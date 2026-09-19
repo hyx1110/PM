@@ -56,8 +56,8 @@ def _validate_relations(
         cursor = db.get(User, cursor.supervisor_id) if cursor.supervisor_id else None
 
 
-def list_users(db: Session, page: int, page_size: int, keyword: str | None, department_id: int | None, organization_id: int | None, status: str | None):
-    items, total = user_repository.list(db, page, page_size, keyword, department_id, organization_id, status)
+def list_users(db: Session, page: int, page_size: int, keyword: str | None, department_id: int | None, organization_id: int | None, status: str | None, organization_keyword: str | None = None):
+    items, total = user_repository.list(db, page, page_size, keyword, department_id, organization_id, status, organization_keyword)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -196,6 +196,8 @@ def _collect_active_dependencies(
 def create_user(db: Session, payload: UserCreate, operator_id: int) -> User:
     if not payload.department_id:
         raise bad_request("新建用户必须选择所属部门")
+    if not payload.supervisor_id:
+        raise bad_request("新建用户必须选择直属主管；最高级主管由数据库维护")
     if user_repository.get_by_employee_no(db, payload.employee_no):
         raise conflict("employee_no already exists", 40902)
     if payload.email and db.scalar(select(User).where(User.email == payload.email)):
@@ -285,6 +287,8 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
     department_id = values.get("department_id", user.department_id)
     organization_id = values.get("organization_id", user.organization_id)
     supervisor_id = values.get("supervisor_id", user.supervisor_id)
+    if user.supervisor_id and not supervisor_id:
+        raise bad_request("不能清空直属主管；最高级主管由数据库维护")
     if not department_id:
         raise bad_request("用户必须具有所属部门")
     if supervisor_id == user_id:
@@ -336,7 +340,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
                 select(Role.code).where(Role.id.in_(normalized_role_ids or {-1}))
             ).all()
         )
-        if "project_manager" not in new_role_codes and db.scalar(
+        if not new_role_codes & {"super_admin", "department_manager", "functional_manager", "project_manager"} and db.scalar(
             select(Project.id).where(
                 Project.manager_id == user.id,
                 Project.is_deleted.is_(False),
@@ -344,7 +348,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
             ).limit(1)
         ):
             raise conflict(
-                "用户仍负责未结束项目，不能移除项目经理角色",
+                "用户仍负责未结束项目，须保留项目经理、L4、L3 或超级管理员角色",
                 40908,
                 {"dependencies": ["active managed projects"]},
             )
@@ -419,7 +423,11 @@ def delete_user(db: Session, user_id: int, operator: User) -> None:
         raise bad_request("users cannot delete their own account")
     assert_super_admin_continuity(db, user, deleting=True)
 
-    dependencies = _collect_active_dependencies(db, user_id)
+    dependencies = _collect_active_dependencies(
+        db,
+        user_id,
+        include_management_relations=True,
+    )
     if dependencies:
         raise conflict(
             f"reassign or close the user's {', '.join(dependencies)} before deleting",

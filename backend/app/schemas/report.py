@@ -25,6 +25,7 @@ class ProcessReportItem(ORMModel):
     evaluated_at: datetime | None = None
     effective_status: str
     task_status: str
+    can_evaluate: bool
 
 
 class WorkloadItem(ORMModel):
@@ -52,7 +53,11 @@ class DashboardSummary(ORMModel):
     critical_risks: int
     today_risks: int
     weekly_planned_hours: float
+    recent_14_day_planned_hours: float
     monthly_planned_hours: float
     weekly_utilization_rate: float
+    recent_14_day_utilization_rate: float
     task_completion_rate: float
     schedule_trend: list[dict]
+    planned_hours_scope: str
+    planned_hours_description: str

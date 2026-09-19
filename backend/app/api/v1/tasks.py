@@ -23,10 +23,12 @@ def list_tasks(
     employee_no: str | None = None,
     name: str | None = None,
     managed_project_scope: bool = False,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     current_user: User = Depends(require_permission("task:view")),
     db: Session = Depends(get_db),
 ):
-    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name, managed_project_scope))
+    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name, managed_project_scope, personnel_keyword, organization_keyword))
 
 
 @router.post("")
@@ -69,7 +71,7 @@ def update_task(
     db: Session = Depends(get_db),
 ):
     task_service.update_task(db, task_id, payload, current_user)
-    return success(task_service.task_response(db, task_id))
+    return success(task_service.task_response(db, task_id, current_user))
 
 
 @router.delete("/{task_id}")

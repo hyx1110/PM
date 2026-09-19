@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createTask, deleteTask, getAllTasks, getTasks, updateTask } from '@/api/task'
 import { getAllProjects, getProjectMembers } from '@/api/project'
 import { getUserOptions } from '@/api/user'
-import { getDepartments, getOrganizationTree } from '@/api/organization'
-import type { Department, OrganizationNode } from '@/types/organization'
 import type { Project } from '@/types/project'
 import type { Task, TaskPayload } from '@/types/task'
 import type { UserOption } from '@/types/user'
@@ -14,6 +13,7 @@ import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
+const router = useRouter()
 const loading = ref(false)
 const tasks = ref<Task[]>([])
 const projectTasks = ref<Task[]>([])
@@ -21,12 +21,9 @@ const total = ref(0)
 const projects = ref<Project[]>([])
 const users = ref<UserOption[]>([])
 const ownerOptions = ref<UserOption[]>([])
-const departments = ref<Department[]>([])
-const organizations = ref<OrganizationNode[]>([])
 const query = reactive({
   page: 1, page_size: 100, project_id: undefined as number | undefined,
-  status: '', department_id: undefined as number | undefined,
-  organization_id: undefined as number | undefined, employee_no: '', name: '',
+  status: '', organization_keyword: '', personnel_keyword: '',
 })
 const dialogVisible = ref(false)
 const editingId = ref<number>()
@@ -48,11 +45,9 @@ const rules: FormRules = {
 const filterStatuses = ['not_started', 'running', 'completed', 'suspended', 'cancelled', 'delayed']
 const statusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', suspended: '已暂停', cancelled: '已取消', delayed: '已延期' }
 const taskTypes = ['Project', 'Routine', 'Training', 'Leave', 'Other']
-const canManageProject = (project?: Project) => Boolean(
-  project && project.manager_id === userStore.profile?.id && userStore.profile?.roles.includes('project_manager'),
-)
-const canEditTask = (task: Task) => task.owner_ids.includes(userStore.profile?.id || -1)
-const canUpdateTask = (task: Task) => canEditTask(task) && !['completed', 'cancelled'].includes(task.status)
+const canManageProject = (project?: Project) => Boolean(project?.can_manage)
+const canExecuteTask = (task: Task) => task.owner_ids.includes(userStore.profile?.id || -1)
+  || Boolean(userStore.profile?.roles.some(role => ['super_admin', 'department_manager'].includes(role)))
 const manageableProjects = computed(() => projects.value.filter(canManageProject))
 const approvedProjects = computed(() => manageableProjects.value.filter((item) => item.approval_status === 'approved' && !['Completed', 'Cancelled'].includes(item.status)))
 const parentOptions = computed(() => projectTasks.value.filter(
@@ -62,15 +57,6 @@ const parentOptions = computed(() => projectTasks.value.filter(
     && item.status === 'not_started'
     && Number(item.booked_hours) === 0,
 ))
-const flatOrganizations = computed(() => {
-  const result: Array<OrganizationNode & { label: string }> = []
-  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
-    result.push({ ...node, label: `${prefix}${node.name}` })
-    walk(node.children || [], `${prefix}　`)
-  })
-  walk(organizations.value)
-  return result
-})
 const treeTasks = computed(() => {
   const visibleIds = new Set(tasks.value.map((item) => item.id))
   const roots = tasks.value.filter((item) => !item.parent_id || !visibleIds.has(item.parent_id)).map((item) => ({ ...item, children: [] as Task[] }))
@@ -85,8 +71,8 @@ async function load() {
     const result = await getTasks({
       ...query,
       status: query.status || undefined,
-      employee_no: query.employee_no || undefined,
-      name: query.name || undefined,
+      personnel_keyword: query.personnel_keyword || undefined,
+      organization_keyword: query.organization_keyword || undefined,
     })
     tasks.value = result.items
     total.value = result.total
@@ -94,9 +80,8 @@ async function load() {
 }
 
 async function loadOptions() {
-  [projects.value, users.value, departments.value, organizations.value] = await Promise.all([
-    getAllProjects(),
-    getUserOptions(), getDepartments(), getOrganizationTree(),
+  [projects.value, users.value] = await Promise.all([
+    getAllProjects(), getUserOptions(),
   ])
 }
 
@@ -160,21 +145,26 @@ async function remove(row: Task) {
   await load()
 }
 
+async function editRemark(row: Task) {
+  const { value } = await ElMessageBox.prompt('任务负责人可以维护备注；负责人、计划工时等核心字段由项目负责人维护。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '' })
+  await updateTask(row.id, { remark: value || '' })
+  ElMessage.success('备注已保存')
+  await load()
+}
+
 onMounted(async () => { await loadOptions(); await load() })
 </script>
 
 <template>
   <div class="page-shell">
     <header class="page-header">
-      <div><h1 class="page-title">任务管理</h1><p class="page-subtitle">仅展示自己作为负责人的任务；任务状态由执行记录自动关联。</p></div>
+      <div><h1 class="page-title">任务管理</h1><p class="page-subtitle">展示本人、参与项目及权限范围内的任务；任务状态以最新执行记录为准，项目完成由负责人手动确认。</p></div>
       <el-button v-if="approvedProjects.length" type="primary" @click="openCreate()">新增任务</el-button>
     </header>
     <section class="surface filter-bar">
       <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:210px"><el-option v-for="item in projects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-      <el-select v-model="query.department_id" clearable placeholder="部门" style="width:150px"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select>
-      <el-select v-model="query.organization_id" clearable filterable placeholder="组织" style="width:170px"><el-option v-for="item in flatOrganizations" :key="item.id" :label="item.label" :value="item.id"/></el-select>
-      <el-input v-model="query.employee_no" clearable placeholder="负责人工号" style="width:145px"/>
-      <el-input v-model="query.name" clearable placeholder="负责人姓名" style="width:145px"/>
+      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:190px" @keyup.enter="query.page=1;load()"/>
+      <el-input v-model="query.personnel_keyword" clearable placeholder="负责人姓名 / 工号" style="width:180px" @keyup.enter="query.page=1;load()"/>
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:130px"><el-option v-for="item in filterStatuses" :key="item" :label="statusLabel[item]" :value="item"/></el-select>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>
@@ -187,7 +177,7 @@ onMounted(async () => { await loadOptions(); await load() })
         <el-table-column label="计划日期" width="220"><template #default="{row}">{{formatDate(row.planned_start)}} 至 {{formatDate(row.planned_end)}}</template></el-table-column>
         <el-table-column label="预计工时" width="95"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
         <el-table-column label="状态" width="95"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':''" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></template></el-table-column>
-        <el-table-column label="操作" fixed="right" width="205"><template #default="{row}"><el-button v-if="!row.parent_id&&row.status==='not_started'&&Number(row.booked_hours)===0&&canManageProject(projects.find(project=>project.id===row.project_id))" link @click="openCreate(row)">添加子任务</el-button><template v-if="canEditTask(row)"><el-button v-if="canUpdateTask(row)" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-if="['not_started','cancelled'].includes(row.status)&&!row.children?.length" link type="danger" @click="remove(row)">删除</el-button></template></template></el-table-column>
+        <el-table-column label="操作" fixed="right" width="265"><template #default="{row}"><el-button v-if="!row.parent_id&&row.status==='not_started'&&Number(row.booked_hours)===0&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.children?.length" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[50,100,200]" layout="total, sizes, prev, pager, next" @change="load"/></div>
     </section>

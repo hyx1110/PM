@@ -4,6 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.dependencies import get_role_codes
 from app.models.project import Project
 from app.models.risk import RiskRecord
 from app.models.schedule import ScheduleBooking
@@ -11,7 +12,7 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.report_repository import report_repository
 from app.services.task_service import effective_status
-from app.services.project_service import manageable_project_ids
+from app.services.project_service import visible_project_ids
 from app.services.visibility_service import visible_schedule_user_ids
 from app.services.work_calendar_service import is_workday
 from app.utils.time import beijing_now
@@ -28,12 +29,20 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
         db,
         page,
         page_size,
-        visible_project_ids=manageable_project_ids(db, user),
+        visible_project_ids=visible_project_ids(db, user),
         **filters,
     )
+    roles = get_role_codes(db, user.id)
+    global_evaluator = bool(roles & {"super_admin", "department_manager"})
     for item in items:
         item["task_status"] = item["status"]
         item["effective_status"] = effective_status(item.pop("status"), item["planned_end"])
+        item["can_evaluate"] = (
+            (global_evaluator or item.pop("project_manager_id") == user.id)
+            and item["project_status"] == "Completed"
+            and item["task_status"] == "completed"
+            and item["evaluation_id"] is None
+        )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -69,31 +78,28 @@ def workload_report(db: Session, user: User, start_date: date, end_date: date, d
 
 def dashboard_summary(db: Session, user: User) -> dict:
     schedule_user_ids = visible_schedule_user_ids(db, user)
-    project_filters = [
-        Project.is_deleted.is_(False),
-        Project.manager_id == user.id,
-    ]
+    project_scope = visible_project_ids(db, user)
+    project_filters = [Project.is_deleted.is_(False)]
+    if project_scope is not None:
+        project_filters.append(Project.id.in_(project_scope or {-1}))
     active_project_ids = select(Project.id).where(Project.is_deleted.is_(False))
-    managed_project_ids = select(Project.id).where(
-        Project.manager_id == user.id,
-        Project.is_deleted.is_(False),
-    )
-    assigned_task_ids = select(TaskAssignee.task_id).where(
-        TaskAssignee.user_id == user.id
-    )
     task_filters = [
         Task.is_deleted.is_(False),
         Task.project_id.in_(active_project_ids),
-        or_(
-            Task.id.in_(assigned_task_ids),
-            Task.project_id.in_(managed_project_ids),
-        ),
     ]
-    schedule_filters = [ScheduleBooking.project_id.in_(active_project_ids)]
-    if schedule_user_ids is not None:
-        schedule_filters.append(
-            ScheduleBooking.user_id.in_(schedule_user_ids or {-1})
-        )
+    schedule_filters = [
+        ScheduleBooking.project_id.in_(active_project_ids),
+        ScheduleBooking.task_id.in_(select(Task.id).where(Task.is_deleted.is_(False))),
+    ]
+    if project_scope is not None:
+        task_filters.append(Task.project_id.in_(project_scope or {-1}))
+        schedule_filters.append(ScheduleBooking.project_id.in_(project_scope or {-1}))
+    roles = get_role_codes(db, user.id)
+    scope_label = (
+        "全部项目" if project_scope is None else
+        "本人及全部下属相关项目" if "functional_manager" in roles else
+        "本人负责或参与的项目"
+    )
     now = beijing_now()
     today = now.date()
     project_total = db.scalar(select(func.count(Project.id)).where(*project_filters)) or 0
@@ -122,7 +128,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
     ) or 0
     pending_project_approvals = db.scalar(
         select(func.count(Project.id)).where(
-            Project.approver_id == user.id,
+            *([] if project_scope is None else [Project.approver_id == user.id]),
             Project.approval_status == "pending",
             Project.is_deleted.is_(False),
         )
@@ -164,13 +170,13 @@ def dashboard_summary(db: Session, user: User) -> dict:
     today_risks = db.scalar(
         select(func.count(RiskRecord.id)).where(*risk_filters, func.date(RiskRecord.detected_at) == today)
     ) or 0
-    week_start = today - timedelta(days=today.weekday())
-    week_hours = db.scalar(
+    trend_start = today - timedelta(days=13)
+    recent_14_day_hours = db.scalar(
         select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(
             *schedule_filters,
             ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
-            ScheduleBooking.start_time >= datetime.combine(week_start, datetime.min.time()),
-            ScheduleBooking.start_time < datetime.combine(week_start + timedelta(days=7), datetime.min.time()),
+            ScheduleBooking.start_time >= datetime.combine(trend_start, datetime.min.time()),
+            ScheduleBooking.start_time < datetime.combine(today + timedelta(days=1), datetime.min.time()),
         )
     ) or 0
     month_start = today.replace(day=1)
@@ -184,18 +190,25 @@ def dashboard_summary(db: Session, user: User) -> dict:
         )
     ) or 0
     active_user_filters = [User.status == "active", User.is_deleted.is_(False)]
-    if schedule_user_ids is not None:
-        active_user_filters.append(User.id.in_(schedule_user_ids or {-1}))
+    if project_scope is not None:
+        from app.models.project import ProjectMember
+
+        active_user_filters.append(or_(
+            User.id.in_(select(ProjectMember.user_id).where(
+                ProjectMember.project_id.in_(project_scope or {-1}),
+                ProjectMember.left_at.is_(None),
+            )),
+            User.id.in_(select(ScheduleBooking.user_id).where(*schedule_filters)),
+        ))
     active_users = db.scalar(select(func.count(User.id)).where(*active_user_filters)) or 0
-    weekly_workdays = sum(
-        is_workday(db, week_start + timedelta(days=index)) for index in range(7)
+    recent_14_day_workdays = sum(
+        is_workday(db, trend_start + timedelta(days=index)) for index in range(14)
     )
-    weekly_capacity = active_users * weekly_workdays * settings.standard_work_hours
+    recent_14_day_capacity = active_users * recent_14_day_workdays * settings.standard_work_hours
     total_tasks = db.scalar(select(func.count(Task.id)).where(*task_filters)) or 0
     completed_tasks = db.scalar(
         select(func.count(Task.id)).where(*task_filters, Task.status == "completed")
     ) or 0
-    trend_start = today - timedelta(days=13)
     trend_rows = db.execute(
         select(
             func.date(ScheduleBooking.start_time).label("day"),
@@ -231,11 +244,21 @@ def dashboard_summary(db: Session, user: User) -> dict:
         "open_risks": open_risks,
         "critical_risks": critical_risks,
         "today_risks": today_risks,
-        "weekly_planned_hours": float(week_hours),
+        # Keep the legacy weekly fields for API compatibility. They now match
+        # the 14-day chart and label instead of returning an unrelated week.
+        "weekly_planned_hours": float(recent_14_day_hours),
+        "recent_14_day_planned_hours": float(recent_14_day_hours),
         "monthly_planned_hours": float(month_hours),
-        "weekly_utilization_rate": round(float(week_hours) / weekly_capacity * 100, 2) if weekly_capacity else 0,
+        "weekly_utilization_rate": round(float(recent_14_day_hours) / recent_14_day_capacity * 100, 2) if recent_14_day_capacity else 0,
+        "recent_14_day_utilization_rate": round(float(recent_14_day_hours) / recent_14_day_capacity * 100, 2) if recent_14_day_capacity else 0,
         "task_completion_rate": round(completed_tasks / total_tasks * 100, 2) if total_tasks else 0,
         "schedule_trend": trend,
+        "planned_hours_scope": scope_label,
+        "planned_hours_description": (
+            f"统计范围：{scope_label}。按预约开始日期汇总已确认、执行中、已完成预约的计划工时；"
+            "近14天为北京时间今天及之前13天，本月为自然月。待确认、拒绝、撤回和取消预约、"
+            "个人请假培训安排不计入；项目预算、任务预计工时及实际工时不属于此统计。"
+        ),
     }
 
 

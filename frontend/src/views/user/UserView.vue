@@ -16,13 +16,14 @@ const loading = ref(false)
 const users = ref<User[]>([])
 const userOptions = ref<UserOption[]>([])
 const total = ref(0)
-const query = reactive({ page: 1, page_size: 20, keyword: '', department_id: undefined as number | undefined, organization_id: undefined as number | undefined, status: '' })
+const query = reactive({ page: 1, page_size: 20, keyword: '', organization_keyword: '', status: '' })
 const departments = ref<Department[]>([])
 const organizations = ref<OrganizationNode[]>([])
 const roles = ref<Role[]>([])
 const dialogVisible = ref(false)
 const editingId = ref<number>()
 const editingIsSuper = ref(false)
+const editingRootUser = ref(false)
 const formRef = ref<FormInstance>()
 const assignableRoles = computed(() => roles.value.filter((item) => item.code !== 'super_admin'))
 
@@ -74,6 +75,10 @@ const rules: FormRules = {
   }],
   email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }],
   department_id: [{ required: true, message: '请选择所属部门', trigger: 'change' }],
+  supervisor_id: [{ validator: (_rule, value, callback) => {
+    if (!value && !editingRootUser.value) return callback(new Error('请选择直属主管'))
+    callback()
+  }, trigger: 'change' }],
 }
 
 const flatOrganizations = computed(() => {
@@ -125,6 +130,7 @@ async function loadOptions() {
 function openCreate() {
   editingId.value = undefined
   editingIsSuper.value = false
+  editingRootUser.value = false
   Object.assign(form, emptyForm())
   dialogVisible.value = true
 }
@@ -132,6 +138,7 @@ function openCreate() {
 function openEdit(row: User) {
   editingId.value = row.id
   editingIsSuper.value = row.roles.includes('super_admin')
+  editingRootUser.value = !row.supervisor_id
   Object.assign(form, {
     employee_no: row.employee_no,
     password: '',
@@ -222,8 +229,7 @@ onMounted(async () => { await loadOptions(); await load() })
     <header class="page-header"><div><h1 class="page-title">用户管理</h1><p class="page-subtitle">员工号同时作为登录账号；用户只维护基础身份、组织关系和五类系统角色。</p></div><el-button v-if="userStore.hasPermission('user:edit')" type="primary" @click="openCreate">新增用户</el-button></header>
     <section class="surface filter-bar">
       <el-input v-model="query.keyword" clearable placeholder="姓名、员工号或邮箱" style="width:220px" @keyup.enter="query.page=1;load()" />
-      <el-select v-model="query.department_id" clearable placeholder="所属部门" style="width:180px"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id" /></el-select>
-      <el-select v-model="query.organization_id" clearable filterable placeholder="所属组织" style="width:180px"><el-option v-for="item in flatOrganizations.filter(v=>!query.department_id||v.department_id===query.department_id)" :key="item.id" :label="item.label" :value="item.id" /></el-select>
+      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:220px" @keyup.enter="query.page=1;load()" />
       <el-select v-model="query.status" clearable placeholder="账号状态" style="width:140px"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>
@@ -252,7 +258,7 @@ onMounted(async () => { await loadOptions(); await load() })
           <el-form-item label="账号状态"><el-select v-model="form.status" style="width:100%"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select></el-form-item>
           <el-form-item label="所属部门" prop="department_id" required><el-select v-model="form.department_id" style="width:100%" @change="handleDepartmentChange"><el-option v-for="item in activeDepartments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="所属组织"><el-select v-model="form.organization_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in flatOrganizations.filter(v=>v.status==='active'&&(!form.department_id||v.department_id===form.department_id))" :key="item.id" :label="item.label" :value="item.id" /></el-select></el-form-item>
-          <el-form-item label="直属主管"><el-select v-model="form.supervisor_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in userOptions.filter(v=>v.id!==editingId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select></el-form-item>
+          <el-form-item label="直属主管" prop="supervisor_id" :required="!editingRootUser"><el-select v-model="form.supervisor_id" filterable style="width:100%"><el-option v-for="item in userOptions.filter(v=>v.id!==editingId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select><small class="field-hint">新增用户必须选择直属主管；最高级主管由数据库维护。</small></el-form-item>
           <el-form-item v-if="userStore.hasPermission('role:edit')" label="系统角色"><el-select v-model="form.role_ids" multiple style="width:100%"><el-option v-for="item in assignableRoles" :key="item.id" :label="item.name" :value="item.id" /></el-select><small v-if="editingIsSuper" class="field-hint">初始化超级管理员角色受系统保护，不能在用户管理中新增或移除。</small></el-form-item>
           <el-form-item :label="editingId?'重置密码（留空不修改）':'初始密码'" prop="password" :required="!editingId"><el-input v-model="form.password" type="password" show-password /></el-form-item>
           <el-form-item :label="editingId?'确认新密码':'确认初始密码'" prop="confirm_password" :required="!editingId"><el-input v-model="form.confirm_password" type="password" show-password /></el-form-item>

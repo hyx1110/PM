@@ -3,35 +3,21 @@ from sqlalchemy.orm import Session
 
 from app.models.execution import ExecutionRecord
 from app.models.project import Project
-from app.models.task import Task, TaskAssignee
+from app.models.task import Task
 
 
 def _execution_derived_status(db: Session, task: Task) -> str:
-    records = list(
-        db.scalars(
+    latest = db.scalar(
             select(ExecutionRecord).where(
                 ExecutionRecord.task_id == task.id,
                 ExecutionRecord.is_deleted.is_(False),
             )
-        ).all()
+            .order_by(ExecutionRecord.created_at.desc(), ExecutionRecord.id.desc())
+            .limit(1)
     )
-    if not records:
+    if not latest:
         return "not_started"
-    if any(item.status == "running" for item in records):
-        return "running"
-    if any(item.status == "paused" for item in records):
-        return "suspended"
-    assignee_ids = set(
-        db.scalars(
-            select(TaskAssignee.user_id).where(TaskAssignee.task_id == task.id)
-        ).all()
-    )
-    completed_user_ids = {
-        item.user_id for item in records if item.status == "completed"
-    }
-    if assignee_ids and assignee_ids <= completed_user_ids:
-        return "completed"
-    return "running"
+    return {"completed": "completed", "paused": "suspended", "running": "running"}.get(latest.status, "not_started")
 
 
 def synchronize_parent_status(db: Session, parent_id: int | None) -> None:
@@ -84,15 +70,16 @@ def synchronize_project_status(db: Session, project_id: int) -> None:
             )
         ).all()
     )
+    # Completion is an explicit project-owner decision, never a task roll-up.
+    if project.status == "Completed":
+        return
     if not tasks:
         project.status = "Planned"
         project.actual_start = None
         project.actual_end = None
         return
     statuses = [task.status for task in tasks if task.status != "cancelled"]
-    if statuses and all(status == "completed" for status in statuses):
-        project.status = "Completed"
-    elif any(status == "running" for status in statuses):
+    if any(status == "running" for status in statuses):
         project.status = "Running"
     elif any(status == "suspended" for status in statuses):
         project.status = "Suspended"

@@ -36,5 +36,6 @@ export interface ExecutionQuery extends PageQuery {
   start_date?: string
   end_date?: string
   mine?: boolean
+  personnel_keyword?: string
+  organization_keyword?: string
 }
-

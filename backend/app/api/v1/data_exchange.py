@@ -59,11 +59,14 @@ def import_jobs(
 def export_schedules(
     start_date: date,
     end_date: date,
+    project_id: int | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     current_user: User = Depends(require_permission("export:download")),
     db: Session = Depends(get_db),
 ):
     return _excel_response(
-        import_export_service.export_schedules(db, current_user, start_date, end_date),
+        import_export_service.export_schedules(db, current_user, start_date, end_date, project_id=project_id, personnel_keyword=personnel_keyword, organization_keyword=organization_keyword),
         f"schedules_{start_date}_{end_date}.xlsx",
     )
 
@@ -72,11 +75,14 @@ def export_schedules(
 def export_executions(
     start_date: date,
     end_date: date,
+    project_id: int | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     current_user: User = Depends(require_permission("export:download")),
     db: Session = Depends(get_db),
 ):
     return _excel_response(
-        import_export_service.export_executions(db, current_user, start_date, end_date),
+        import_export_service.export_executions(db, current_user, start_date, end_date, project_id=project_id, personnel_keyword=personnel_keyword, organization_keyword=organization_keyword),
         f"executions_{start_date}_{end_date}.xlsx",
     )
 
@@ -85,11 +91,13 @@ def export_executions(
 def export_process_report(
     start_date: date,
     end_date: date,
+    project_id: int | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     current_user: User = Depends(require_permission("export:download")),
     db: Session = Depends(get_db),
 ):
     return _excel_response(
-        import_export_service.export_process_report(db, current_user, start_date, end_date),
+        import_export_service.export_process_report(db, current_user, start_date, end_date, project_id=project_id, personnel_keyword=personnel_keyword, organization_keyword=organization_keyword),
         f"process_report_{start_date}_{end_date}.xlsx",
     )
-

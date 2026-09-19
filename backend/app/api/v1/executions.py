@@ -20,6 +20,8 @@ def list_executions(
     task_id: int | None = None,
     user_id: int | None = None,
     project_id: int | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
     mine: bool = False,
@@ -36,6 +38,8 @@ def list_executions(
             task_id=task_id,
             user_id=user_id,
             project_id=project_id,
+            personnel_keyword=personnel_keyword,
+            organization_keyword=organization_keyword,
             start_date=start_date,
             end_date=end_date,
         )

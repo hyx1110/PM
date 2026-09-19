@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, aliased
 from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
+from app.models.task import Task
 from app.models.user import User
 from app.utils.time import beijing_now
 
@@ -51,6 +52,8 @@ class ProjectRepository:
         approval_status: str | None = None,
         approver_id: int | None = None,
         visible_project_ids: set[int] | None = None,
+        personnel_keyword: str | None = None,
+        organization_keyword: str | None = None,
     ) -> tuple[list[dict], int]:
         manager = aliased(User)
         creator = aliased(User)
@@ -74,14 +77,32 @@ class ProjectRepository:
             people_filter = people_filter.where(User.employee_no.like(f"%{employee_no}%"))
         if manager_name:
             people_filter = people_filter.where(User.name.like(f"%{manager_name}%"))
-        if organization_id or employee_no or manager_name:
+        if personnel_keyword:
+            people_filter = people_filter.where(or_(
+                User.name.like(f"%{personnel_keyword}%"),
+                User.employee_no.like(f"%{personnel_keyword}%"),
+            ))
+        if organization_keyword:
+            pattern = f"%{organization_keyword}%"
+            organization_people = select(User.id).where(or_(
+                User.department_id.in_(select(Department.id).where(Department.name.like(pattern))),
+                User.organization_id.in_(select(Organization.id).where(Organization.name.like(pattern))),
+            ))
+            filters.append(or_(
+                Project.department_id.in_(select(Department.id).where(Department.name.like(pattern))),
+                Project.manager_id.in_(organization_people),
+                Project.id.in_(select(ProjectMember.project_id).where(
+                    ProjectMember.user_id.in_(organization_people), ProjectMember.left_at.is_(None),
+                )),
+            ))
+        if organization_id or employee_no or manager_name or personnel_keyword:
             filters.append(
-                Project.id.in_(
+                or_(Project.manager_id.in_(people_filter), Project.id.in_(
                     select(ProjectMember.project_id).where(
                         ProjectMember.user_id.in_(people_filter),
                         ProjectMember.left_at.is_(None),
                     )
-                )
+                ))
             )
         if approval_status:
             filters.append(Project.approval_status == approval_status)
@@ -118,6 +139,16 @@ class ProjectRepository:
             .limit(page_size)
         ).all()
         items = []
+        task_counts: dict[int, tuple[int, int]] = {}
+        project_ids = [row[0].id for row in rows]
+        if project_ids:
+            for project_id, task_status, count in db.execute(
+                select(Task.project_id, Task.status, func.count(Task.id)).where(
+                    Task.project_id.in_(project_ids), Task.is_deleted.is_(False), Task.status != "cancelled",
+                ).group_by(Task.project_id, Task.status)
+            ).all():
+                total_tasks, complete_tasks = task_counts.get(project_id, (0, 0))
+                task_counts[project_id] = (total_tasks + count, complete_tasks + (count if task_status == "completed" else 0))
         for (
             project,
             manager_name,
@@ -133,6 +164,7 @@ class ProjectRepository:
             data = {col.name: getattr(project, col.name) for col in Project.__table__.columns}
             used = booked or 0
             data.update(
+                all_tasks_completed=bool(task_counts.get(project.id, (0, 0))[0]) and task_counts[project.id][0] == task_counts[project.id][1],
                 manager_name=manager_name,
                 manager_employee_no=manager_employee_no,
                 manager_organization_id=manager_organization_id,

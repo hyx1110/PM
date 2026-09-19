@@ -21,6 +21,7 @@ backend/alembic/versions/20260915_0008_project_manager_membership.py
 backend/alembic/versions/20260916_0009_simplify_user_schema.py
 backend/alembic/versions/20260916_0010_task_multi_assignees.py
 backend/alembic/versions/20260917_0011_task_execution_dates.py
+backend/alembic/versions/20260918_0012_permission_status_alignment.py
 backend/app/models/import_job.py
 backend/app/models/notification.py
 backend/app/models/personal_time.py
@@ -80,7 +81,7 @@ frontend/src/views/schedule/WorkCalendarView.vue
 frontend/src/views/task/MyTaskView.vue
 ```
 
-前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与本人负责项目范围、任务多人负责人及本人任务范围、首页任务和 L3 工时审批、共享看板人员联合筛选与分入口预约、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
+前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与分角色项目范围、任务多人负责人及项目关系范围、首页任务和 L3 工时审批、共享看板人员联合筛选与本人预约自动确认、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
 
 ## 文档
 

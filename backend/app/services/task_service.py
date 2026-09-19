@@ -4,7 +4,6 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, conflict, forbidden, not_found
 from app.models.execution import ExecutionRecord
 from app.models.project import Project, ProjectMember
@@ -19,7 +18,11 @@ from app.services.notification_service import create_notification
 from app.services.project_service import (
     assert_project_approved,
     assert_project_manageable,
+    assert_project_visible,
+    manageable_project_ids,
+    visible_project_ids,
 )
+from app.services.visibility_service import has_global_project_access
 from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
 from app.services.status_sync_service import (
     synchronize_parent_status,
@@ -76,17 +79,10 @@ def _assert_task_assignee(db: Session, task: Task, user: User) -> None:
         raise forbidden("只有任务负责人可以编辑或删除该任务")
 
 
-def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False):
+def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False, personnel_keyword: str | None = None, organization_keyword: str | None = None):
     if status and status not in TASK_FILTER_STATUSES:
         raise bad_request("invalid task status filter")
-    project = db.get(Project, project_id) if project_id else None
-    can_view_all_project_tasks = bool(
-        managed_project_scope
-        and project
-        and not project.is_deleted
-        and project.manager_id == user.id
-        and "project_manager" in get_role_codes(db, user.id)
-    )
+    scope = manageable_project_ids(db, user) if managed_project_scope else visible_project_ids(db, user)
     items, total = task_repository.list(
         db,
         page,
@@ -98,10 +94,14 @@ def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: i
         organization_id,
         employee_no,
         owner_name,
-        own_user_id=None if can_view_all_project_tasks else user.id,
+        visible_project_ids=scope,
+        personnel_keyword=personnel_keyword,
+        organization_keyword=organization_keyword,
     )
+    global_access = has_global_project_access(db, user)
     for item in items:
         item["effective_status"] = effective_status(item["status"], item["planned_end"])
+        _add_permissions(item, user, global_access)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -125,6 +125,7 @@ def list_my_tasks(
         item["effective_status"] = effective_status(
             item["status"], item["planned_end"]
         )
+        _add_permissions(item, user, has_global_project_access(db, user))
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -144,17 +145,25 @@ def task_detail(db: Session, task_id: int, user: User) -> dict:
     project = db.get(Project, task.project_id)
     if not project or project.is_deleted:
         raise not_found("project not found")
-    if project.manager_id != user.id and user.id not in _assignee_ids(db, task.id):
-        raise forbidden("只能查看自己负责的任务")
-    return task_response(db, task_id)
+    assert_project_visible(db, task.project_id, user)
+    return task_response(db, task_id, user)
 
 
-def task_response(db: Session, task_id: int) -> dict:
+def _add_permissions(item: dict, user: User, global_access: bool) -> None:
+    can_manage = global_access or item.get("project_manager_id") == user.id
+    item["can_manage"] = can_manage
+    item["can_edit"] = can_manage or user.id in item.get("owner_ids", []) or item.get("owner_id") == user.id
+    item["can_delete"] = can_manage
+
+
+def task_response(db: Session, task_id: int, user: User | None = None) -> dict:
     """Build an enriched response after access has already been checked."""
     match = task_repository.detail(db, task_id)
     if not match:
         raise not_found("task not found")
     match["effective_status"] = effective_status(match["status"], match["planned_end"])
+    if user:
+        _add_permissions(match, user, has_global_project_access(db, user))
     return match
 
 
@@ -251,7 +260,13 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
     task = task_repository.get(db, task_id)
     if not task:
         raise not_found("task not found")
-    _assert_task_assignee(db, task, user)
+    project = db.get(Project, task.project_id)
+    can_manage = bool(project and (project.manager_id == user.id or has_global_project_access(db, user)))
+    values = payload.model_dump(exclude_unset=True)
+    if not can_manage:
+        _assert_task_assignee(db, task, user)
+        if set(values) - {"remark"}:
+            raise forbidden("任务负责人可修改备注并填写执行记录；核心计划字段仅项目负责人、L3 或超级管理员可维护")
     assert_project_approved(db, task.project_id)
     if task.status in {"completed", "cancelled"}:
         raise bad_request("已完成或已取消的任务不能再修改")
@@ -404,7 +419,7 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
     task = task_repository.get(db, task_id)
     if not task:
         raise not_found("task not found")
-    _assert_task_assignee(db, task, user)
+    assert_project_manageable(db, task.project_id, user)
     assert_project_approved(db, task.project_id)
     if task.status not in {"not_started", "cancelled"}:
         raise bad_request("only not-started or cancelled tasks can be deleted")

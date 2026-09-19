@@ -29,6 +29,7 @@ export interface UserOption {
 
 export interface UserQuery extends PageQuery {
   keyword?: string
+  organization_keyword?: string
   department_id?: number
   organization_id?: number
   status?: string

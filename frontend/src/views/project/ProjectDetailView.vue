@@ -6,6 +6,7 @@ import {
   addProjectMember,
   approveProjectHourRequest,
   createProjectHourRequest,
+  completeProject,
   getProject,
   getProjectHourRequests,
   getProjectMembers,
@@ -71,8 +72,7 @@ const candidateUsers = computed(() =>
 )
 const canManageProject = computed(() => {
   if (!project.value || !userStore.hasPermission('project:edit')) return false
-  const roles = userStore.profile?.roles || []
-  return project.value.manager_id === userStore.profile?.id && roles.includes('project_manager')
+  return project.value.can_manage
 })
 const canModifyProject = computed(
   () => canManageProject.value && !['Completed', 'Cancelled'].includes(project.value?.status || ''),
@@ -81,16 +81,11 @@ const canRequestHours = computed(
   () =>
     project.value?.approval_status === 'approved'
     && !['Completed', 'Cancelled'].includes(project.value?.status || '')
-    && project.value.manager_id === userStore.profile?.id
-    && (userStore.profile?.roles || []).some((role) =>
-      role === 'project_manager',
-    ),
+    && canManageProject.value,
 )
 const canReviewHours = (item: ProjectHourRequest) =>
   item.status === 'pending'
-  && userStore.profile?.roles.includes('department_manager')
-  && project.value?.department_id === userStore.profile?.department_id
-  && departments.value.find((department) => department.id === project.value?.department_id)?.manager_id === userStore.profile?.id
+  && (userStore.profile?.roles || []).some(role => ['super_admin', 'department_manager'].includes(role))
 
 async function load() {
   loading.value = true
@@ -98,7 +93,7 @@ async function load() {
     const [p, m, t, s] = await Promise.all([
       getProject(projectId.value),
       getProjectMembers(projectId.value),
-      getAllTasks({ project_id: projectId.value, managed_project_scope: true }),
+      getAllTasks({ project_id: projectId.value }),
       getAllSchedules({ project_id: projectId.value }),
     ])
     project.value = p
@@ -203,6 +198,13 @@ async function rejectHours(item: ProjectHourRequest) {
   await load()
 }
 
+async function finishProject() {
+  await ElMessageBox.confirm('全部任务已完成，是否正式确认项目完成？确认前仍可补充或调整任务，确认后项目停止新增任务。', '确认项目完成', { type: 'warning', confirmButtonText: '确认完成' })
+  await completeProject(projectId.value)
+  ElMessage.success('项目已正式完成')
+  await load()
+}
+
 onMounted(load)
 </script>
 
@@ -216,6 +218,9 @@ onMounted(load)
       </div>
       <el-button v-if="canRequestHours" type="primary" @click="openHourRequest">申请追加工时</el-button>
     </header>
+    <el-alert v-if="project?.all_tasks_completed && canModifyProject && project.approval_status==='approved'" type="success" :closable="false" show-icon title="当前项目全部任务已完成，项目尚未关闭。">
+      <template #default>可以继续补充或调整任务；全部工作结束后，请 <el-button link type="success" @click="finishProject">确认项目完成</el-button>。</template>
+    </el-alert>
     <el-alert
       v-if="project && project.approval_status!=='approved'"
       :title="project.approval_status==='draft' ? '项目尚未提交审批，审批前不能添加成员、任务或预约人力。' : project.approval_status==='pending' ? `项目正在等待 ${project.approval_required_name || '创建人的直属主管'} 审批。` : `项目已被驳回：${project.approval_note || '未填写原因'}`"

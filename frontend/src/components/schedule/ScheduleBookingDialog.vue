@@ -79,6 +79,10 @@ const projectRemaining = computed(() => {
   return project.remaining_hours
     + (props.initial?.project_id === project.id ? Number(props.initial.planned_hours) : 0)
 })
+const isSelfBooking = computed(() => {
+  const project = props.projects.find((item) => item.id === form.project_id)
+  return form.user_id === userStore.profile?.id && project?.manager_id === userStore.profile?.id
+})
 const availableHours = (project: Project) =>
   project.remaining_hours
   + (props.initial?.project_id === project.id ? Number(props.initial.planned_hours) : 0)
@@ -87,7 +91,8 @@ function canBookUserForProject(item: UserOption, project?: Project) {
   if (!project) return false
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
-  return project.manager_id === currentUserId && roles.includes('project_manager')
+  return roles.some((role) => ['super_admin', 'department_manager'].includes(role))
+    || project.manager_id === currentUserId
 }
 
 async function loadProjectUsers(projectId: number) {
@@ -231,7 +236,7 @@ async function submit() {
     destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <el-alert title="只能使用自己负责且已通过审批的项目预约有效项目成员，提交后由被预约人本人确认。" type="info" :closable="false" show-icon/>
+    <el-alert title="仅可使用有权管理且已审批的项目预约有效成员；项目负责人预约自己时自动确认，其他预约由被预约人确认。" type="info" :closable="false" show-icon/>
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <div class="form-grid">
         <el-form-item label="项目" prop="project_id">
@@ -274,7 +279,7 @@ async function submit() {
     </el-form>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" @click="submit">{{ initial ? '保存并重新待确认' : '预约' }}</el-button>
+      <el-button type="primary" @click="submit">{{ isSelfBooking ? (initial ? '保存并自动确认' : '预约并自动确认') : (initial ? '保存并重新待确认' : '预约') }}</el-button>
     </template>
   </el-dialog>
 </template>

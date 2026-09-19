@@ -37,9 +37,11 @@ from app.services.project_service import (
     _generate_project_code,
     _validate_initial_project_members,
     manageable_project_ids,
+    visible_project_ids,
+    _validate_project_manager,
 )
 from app.services.rbac_service import ensure_default_system_role
-from app.services.visibility_service import visible_schedule_user_ids
+from app.services.visibility_service import related_user_ids, has_global_project_access
 from app.utils.time import beijing_now
 
 RESOURCE_HEADERS = {
@@ -50,7 +52,7 @@ RESOURCE_HEADERS = {
         ("email", "邮箱"),
         ("department_code", "部门编码*"),
         ("organization_code", "组织编码"),
-        ("supervisor_employee_no", "直属上级员工号"),
+        ("supervisor_employee_no", "直属上级员工号*"),
         ("role_codes", "系统角色编码(逗号分隔)"),
         ("status", "状态"),
     ],
@@ -82,7 +84,7 @@ RESOURCE_HEADERS = {
 }
 
 EXAMPLES = {
-    "users": ["E10001", "张三", "", "zhangsan@example.com", "D001", "", "", "project_member", "active"],
+    "users": ["E10001", "张三", "", "zhangsan@example.com", "D001", "", "E10000", "project_member", "active"],
     "projects": ["P-2026-001", "示例项目", "General", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "", ""],
     "tasks": ["P-2026-001", "", "需求分析", "Project", "E10002,E10003", date(2026, 10, 1), date(2026, 10, 3), 24, "", ""],
 }
@@ -229,12 +231,12 @@ def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
             raise ValueError("组织编码不存在或不属于所选部门")
         if organization.status != "active":
             raise ValueError("不能把用户导入到已停用的组织")
-    supervisor = _lookup(
+    supervisor = _required_lookup(
         db,
         User,
         User.employee_no,
         row.get("supervisor_employee_no"),
-        "直属上级员工号不存在",
+        "直属上级员工号必填且必须存在；最高级主管由数据库维护",
     )
     if supervisor and supervisor.status != "active":
         raise ValueError("直属上级已停用")
@@ -289,8 +291,9 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
     manager = _required_lookup(db, User, User.employee_no, row.get("manager_employee_no"), "项目经理员工号不能为空且必须存在")
     department = _required_lookup(db, Department, Department.code, row.get("department_code"), "部门编码不能为空且必须存在")
     operator_roles = get_role_codes(db, operator.id)
-    if manager.id != operator.id or not (operator_roles & PROJECT_CREATOR_ROLES):
+    if not has_global_project_access(db, operator) and (manager.id != operator.id or not (operator_roles & PROJECT_CREATOR_ROLES)):
         raise ValueError("项目只能由项目经理本人导入")
+    _validate_project_manager(db, manager.id, department.id)
     if manager.department_id != department.id:
         raise ValueError("项目经理必须属于项目所属部门")
     if department.status != "active":
@@ -377,7 +380,7 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
 def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     project = _required_lookup(db, Project, Project.code, row.get("project_code"), "项目编号不能为空且必须存在")
     operator_roles = get_role_codes(db, operator.id)
-    if project.manager_id != operator.id or "project_manager" not in operator_roles:
+    if not has_global_project_access(db, operator) and project.manager_id != operator.id:
         raise ValueError("任务只能由该项目的项目经理本人导入")
     if project.approval_status != "approved":
         raise ValueError("项目尚未通过审批，不能导入任务")
@@ -509,7 +512,7 @@ def _assert_import_scope(
     db: Session, resource_type: str, row: dict[str, Any], operator: User
 ) -> None:
     roles = get_role_codes(db, operator.id)
-    if "super_admin" in roles:
+    if roles & {"super_admin", "department_manager"}:
         return
     if resource_type in {"users", "projects"}:
         department_code = row.get("department_code")
@@ -673,15 +676,36 @@ def _validate_export_range(start_date: date, end_date: date) -> None:
         raise bad_request("export range cannot exceed 366 days")
 
 
-def export_schedules(db: Session, user: User, start_date: date, end_date: date) -> bytes:
+def _export_filters(db: Session, user: User, project_column, user_column, *, project_id: int | None = None, personnel_keyword: str | None = None, organization_keyword: str | None = None) -> list:
+    """Export related projects OR own/subordinate records, never other teams' unrelated work."""
+    projects = visible_project_ids(db, user)
+    people = related_user_ids(db, user)
+    filters = []
+    if projects is not None and people is not None:
+        filters.append(or_(project_column.in_(projects or {-1}), user_column.in_(people or {-1})))
+    if project_id:
+        filters.append(project_column == project_id)
+    if personnel_keyword and personnel_keyword.strip():
+        term = f"%{personnel_keyword.strip()}%"
+        filters.append(or_(User.name.like(term), User.employee_no.like(term)))
+    if organization_keyword and organization_keyword.strip():
+        term = f"%{organization_keyword.strip()}%"
+        filters.append(or_(
+            User.department_id.in_(select(Department.id).where(Department.name.like(term))),
+            User.organization_id.in_(select(Organization.id).where(Organization.name.like(term))),
+        ))
+    return filters
+
+
+def export_schedules(db: Session, user: User, start_date: date, end_date: date, **query) -> bytes:
     _validate_export_range(start_date, end_date)
-    visible_user_ids = visible_schedule_user_ids(db, user)
     filters = [
+        Project.is_deleted.is_(False),
+        Task.is_deleted.is_(False),
         ScheduleBooking.end_time > datetime.combine(start_date, time.min),
         ScheduleBooking.start_time < datetime.combine(end_date + timedelta(days=1), time.min),
     ]
-    if visible_user_ids is not None:
-        filters.append(ScheduleBooking.user_id.in_(visible_user_ids or {-1}))
+    filters.extend(_export_filters(db, user, ScheduleBooking.project_id, ScheduleBooking.user_id, **query))
     rows = db.execute(
         select(ScheduleBooking, User.name, Project.code, Project.name, Task.name)
         .join(User, User.id == ScheduleBooking.user_id)
@@ -703,7 +727,7 @@ def export_schedules(db: Session, user: User, start_date: date, end_date: date) 
     )
 
 
-def export_executions(db: Session, user: User, start_date: date, end_date: date) -> bytes:
+def export_executions(db: Session, user: User, start_date: date, end_date: date, **query) -> bytes:
     _validate_export_range(start_date, end_date)
     filters = [
         ExecutionRecord.is_deleted.is_(False),
@@ -715,8 +739,8 @@ def export_executions(db: Session, user: User, start_date: date, end_date: date)
         )
         >= start_date,
         ExecutionRecord.actual_start <= end_date,
-        ExecutionRecord.user_id == user.id,
     ]
+    filters.extend(_export_filters(db, user, Task.project_id, ExecutionRecord.user_id, **query))
     rows = db.execute(
         select(ExecutionRecord, User.name, Project.code, Project.name, Task.name)
         .join(User, User.id == ExecutionRecord.user_id)
@@ -732,12 +756,12 @@ def export_executions(db: Session, user: User, start_date: date, end_date: date)
     return _export_book("执行明细", ["执行ID", "人员", "项目编号", "项目", "任务", "实际开始", "实际结束", "实际工时", "状态", "执行说明", "异常原因"], values, {6, 7})
 
 
-def export_process_report(db: Session, user: User, start_date: date, end_date: date) -> bytes:
+def export_process_report(db: Session, user: User, start_date: date, end_date: date, **query) -> bytes:
     _validate_export_range(start_date, end_date)
     from app.services.report_service import process_report
 
     report = process_report(
-        db, user, 1, 100000, start_date=start_date, end_date=end_date, project_id=None, owner_id=None
+        db, user, 1, 100000, start_date=start_date, end_date=end_date, **query
     )
     values = [
         [

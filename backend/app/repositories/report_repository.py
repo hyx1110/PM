@@ -1,9 +1,10 @@
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.evaluation import TaskEvaluation
+from app.models.organization import Department, Organization
 from app.models.execution import ExecutionRecord
 from app.models.project import Project
 from app.models.schedule import ScheduleBooking
@@ -22,6 +23,8 @@ class ReportRepository:
         start_date: date | None = None,
         end_date: date | None = None,
         visible_project_ids: set[int] | None = None,
+        personnel_keyword: str | None = None,
+        organization_keyword: str | None = None,
     ) -> tuple[list[dict], int]:
         parent = aliased(Task)
         filters = [
@@ -40,6 +43,19 @@ class ReportRepository:
                     )
                 )
             )
+        people_filters = []
+        if personnel_keyword and personnel_keyword.strip():
+            term = f"%{personnel_keyword.strip()}%"
+            people_filters.append(or_(User.name.like(term), User.employee_no.like(term)))
+        if organization_keyword and organization_keyword.strip():
+            term = f"%{organization_keyword.strip()}%"
+            people_filters.append(or_(
+                User.department_id.in_(select(Department.id).where(Department.name.like(term))),
+                User.organization_id.in_(select(Organization.id).where(Organization.name.like(term))),
+            ))
+        if people_filters:
+            matching_people = select(User.id).where(*people_filters)
+            filters.append(Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id.in_(matching_people))))
         if start_date:
             filters.append(Task.planned_end >= start_date)
         if end_date:
@@ -55,6 +71,7 @@ class ReportRepository:
                 Project.id.label("project_id"),
                 Project.name.label("project_name"),
                 Project.status.label("project_status"),
+                Project.manager_id.label("project_manager_id"),
                 case((Task.parent_id.is_(None), Task.name), else_=parent.name).label("level1_task"),
                 case((Task.parent_id.is_not(None), Task.name), else_=None).label("level2_task"),
                 Task.id.label("task_id"),
@@ -86,6 +103,7 @@ class ReportRepository:
                 Project.id,
                 Project.name,
                 Project.status,
+                Project.manager_id,
                 Task.id,
                 Task.name,
                 Task.parent_id,

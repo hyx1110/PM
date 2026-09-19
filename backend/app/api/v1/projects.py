@@ -31,6 +31,9 @@ def list_projects(
     name: str | None = None,
     approval_status: str | None = None,
     approver_id: int | None = None,
+    personnel_keyword: str | None = None,
+    organization_keyword: str | None = None,
+    manageable_only: bool = False,
     current_user: User = Depends(require_permission("project:view")),
     db: Session = Depends(get_db),
 ):
@@ -49,6 +52,9 @@ def list_projects(
             name,
             approval_status,
             approver_id,
+            personnel_keyword,
+            organization_keyword,
+            manageable_only,
         )
     )
 
@@ -106,6 +112,16 @@ def update_project(
     db: Session = Depends(get_db),
 ):
     project_service.update_project(db, project_id, payload, current_user)
+    return success(project_service.project_detail(db, project_id, current_user))
+
+
+@router.post("/{project_id}/complete")
+def complete_project(
+    project_id: int,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    project_service.complete_project(db, project_id, current_user)
     return success(project_service.project_detail(db, project_id, current_user))
 
 

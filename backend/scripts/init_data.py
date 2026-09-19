@@ -44,7 +44,7 @@ ROLES = {
         {
             "dashboard:view", "user:view", "organization:view", "role:view", "project:view", "project:edit",
             "task:view", "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit",
-            "process_report:view", "operation_log:view",
+            "process_report:view", "evaluation:edit", "operation_log:view",
             "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
             "analytics:view", "calendar:manage",
         },
@@ -52,8 +52,8 @@ ROLES = {
     "functional_manager": (
         "L4",
         {
-            "dashboard:view", "user:view", "organization:view", "project:view", "task:view",
-            "task:edit", "schedule:view", "execution:view", "execution:edit", "process_report:view",
+            "dashboard:view", "user:view", "organization:view", "project:view", "project:edit", "task:view",
+            "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit", "process_report:view", "evaluation:edit",
             "risk:view", "risk:handle", "notification:view", "import:manage", "export:download",
             "analytics:view",
         },

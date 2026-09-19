@@ -57,6 +57,10 @@ class TaskResponse(TaskBase):
     project_name: str | None = None
     owner_name: str | None = None
     project_manager_name: str | None = None
+    project_manager_id: int | None = None
+    can_manage: bool = False
+    can_edit: bool = False
+    can_delete: bool = False
     booked_hours: Decimal = Decimal("0")
     effective_status: str
     created_at: datetime

@@ -79,6 +79,8 @@ class ProjectResponse(ProjectBase):
     approval_note: str | None = None
     booked_hours: Decimal = Decimal("0")
     remaining_hours: Decimal = Decimal("0")
+    can_manage: bool = False
+    all_tasks_completed: bool = False
     created_at: datetime
     updated_at: datetime
 

@@ -3,34 +3,25 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getEvaluation, getProcessReport, updateEvaluation } from '@/api/report'
 import { getAllProjects } from '@/api/project'
-import { getUserOptions } from '@/api/user'
 import type { Project } from '@/types/project'
 import type { EvaluationPayload, ProcessReportItem } from '@/types/report'
-import type { UserOption } from '@/types/user'
 import { formatDate } from '@/utils/format'
-import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
 
-const userStore = useUserStore()
 const loading = ref(false)
 const items = ref<ProcessReportItem[]>([])
 const total = ref(0)
 const projects = ref<Project[]>([])
-const users = ref<UserOption[]>([])
 const query = reactive({
   page: 1, page_size: 50, project_id: undefined as number | undefined,
-  owner_id: undefined as number | undefined,
+  personnel_keyword: '', organization_keyword: '',
   start_date: beijingNow().startOf('month').format('YYYY-MM-DD'),
   end_date: beijingNow().endOf('month').format('YYYY-MM-DD'),
 })
 const evaluationDialog = ref(false)
 const evaluationTaskId = ref<number>()
 const evaluationForm = reactive<EvaluationPayload>({ achievement_rate: 100, achievement_quality: 100, comment: '' })
-const canEvaluate = (row: ProcessReportItem) =>
-  userStore.profile?.roles.includes('project_manager')
-  && row.project_status === 'Completed'
-  && row.task_status === 'completed'
-  && !row.evaluation_id
+const canEvaluate = (row: ProcessReportItem) => row.can_evaluate
 
 async function loadProcess() {
   loading.value = true
@@ -57,9 +48,7 @@ async function saveEvaluation() {
 }
 
 onMounted(async () => {
-  const [projectData, userData] = await Promise.all([getAllProjects(), getUserOptions()])
-  projects.value = projectData
-  users.value = userData
+  projects.value = await getAllProjects()
   await loadProcess()
 })
 </script>
@@ -67,12 +56,13 @@ onMounted(async () => {
 <template>
   <div class="page-shell">
     <header class="page-header">
-      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">仅展示自己负责的项目；项目结束且任务完成后，由本项目经理进行一次性评价。</p></div>
+      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">按当前账号可见项目展示；项目和任务完成后，由项目负责人、L3 或超级管理员进行一次性评价。</p></div>
     </header>
     <section class="surface report-card">
       <div class="report-filter">
         <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select>
-        <el-select v-model="query.owner_id" clearable filterable placeholder="负责人" style="width:150px"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/></el-select>
+        <el-input v-model="query.personnel_keyword" clearable placeholder="姓名 / 工号" style="width:170px" @keyup.enter="query.page=1;loadProcess()"/>
+        <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织" style="width:170px" @keyup.enter="query.page=1;loadProcess()"/>
         <el-date-picker v-model="query.start_date" type="date" value-format="YYYY-MM-DD" placeholder="开始日期"/>
         <el-date-picker v-model="query.end_date" type="date" value-format="YYYY-MM-DD" placeholder="结束日期"/>
         <el-button @click="query.page=1;loadProcess()">查询</el-button>

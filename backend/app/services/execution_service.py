@@ -6,15 +6,51 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.evaluation import TaskEvaluation
 from app.models.execution import ExecutionRecord
+from app.models.project import Project
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.execution_repository import execution_repository
 from app.schemas.execution import EXECUTION_STATUSES, ExecutionCreate, ExecutionUpdate
 from app.services.operation_log_service import log_operation
 from app.services.status_sync_service import synchronize_task_status
+from app.services.visibility_service import has_global_project_access
 from app.services.work_calendar_service import calculate_workday_hours
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_today
+
+
+def _has_global_execution_access(db: Session, user: User) -> bool:
+    """Super administrators and L3 share the global project/task scope."""
+    return has_global_project_access(db, user)
+
+
+def _lock_executable_task(db: Session, task_id: int) -> Task:
+    project_id = db.scalar(select(Task.project_id).where(Task.id == task_id, Task.is_deleted.is_(False)))
+    if project_id is None:
+        raise not_found("task not found")
+    # Project completion takes the same project -> task lock order. An execution
+    # cannot reopen a task while its project is being manually closed.
+    project = db.scalar(
+        select(Project)
+        .where(Project.id == project_id, Project.is_deleted.is_(False))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not project:
+        raise not_found("project not found")
+    if project.status in {"Completed", "Cancelled"}:
+        raise bad_request("项目已确认完成或已取消，不能再新增、修改或删除执行记录")
+    if project.approval_status != "approved":
+        raise bad_request("项目尚未通过审批，不能填报执行记录")
+    task = db.scalar(
+        select(Task)
+        .where(Task.id == task_id, Task.is_deleted.is_(False))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if not task:
+        raise not_found("task not found")
+    return task
 
 
 def _assert_project_not_evaluated(db: Session, project_id: int) -> None:
@@ -66,7 +102,7 @@ def list_executions(db: Session, user: User, page: int, page_size: int, mine: bo
         page,
         page_size,
         visible_project_ids=None,
-        own_user_id=user.id,
+        own_user_id=None if _has_global_execution_access(db, user) else user.id,
         **filters,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -76,15 +112,13 @@ def execution_detail(db: Session, execution_id: int, user: User) -> dict:
     record = execution_repository.get(db, execution_id)
     if not record:
         raise not_found("execution record not found")
-    if record.user_id != user.id:
+    if record.user_id != user.id and not _has_global_execution_access(db, user):
         raise forbidden("只能查看自己的执行记录")
     return execution_repository.detail(db, execution_id)
 
 
 def create_execution(db: Session, payload: ExecutionCreate, user: User) -> ExecutionRecord:
-    task = db.get(Task, payload.task_id)
-    if not task or task.is_deleted:
-        raise not_found("task not found")
+    task = _lock_executable_task(db, payload.task_id)
     _assert_project_not_evaluated(db, task.project_id)
     if task.status in {"completed", "cancelled"}:
         raise bad_request("已完成或已取消的任务不能新增执行记录")
@@ -95,14 +129,15 @@ def create_execution(db: Session, payload: ExecutionCreate, user: User) -> Execu
         ).limit(1)
     ):
         raise bad_request("汇总任务不能直接填报执行记录，请在其子任务中填报")
-    target_user_id = user.id
+    has_global_access = _has_global_execution_access(db, user)
+    target_user_id = payload.user_id if has_global_access and payload.user_id is not None else user.id
     target_user = db.get(User, target_user_id)
     if not target_user or target_user.is_deleted or target_user.status != "active":
         raise not_found("execution user not found")
-    if payload.user_id is not None and payload.user_id != user.id:
+    if payload.user_id is not None and payload.user_id != user.id and not has_global_access:
         raise forbidden("只能填写自己的执行记录")
-    if not db.scalar(select(TaskAssignee.id).where(TaskAssignee.task_id == task.id, TaskAssignee.user_id == user.id)):
-        raise forbidden("用户只能填报自己负责任务的执行记录")
+    if not db.scalar(select(TaskAssignee.id).where(TaskAssignee.task_id == task.id, TaskAssignee.user_id == target_user_id)):
+        raise forbidden("执行人员必须是该任务的负责人")
     # user_id and actual_hours are resolved below. Excluding both prevents
     # passing actual_hours twice when constructing ExecutionRecord.
     values = payload.model_dump(exclude={"user_id", "actual_hours"})
@@ -123,11 +158,12 @@ def update_execution(db: Session, execution_id: int, payload: ExecutionUpdate, u
     record = execution_repository.get(db, execution_id)
     if not record:
         raise not_found("execution record not found")
-    task = db.get(Task, record.task_id)
-    if not task or task.is_deleted:
-        raise not_found("task not found")
+    task = _lock_executable_task(db, record.task_id)
+    db.refresh(record)
+    if record.is_deleted:
+        raise not_found("execution record not found")
     _assert_project_not_evaluated(db, task.project_id)
-    if record.user_id != user.id:
+    if record.user_id != user.id and not _has_global_execution_access(db, user):
         raise forbidden("只能修改自己的执行记录")
     before = model_to_dict(record)
     values = payload.model_dump(exclude_unset=True)
@@ -162,11 +198,12 @@ def delete_execution(db: Session, execution_id: int, user: User) -> None:
     record = execution_repository.get(db, execution_id)
     if not record:
         raise not_found("execution record not found")
-    task = db.get(Task, record.task_id)
-    if not task or task.is_deleted:
-        raise not_found("task not found")
+    task = _lock_executable_task(db, record.task_id)
+    db.refresh(record)
+    if record.is_deleted:
+        raise not_found("execution record not found")
     _assert_project_not_evaluated(db, task.project_id)
-    if record.user_id != user.id:
+    if record.user_id != user.id and not _has_global_execution_access(db, user):
         raise forbidden("只能删除自己的执行记录")
     before = model_to_dict(record)
     record.is_deleted = True

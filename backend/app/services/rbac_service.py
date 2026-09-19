@@ -23,6 +23,9 @@ def list_permissions(db: Session):
 
 def ensure_default_system_role(db: Session, user_id: int) -> None:
     """Every active system identity must have at least one functional role."""
+    # Explicitly assigned roles (also during imports) must be visible before
+    # deciding whether the default role is missing; autoflush is disabled.
+    db.flush()
     assignment_count = db.scalar(
         select(func.count(UserRole.id)).where(UserRole.user_id == user_id)
     ) or 0
@@ -131,7 +134,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
             select(Role.code).where(Role.id.in_(normalized_role_ids or {-1}))
         ).all()
     )
-    if "project_manager" not in new_role_codes and db.scalar(
+    if not new_role_codes & {"super_admin", "department_manager", "functional_manager", "project_manager"} and db.scalar(
         select(Project.id).where(
             Project.manager_id == user_id,
             Project.is_deleted.is_(False),
@@ -139,7 +142,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
         ).limit(1)
     ):
         raise conflict(
-            "用户仍负责未结束项目，不能移除项目经理角色",
+            "用户仍负责未结束项目，须保留项目经理、L4、L3 或超级管理员角色",
             40908,
             {"dependencies": ["active managed projects"]},
         )
