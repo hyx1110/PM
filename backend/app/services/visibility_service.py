@@ -81,3 +81,35 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
             ).all()
         )
     return visible
+
+
+def dashboard_visibility_scopes(
+    db: Session,
+    user: User,
+) -> tuple[set[str], set[int] | None, set[int] | None]:
+    """Resolve dashboard role, project and schedule scopes without duplicate hierarchy walks."""
+    roles = get_role_codes(db, user.id)
+    if roles & GLOBAL_PROJECT_ROLES:
+        return roles, None, None
+
+    people = {user.id}
+    if "functional_manager" in roles:
+        people.update(descendant_user_ids(db, user.id))
+    project_ids = related_project_ids(db, people)
+    schedule_user_ids = set(people)
+    if roles & {"project_manager", "functional_manager"}:
+        managed_project_ids = select(Project.id).where(
+            Project.manager_id == user.id,
+            Project.approval_status == "approved",
+            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.is_deleted.is_(False),
+        )
+        schedule_user_ids.update(
+            db.scalars(
+                select(ProjectMember.user_id).where(
+                    ProjectMember.project_id.in_(managed_project_ids),
+                    ProjectMember.left_at.is_(None),
+                )
+            ).all()
+        )
+    return roles, project_ids, schedule_user_ids

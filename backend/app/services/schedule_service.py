@@ -41,6 +41,12 @@ def _submission_status(project: Project, target_user_id: int, actor: User, previ
     return "changed" if previous_status in {"confirmed", "changed"} else "pending"
 
 
+def _validate_future_schedule(start_time: datetime) -> None:
+    """Reject elapsed slots before a booking can be created and auto-cancelled."""
+    if start_time <= beijing_now():
+        raise bad_request("不能预约已经开始或已经过去的时间段，请选择当前北京时间之后的时间")
+
+
 def _validate_relations(
     db: Session,
     user_id: int,
@@ -243,6 +249,7 @@ def schedule_detail(db: Session, schedule_id: int, user: User) -> dict:
 
 
 def create_schedule(db: Session, payload: ScheduleCreate, user: User) -> ScheduleBooking:
+    _validate_future_schedule(payload.start_time)
     project = assert_project_booking_access(
         db, payload.project_id, user, [payload.user_id]
     )
@@ -311,6 +318,7 @@ def update_schedule(
     task_id = values.get("task_id", item.task_id)
     start_time = values.get("start_time", item.start_time)
     end_time = values.get("end_time", item.end_time)
+    _validate_future_schedule(start_time)
     project = assert_project_booking_access(db, project_id, user, [user_id])
     _validate_relations(
         db,
@@ -367,6 +375,7 @@ def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBookin
         raise bad_request("only legacy draft or rejected schedules can be submitted")
     if item.created_by != user.id and not _can_manage_all_schedules(db, user):
         raise forbidden("只有该预约的提交人可以提交")
+    _validate_future_schedule(item.start_time)
     project = assert_project_booking_access(
         db, item.project_id, user, [item.user_id]
     )
@@ -583,12 +592,13 @@ def move_schedule(
         raise forbidden("只有该预约的提交人可以调整")
     if item.version != payload.expected_version:
         raise conflict(
-            "schedule has been changed by another user",
+            "预约已被其他操作更新，请刷新共享看板后重新拖动",
             40903,
             {"current_version": item.version},
         )
     if item.status not in {"pending", "changed", "rejected", "confirmed"}:
-        raise bad_request("current schedule status does not allow moving")
+        raise bad_request("当前预约状态不允许拖动改期")
+    _validate_future_schedule(payload.start_time)
     project = assert_project_booking_access(
         db, item.project_id, user, [item.user_id]
     )
@@ -638,6 +648,7 @@ def batch_create_schedules(
     payload: ScheduleBatchCreate,
     user: User,
 ) -> dict:
+    _validate_future_schedule(payload.start_time)
     project = assert_project_booking_access(
         db, payload.project_id, user, payload.user_ids
     )
@@ -728,6 +739,7 @@ def copy_week(db: Session, payload: ScheduleCopyWeek, user: User) -> dict:
         start_time = source.start_time + delta
         end_time = source.end_time + delta
         try:
+            _validate_future_schedule(start_time)
             project = assert_project_booking_access(
                 db, source.project_id, user, [source.user_id]
             )

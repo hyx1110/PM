@@ -60,18 +60,23 @@ const maxHours = computed(() => Math.max(...data.value.schedule_trend.map(item =
 async function loadDashboard() {
   loading.value = true
   try {
-    const [summary, pending, projects, hours, tasks] = await Promise.all([
+    const canViewTasks = userStore.hasPermission('task:view')
+    const canViewSchedules = userStore.hasPermission('schedule:view')
+    const isGlobalManager = Boolean(userStore.profile?.roles.some(
+      (role) => ['super_admin', 'department_manager'].includes(role),
+    ))
+    const [summary, pending, projects, hours, tasks] = await Promise.allSettled([
       getDashboardSummary(),
-      getMyPendingSchedules(8),
+      canViewSchedules ? getMyPendingSchedules(8) : Promise.resolve([]),
       getPendingProjectApprovals(),
-      getPendingProjectHourRequests(),
-      getMyTasks({ page: 1, page_size: 10 }),
+      isGlobalManager ? getPendingProjectHourRequests() : Promise.resolve([]),
+      canViewTasks ? getMyTasks({ page: 1, page_size: 10 }) : Promise.resolve({ items: [], total: 0, page: 1, page_size: 10 }),
     ])
-    data.value = summary
-    pendingBookings.value = pending
-    pendingProjectApprovals.value = projects
-    pendingHourRequests.value = hours
-    myTasks.value = tasks.items
+    if (summary.status === 'fulfilled') data.value = summary.value
+    if (pending.status === 'fulfilled') pendingBookings.value = pending.value
+    if (projects.status === 'fulfilled') pendingProjectApprovals.value = projects.value
+    if (hours.status === 'fulfilled') pendingHourRequests.value = hours.value
+    if (tasks.status === 'fulfilled') myTasks.value = tasks.value.items
   } finally {
     loading.value = false
   }

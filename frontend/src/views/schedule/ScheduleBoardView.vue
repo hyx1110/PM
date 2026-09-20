@@ -92,6 +92,7 @@ const personTotal = ref(0)
 const personLoading = ref(false)
 const personQuery = reactive({ page: 1, page_size: 20, status: '' })
 const initialSlot = ref<{ userId: number; date: string; time: string }>()
+const draggingScheduleId = ref<number>()
 const conflicts = ref<ScheduleConflict[]>([])
 const calendarDays = ref<WorkCalendarDay[]>([])
 const loadedCalendarYears = new Set<number>()
@@ -214,6 +215,15 @@ const bookableProjects = computed(() => {
 const canBook = computed(
   () => userStore.hasPermission('schedule:edit') && bookableProjects.value.length > 0,
 )
+const canManageAllSchedules = computed(() =>
+  (userStore.profile?.roles || []).some((role) =>
+    ['super_admin', 'department_manager'].includes(role),
+  ),
+)
+function canMoveSchedule(item: Schedule) {
+  return ['pending', 'changed', 'rejected', 'confirmed'].includes(item.status)
+    && (item.created_by === userStore.profile?.id || canManageAllSchedules.value)
+}
 const dateTitle = computed(() =>
   viewMode.value === 'day'
     ? dayjs(days.value[0]).format('YYYY年MM月DD日')
@@ -278,8 +288,7 @@ const canDecide = computed(
 const canEdit = computed(
   () =>
     selected.value
-    && ['pending', 'rejected', 'confirmed'].includes(selected.value.status)
-    && selected.value.created_by === userStore.profile?.id
+    && canMoveSchedule(selected.value)
     && bookableProjects.value.some((item) => item.id === selected.value?.project_id),
 )
 const canWithdraw = computed(
@@ -339,6 +348,7 @@ async function loadVisibleCalendars() {
 
 function disabledBatchDate(value: Date) {
   const date = dayjs(value).format('YYYY-MM-DD')
+  if (date < beijingNow().format('YYYY-MM-DD')) return true
   const override = calendarDays.value.find((item) => item.work_date === date)
   if (override) return override.day_type === 'holiday'
   return [0, 6].includes(dayjs(value).day())
@@ -475,8 +485,42 @@ function openCreate(slot: { userId: number; date: string; time: string }) {
   bookingDialog.value = true
 }
 
-function openBookingButton() {
-  openCreate({ userId: 0, date: anchorDate.value, time: '08:30' })
+async function nextDefaultBookingSlot() {
+  const now = beijingNow()
+  const today = now.format('YYYY-MM-DD')
+  let cursor = dayjs(anchorDate.value)
+  if (cursor.isBefore(now, 'day')) cursor = now.startOf('day')
+  for (let offset = 0; offset < 370; offset += 1) {
+    await loadCalendar(cursor.year())
+    const date = cursor.format('YYYY-MM-DD')
+    if (scheduleDayMeta(date).kind === 'workday') {
+      if (date > today) return { date, time: '08:30' }
+      const nowMinutes = now.hour() * 60 + now.minute()
+      if (nowMinutes < 8 * 60 + 30) return { date, time: '08:30' }
+      const nextHalfHour = Math.floor(nowMinutes / 30) * 30 + 30
+      if (nextHalfHour <= 11 * 60) {
+        return {
+          date,
+          time: `${String(Math.floor(nextHalfHour / 60)).padStart(2, '0')}:${String(nextHalfHour % 60).padStart(2, '0')}`,
+        }
+      }
+      if (nextHalfHour < 13 * 60) return { date, time: '13:00' }
+      if (nextHalfHour <= 16 * 60 + 30) {
+        return {
+          date,
+          time: `${String(Math.floor(nextHalfHour / 60)).padStart(2, '0')}:${String(nextHalfHour % 60).padStart(2, '0')}`,
+        }
+      }
+    }
+    cursor = cursor.add(1, 'day')
+  }
+  return undefined
+}
+
+async function openBookingButton() {
+  const slot = await nextDefaultBookingSlot()
+  if (!slot) return ElMessage.warning('未找到可预约的工作时段，请检查工作日历配置')
+  openCreate({ userId: 0, ...slot })
 }
 
 function openPersonalCreate(slot?: { date: string; time: string }) {
@@ -697,9 +741,17 @@ async function dropToSlot(payload: {
   time: string
 }) {
   const item = schedules.value.find((value) => value.id === payload.scheduleId)
-  if (!item || item.user_id !== payload.userId || item.created_by !== userStore.profile?.id) return
+  if (!item) return ElMessage.warning('没有找到被拖动的预约，请刷新看板后重试')
+  if (!canMoveSchedule(item)) return ElMessage.warning('当前预约状态或账号权限不允许拖动改期')
+  if (item.user_id !== payload.userId) {
+    return ElMessage.warning('拖动改期只能调整原预约人员的时间，不能通过拖动更换人员')
+  }
   const duration = dayjs(item.end_time).diff(dayjs(item.start_time), 'minute')
   const start = dayjs(`${payload.date} ${payload.time}`)
+  if (start.isSame(dayjs(item.start_time))) return ElMessage.info('预约时间没有变化')
+  if (`${payload.date} ${payload.time}` <= beijingNow().format('YYYY-MM-DD HH:mm')) {
+    return ElMessage.warning('不能把预约移动到已经开始或已经过去的时间段')
+  }
   try {
     const result = await moveSchedule(item.id, {
       start_time: start.format('YYYY-MM-DD HH:mm:ss'),
@@ -714,46 +766,66 @@ async function dropToSlot(payload: {
 }
 
 function startMonthDrag(event: DragEvent, item: Schedule) {
-  if (
-    item.created_by !== userStore.profile?.id
-    || !['pending', 'rejected', 'confirmed'].includes(item.status)
-  ) return event.preventDefault()
-  event.dataTransfer?.setData('schedule-id', String(item.id))
+  if (!canMoveSchedule(item)) return event.preventDefault()
+  draggingScheduleId.value = item.id
+  event.dataTransfer?.setData('text/plain', String(item.id))
+  event.dataTransfer?.setData('application/x-schedule-id', String(item.id))
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+function endScheduleDrag() {
+  draggingScheduleId.value = undefined
+}
+
+function showBlockedDrop() {
+  ElMessage.warning('该位置属于节假日、周末、午休或非工作时间，不能拖动到这里')
+}
+
+function showDropReadError() {
+  ElMessage.warning('没有读取到被拖动的预约，请重新按住预约条中间拖动')
 }
 
 async function dropOnDay(event: DragEvent, date: string) {
   const meta = scheduleDayMeta(date)
-  if (meta.kind !== 'workday') return
   event.preventDefault()
+  if (meta.kind !== 'workday') return showBlockedDrop()
+  const rawId = event.dataTransfer?.getData('application/x-schedule-id')
+    || event.dataTransfer?.getData('text/plain')
   const item = schedules.value.find(
-    (value) => value.id === Number(event.dataTransfer?.getData('schedule-id')),
+    (value) => value.id === Number(rawId || draggingScheduleId.value),
   )
-  if (!item) return
-  await dropToSlot({
-    scheduleId: item.id,
-    userId: item.user_id,
-    date,
-    time: dayjs(item.start_time).format('HH:mm'),
-  })
+  if (!item) return ElMessage.warning('没有读取到被拖动的预约，请重新拖动')
+  try {
+    await dropToSlot({
+      scheduleId: item.id,
+      userId: item.user_id,
+      date,
+      time: dayjs(item.start_time).format('HH:mm'),
+    })
+  } finally {
+    endScheduleDrag()
+  }
 }
 
-function allowMonthDrop(event: DragEvent, date: string) {
-  if (scheduleDayMeta(date).kind === 'workday') event.preventDefault()
+function allowMonthDrop(event: DragEvent, _date: string) {
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
 }
 
 async function openBatch() {
   if (!bookableProjects.value.length) {
     return ElMessage.warning('没有当前权限可预约的已审批项目')
   }
+  const slot = await nextDefaultBookingSlot()
+  if (!slot) return ElMessage.warning('未找到可预约的工作时段，请检查工作日历配置')
   Object.assign(batchForm, {
     user_ids: [],
     project_id: bookableProjects.value[0].id,
     task_id: 0,
-    work_date: anchorDate.value,
-    session: 'morning',
-    start_clock: '08:30',
-    end_clock: '09:30',
+    work_date: slot.date,
+    session: slot.time < '12:00' ? 'morning' : 'afternoon',
+    start_clock: slot.time,
+    end_clock: dayjs(`2000-01-01 ${slot.time}`).add(60, 'minute').format('HH:mm'),
     remark: '',
   })
   batchForm.task_id = batchTasks.value[0]?.id || 0
@@ -768,6 +840,9 @@ async function saveBatch() {
   }
   await loadCalendar(dayjs(batchForm.work_date).year())
   if (!batchDateIsWorkday()) return ElMessage.warning('只能预约工作日，法定节假日不能预约')
+  if (`${batchForm.work_date} ${batchForm.start_clock}` <= beijingNow().format('YYYY-MM-DD HH:mm')) {
+    return ElMessage.warning('不能预约已经开始或已经过去的时间段，请选择当前北京时间之后的时间')
+  }
   const remaining = bookableProjects.value.find((item) => item.id === batchForm.project_id)?.remaining_hours
   if (remaining !== undefined && batchHours.value * batchForm.user_ids.length > remaining) {
     return ElMessage.warning('项目剩余工时不足，请先申请追加工时并等待 L3 审批')
@@ -867,7 +942,7 @@ onMounted(async () => {
     <section class="surface board-card" v-loading="loading">
       <div class="board-caption">
         <strong>{{ dateTitle }}</strong>
-        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>未通过预约（灰色）</span><span><i class="legend-accepted"></i>已接受预约（按项目配色）</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span></span>
+        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>未通过预约（灰色）</span><span><i class="legend-accepted"></i>已接受预约（按项目配色）</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span><span class="drag-tip">⋮⋮ 按住预约条中间拖动改期</span></span>
       </div>
       <div v-if="viewMode!=='month'" class="board-scroll">
         <div class="sticky-header">
@@ -885,11 +960,17 @@ onMounted(async () => {
           :schedules="boardSchedules"
           :personal-blocks="personalBlocks"
           :current-user-id="userStore.profile?.id||0"
+          :can-manage-all-schedules="canManageAllSchedules"
+          :dragging-schedule-id="draggingScheduleId"
           :day-meta="timelineDayMeta"
           @blank="handleBlankSlot"
           @booking="openDetail"
           @personal-block="openPersonalBlock"
           @person="openPersonSchedules"
+          @drag-start="draggingScheduleId=$event"
+          @drag-end="endScheduleDrag"
+          @drop-blocked="showBlockedDrop"
+          @drop-error="showDropReadError"
           @drop-booking="dropToSlot"
         />
         <el-empty v-if="!visibleUsers.length" description="没有可展示的人员"/>
@@ -907,7 +988,7 @@ onMounted(async () => {
         >
           <div class="month-day-head"><span class="day-number">{{ dayjs(date).date() }}</span><small v-if="scheduleDayMeta(date).kind==='holiday'">{{ scheduleDayMeta(date).name || '法定节假日' }}</small><small v-else-if="scheduleDayMeta(date).kind==='workday'&&scheduleDayMeta(date).name">调休工作日</small></div>
           <button v-for="item in dayPersonalBlocks(date).slice(0,5)" :key="`personal-${item.id}`" class="month-booking month-personal" :class="`personal-${item.time_type}`" @click.stop="openPersonalBlock(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ personalTypeLabel[item.time_type] }}</button>
-          <button v-for="item in daySchedules(date).slice(0,Math.max(5-dayPersonalBlocks(date).length,0))" :key="item.id" class="month-booking" :class="`status-${item.status}`" :style="scheduleColorStyle(item)" :draggable="item.created_by===userStore.profile?.id&&['pending','confirmed'].includes(item.status)" @dragstart="startMonthDrag($event,item)" @click.stop="openDetail(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ item.task_name }}</button>
+          <button v-for="item in daySchedules(date).slice(0,Math.max(5-dayPersonalBlocks(date).length,0))" :key="item.id" class="month-booking" :class="[`status-${item.status}`,{'can-drag':canMoveSchedule(item)}]" :style="scheduleColorStyle(item)" :title="canMoveSchedule(item)?'按住预约条拖动到其他工作日改期':'当前预约不可拖动'" :draggable="canMoveSchedule(item)" @dragstart="startMonthDrag($event,item)" @dragend="endScheduleDrag" @click.stop="openDetail(item)"><b>{{ dayjs(item.start_time).format('HH:mm') }}</b> {{ item.user_name }} · {{ item.task_name }}</button>
           <small v-if="daySchedules(date).length+dayPersonalBlocks(date).length>5">另有 {{ daySchedules(date).length+dayPersonalBlocks(date).length-5 }} 条</small>
         </div>
       </div>
@@ -947,7 +1028,7 @@ onMounted(async () => {
         <el-table-column prop="project_name" label="项目" min-width="150" show-overflow-tooltip/>
         <el-table-column prop="task_name" label="任务" min-width="140" show-overflow-tooltip/>
         <el-table-column label="工时" width="70"><template #default="{row}">{{ row.planned_hours }}h</template></el-table-column>
-        <el-table-column label="状态" width="110"><template #default="{row}"><el-tag :type="statusTagType[row.status] || 'info'" effect="plain">{{ statusLabel[row.status] || row.status }}</el-tag></template></el-table-column>
+        <el-table-column label="状态及原因" min-width="170"><template #default="{row}"><div class="status-with-reason"><el-tag :type="statusTagType[row.status] || 'info'" effect="plain">{{ statusLabel[row.status] || row.status }}</el-tag><small v-if="row.rejection_reason">{{ row.rejection_reason }}</small></div></template></el-table-column>
         <el-table-column label="操作" width="70"><template #default="{row}"><el-button link type="primary" @click="openPersonScheduleDetail(row)">详情</el-button></template></el-table-column>
       </el-table>
       <el-empty v-if="!personLoading&&!personSchedules.length" description="该人员暂无符合条件的项目时间安排"/>
@@ -997,7 +1078,7 @@ onMounted(async () => {
         <el-descriptions-item label="版本">v{{ selected.version }}</el-descriptions-item>
         <el-descriptions-item label="审批规则" :span="2">{{ selected.created_by===selected.user_id && selected.status==='confirmed' ? '项目负责人预约本人项目工时，系统已自动确认' : `仅 ${selected.user_name} 本人可以同意或拒绝` }}</el-descriptions-item>
         <el-descriptions-item label="备注" :span="2">{{ selected.remark || '—' }}</el-descriptions-item>
-        <el-descriptions-item v-if="selected.rejection_reason" label="拒绝原因" :span="2">{{ selected.rejection_reason }}</el-descriptions-item>
+        <el-descriptions-item v-if="selected.rejection_reason" label="拒绝/取消原因" :span="2">{{ selected.rejection_reason }}</el-descriptions-item>
       </el-descriptions>
       <template #footer>
         <el-button v-if="canEdit" @click="openEdit">编辑</el-button>
@@ -1015,4 +1096,6 @@ onMounted(async () => {
 .month-day{border-right-width:2px;border-right-color:#d3d9e0}.month-personal.personal-business_trip{background:#e3f0f7;color:#426b83}
 .month-personal.personal-out_of_office{background:#e4f1e8;color:#4f755a}
 .time-legend{flex-wrap:wrap;justify-content:flex-end}.legend-pending{border-color:#cbd1d8!important;background:#e7eaee}.legend-accepted{border-color:#9db9d2!important;background:#dfeaf4}.month-booking.status-pending,.month-booking.status-changed{border:1px solid #cbd1d8;background:#e7eaee;color:#66717f}.month-booking.status-confirmed,.month-booking.status-running,.month-booking.status-completed{border-width:1px;border-style:solid}
+.status-with-reason{display:flex;min-width:0;flex-direction:column;align-items:flex-start;gap:4px}.status-with-reason small{max-width:100%;overflow:hidden;color:#8d98a6;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.month-booking:not(.can-drag){cursor:pointer}.month-booking.can-drag{cursor:grab}.month-booking.can-drag:active{cursor:grabbing}.drag-tip{color:#5f7690;font-weight:600}
 </style>

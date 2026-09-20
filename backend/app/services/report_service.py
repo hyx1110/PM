@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -13,8 +13,8 @@ from app.models.user import User
 from app.repositories.report_repository import report_repository
 from app.services.task_service import effective_status
 from app.services.project_service import visible_project_ids
-from app.services.visibility_service import visible_schedule_user_ids
-from app.services.work_calendar_service import is_workday
+from app.services.visibility_service import dashboard_visibility_scopes, visible_schedule_user_ids
+from app.services.work_calendar_service import count_workdays, is_workday
 from app.utils.time import beijing_now
 
 
@@ -77,8 +77,7 @@ def workload_report(db: Session, user: User, start_date: date, end_date: date, d
 
 
 def dashboard_summary(db: Session, user: User) -> dict:
-    schedule_user_ids = visible_schedule_user_ids(db, user)
-    project_scope = visible_project_ids(db, user)
+    roles, project_scope, schedule_user_ids = dashboard_visibility_scopes(db, user)
     project_filters = [Project.is_deleted.is_(False)]
     if project_scope is not None:
         project_filters.append(Project.id.in_(project_scope or {-1}))
@@ -94,7 +93,6 @@ def dashboard_summary(db: Session, user: User) -> dict:
     if project_scope is not None:
         task_filters.append(Task.project_id.in_(project_scope or {-1}))
         schedule_filters.append(ScheduleBooking.project_id.in_(project_scope or {-1}))
-    roles = get_role_codes(db, user.id)
     scope_label = (
         "全部项目" if project_scope is None else
         "本人及全部下属相关项目" if "functional_manager" in roles else
@@ -102,23 +100,27 @@ def dashboard_summary(db: Session, user: User) -> dict:
     )
     now = beijing_now()
     today = now.date()
-    project_total = db.scalar(select(func.count(Project.id)).where(*project_filters)) or 0
-    project_running = db.scalar(select(func.count(Project.id)).where(*project_filters, Project.status == "Running")) or 0
-    project_completed = db.scalar(select(func.count(Project.id)).where(*project_filters, Project.status == "Completed")) or 0
-    delayed_projects = db.scalar(
-        select(func.count(Project.id)).where(
-            *project_filters,
-            Project.planned_end < today,
-            Project.status.notin_({"Completed", "Cancelled"}),
-        )
-    ) or 0
-    delayed_tasks = db.scalar(
-        select(func.count(Task.id)).where(
-            *task_filters,
-            Task.planned_end < today,
-            Task.status.notin_({"completed", "cancelled"}),
-        )
-    ) or 0
+    project_total, project_running, project_completed, delayed_projects = db.execute(
+        select(
+            func.count(Project.id),
+            func.coalesce(func.sum(case((Project.status == "Running", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Project.status == "Completed", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(
+                Project.planned_end < today,
+                Project.status.notin_({"Completed", "Cancelled"}),
+            ), 1), else_=0)), 0),
+        ).where(*project_filters)
+    ).one()
+    delayed_tasks, total_tasks, completed_tasks = db.execute(
+        select(
+            func.coalesce(func.sum(case((and_(
+                Task.planned_end < today,
+                Task.status.notin_({"completed", "cancelled"}),
+            ), 1), else_=0)), 0),
+            func.count(Task.id),
+            func.coalesce(func.sum(case((Task.status == "completed", 1), else_=0)), 0),
+        ).where(*task_filters)
+    ).one()
     pending = db.scalar(
         select(func.count(ScheduleBooking.id)).where(
             ScheduleBooking.user_id == user.id,
@@ -133,62 +135,66 @@ def dashboard_summary(db: Session, user: User) -> dict:
             Project.is_deleted.is_(False),
         )
     ) or 0
-    my_today_tasks = db.scalar(
-        select(func.count(Task.id)).where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
-            Task.is_deleted.is_(False),
-            Task.status.notin_({"completed", "cancelled"}),
-            Task.planned_start <= today,
-            Task.planned_end >= today,
-        )
-    ) or 0
-    my_upcoming_tasks = db.scalar(
-        select(func.count(Task.id)).where(
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
-            Task.is_deleted.is_(False),
-            Task.status.notin_({"completed", "cancelled"}),
-            Task.planned_end > today,
-            Task.planned_end <= today + timedelta(days=7),
-        )
-    ) or 0
-    today_count = db.scalar(
-        select(func.count(ScheduleBooking.id)).where(
-            *schedule_filters,
-            ScheduleBooking.status.in_(
-                {"pending", "confirmed", "changed", "running", "completed"}
-            ),
-            func.date(ScheduleBooking.start_time) == today,
-        )
-    ) or 0
+    my_task_filters = [
+        Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
+        Task.project_id.in_(active_project_ids),
+        Task.is_deleted.is_(False),
+        Task.status.notin_({"completed", "cancelled"}),
+    ]
+    my_today_tasks, my_upcoming_tasks = db.execute(
+        select(
+            func.coalesce(func.sum(case((and_(
+                Task.planned_start <= today,
+                Task.planned_end >= today,
+            ), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(
+                Task.planned_end > today,
+                Task.planned_end <= today + timedelta(days=7),
+            ), 1), else_=0)), 0),
+        ).where(*my_task_filters)
+    ).one()
+    today_start = datetime.combine(today, datetime.min.time())
+    tomorrow_start = datetime.combine(today + timedelta(days=1), datetime.min.time())
     risk_filters = [RiskRecord.status.in_({"open", "handling"})]
     if schedule_user_ids is not None:
         risk_filters.append(RiskRecord.user_id.in_(schedule_user_ids or {-1}))
-    open_risks = db.scalar(select(func.count(RiskRecord.id)).where(*risk_filters)) or 0
-    critical_risks = db.scalar(
-        select(func.count(RiskRecord.id)).where(*risk_filters, RiskRecord.risk_level == "critical")
-    ) or 0
-    today_risks = db.scalar(
-        select(func.count(RiskRecord.id)).where(*risk_filters, func.date(RiskRecord.detected_at) == today)
-    ) or 0
+    open_risks, critical_risks, today_risks = db.execute(
+        select(
+            func.count(RiskRecord.id),
+            func.coalesce(func.sum(case((RiskRecord.risk_level == "critical", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(
+                RiskRecord.detected_at >= today_start,
+                RiskRecord.detected_at < tomorrow_start,
+            ), 1), else_=0)), 0),
+        ).where(*risk_filters)
+    ).one()
     trend_start = today - timedelta(days=13)
-    recent_14_day_hours = db.scalar(
-        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(
-            *schedule_filters,
-            ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
-            ScheduleBooking.start_time >= datetime.combine(trend_start, datetime.min.time()),
-            ScheduleBooking.start_time < datetime.combine(today + timedelta(days=1), datetime.min.time()),
-        )
-    ) or 0
+    trend_start_time = datetime.combine(trend_start, datetime.min.time())
     month_start = today.replace(day=1)
     next_month_start = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
-    month_hours = db.scalar(
-        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(
-            *schedule_filters,
-            ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
-            ScheduleBooking.start_time >= datetime.combine(month_start, datetime.min.time()),
-            ScheduleBooking.start_time < datetime.combine(next_month_start, datetime.min.time()),
-        )
-    ) or 0
+    month_start_time = datetime.combine(month_start, datetime.min.time())
+    next_month_start_time = datetime.combine(next_month_start, datetime.min.time())
+    counted_schedule_statuses = {"confirmed", "running", "completed"}
+    visible_today_statuses = counted_schedule_statuses | {"pending", "changed"}
+    today_count, recent_14_day_hours, month_hours = db.execute(
+        select(
+            func.coalesce(func.sum(case((and_(
+                ScheduleBooking.status.in_(visible_today_statuses),
+                ScheduleBooking.start_time >= today_start,
+                ScheduleBooking.start_time < tomorrow_start,
+            ), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(
+                ScheduleBooking.status.in_(counted_schedule_statuses),
+                ScheduleBooking.start_time >= trend_start_time,
+                ScheduleBooking.start_time < tomorrow_start,
+            ), ScheduleBooking.planned_hours), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(
+                ScheduleBooking.status.in_(counted_schedule_statuses),
+                ScheduleBooking.start_time >= month_start_time,
+                ScheduleBooking.start_time < next_month_start_time,
+            ), ScheduleBooking.planned_hours), else_=0)), 0),
+        ).where(*schedule_filters)
+    ).one()
     active_user_filters = [User.status == "active", User.is_deleted.is_(False)]
     if project_scope is not None:
         from app.models.project import ProjectMember
@@ -201,14 +207,8 @@ def dashboard_summary(db: Session, user: User) -> dict:
             User.id.in_(select(ScheduleBooking.user_id).where(*schedule_filters)),
         ))
     active_users = db.scalar(select(func.count(User.id)).where(*active_user_filters)) or 0
-    recent_14_day_workdays = sum(
-        is_workday(db, trend_start + timedelta(days=index)) for index in range(14)
-    )
+    recent_14_day_workdays = count_workdays(db, trend_start, today)
     recent_14_day_capacity = active_users * recent_14_day_workdays * settings.standard_work_hours
-    total_tasks = db.scalar(select(func.count(Task.id)).where(*task_filters)) or 0
-    completed_tasks = db.scalar(
-        select(func.count(Task.id)).where(*task_filters, Task.status == "completed")
-    ) or 0
     trend_rows = db.execute(
         select(
             func.date(ScheduleBooking.start_time).label("day"),
@@ -216,9 +216,9 @@ def dashboard_summary(db: Session, user: User) -> dict:
         )
         .where(
             *schedule_filters,
-            ScheduleBooking.start_time >= datetime.combine(trend_start, datetime.min.time()),
-            ScheduleBooking.start_time < datetime.combine(today + timedelta(days=1), datetime.min.time()),
-            ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+            ScheduleBooking.start_time >= trend_start_time,
+            ScheduleBooking.start_time < tomorrow_start,
+            ScheduleBooking.status.in_(counted_schedule_statuses),
         )
         .group_by(func.date(ScheduleBooking.start_time))
     ).all()

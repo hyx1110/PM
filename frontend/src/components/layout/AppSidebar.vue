@@ -19,14 +19,14 @@ const route = useRoute()
 const userStore = useUserStore()
 const menuItems = computed(() => [
   { path: '/dashboard', label: '首页', icon: HomeFilled },
-  { path: '/users', label: '用户管理', icon: User, permission: 'user:view' },
-  { path: '/organizations', label: '组织管理', icon: OfficeBuilding, permission: 'organization:view' },
-  { path: '/roles', label: '角色权限', icon: UserFilled, permission: 'role:view' },
   { path: '/projects', label: '项目管理', icon: Collection, permission: 'project:view' },
   { path: '/tasks', label: '任务管理', icon: Tickets, permission: 'task:view' },
   { path: '/schedules', label: '任务共享看板', icon: Calendar, permission: 'schedule:view' },
   { path: '/executions', label: '任务执行', icon: Document, permission: 'execution:view' },
   { path: '/reports/process', label: '项目过程报表', icon: DataAnalysis, permission: 'process_report:view' },
+  { path: '/users', label: '用户管理', icon: User, permission: 'user:view' },
+  { path: '/organizations', label: '组织管理', icon: OfficeBuilding, permission: 'organization:view' },
+  { path: '/roles', label: '角色权限', icon: UserFilled, permission: 'role:view' },
   { path: '/data-exchange', label: '数据导入导出', icon: UploadFilled, permission: 'export:download' },
   { path: '/operation-logs', label: '操作日志', icon: Document, permission: 'operation_log:view' },
 ].filter(

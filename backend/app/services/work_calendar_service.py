@@ -40,6 +40,28 @@ def is_workday(db: Session, work_date: date) -> bool:
     return work_date.weekday() < 5
 
 
+def count_workdays(db: Session, start_date: date, end_date: date) -> int:
+    """Count an inclusive range with one calendar query instead of one query per day."""
+    if end_date < start_date:
+        raise bad_request("结束日期不能早于开始日期")
+    overrides = dict(
+        db.execute(
+            select(WorkCalendarDay.work_date, WorkCalendarDay.day_type).where(
+                WorkCalendarDay.work_date >= start_date,
+                WorkCalendarDay.work_date <= end_date,
+            )
+        ).all()
+    )
+    return sum(
+        overrides.get(current_date, "workday" if current_date.weekday() < 5 else "holiday")
+        == "workday"
+        for current_date in (
+            date.fromordinal(start_date.toordinal() + offset)
+            for offset in range((end_date - start_date).days + 1)
+        )
+    )
+
+
 def calculate_work_hours(db: Session, start_time: datetime, end_time: datetime) -> Decimal:
     if end_time <= start_time:
         raise bad_request("预约结束时间必须晚于开始时间")
@@ -64,12 +86,7 @@ def calculate_work_hours(db: Session, start_time: datetime, end_time: datetime) 
 
 def calculate_workday_hours(db: Session, start_date: date, end_date: date) -> Decimal:
     """Calculate normal work capacity for an inclusive date range."""
-    if end_date < start_date:
-        raise bad_request("结束日期不能早于开始日期")
-    workdays = sum(
-        is_workday(db, date.fromordinal(start_date.toordinal() + offset))
-        for offset in range((end_date - start_date).days + 1)
-    )
+    workdays = count_workdays(db, start_date, end_date)
     return (
         Decimal(workdays) * Decimal(str(settings.standard_work_hours))
     ).quantize(Decimal("0.01"))

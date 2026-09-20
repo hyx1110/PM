@@ -131,6 +131,7 @@ async function ensureCalendar(year: number) {
 
 function disabledDate(value: Date) {
   const date = dayjs(value).format('YYYY-MM-DD')
+  if (date < beijingNow().format('YYYY-MM-DD')) return true
   const override = calendar.value.find((item) => item.work_date === date)
   if (override) return override.day_type === 'holiday'
   const weekday = dayjs(value).day()
@@ -211,6 +212,9 @@ async function submit() {
   }
   if (!isValidWorkday(form.work_date)) {
     return ElMessage.warning('只能预约工作日，法定节假日不能预约')
+  }
+  if (`${form.work_date} ${form.start_clock}` <= beijingNow().format('YYYY-MM-DD HH:mm')) {
+    return ElMessage.warning('不能预约已经开始或已经过去的时间段，请选择当前北京时间之后的时间')
   }
   if (plannedHours.value <= 0) return ElMessage.warning('请选择有效的预约时段')
   if (projectRemaining.value !== undefined && plannedHours.value > projectRemaining.value) {

@@ -132,7 +132,12 @@ class TaskRepository:
             .join(Project, Project.id == Task.project_id)
             .join(manager, manager.id == Project.manager_id)
             .where(*filters)
-            .order_by(Task.project_id, Task.parent_id, Task.id)
+            .order_by(
+                Task.planned_start.desc(),
+                Task.planned_end.desc(),
+                Task.created_at.desc(),
+                Task.id.desc(),
+            )
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()
