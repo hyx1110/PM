@@ -165,7 +165,7 @@ onMounted(load)
         <el-empty v-if="!departments.length" description="暂无部门" :image-size="70" />
       </aside>
       <main class="surface tree-card" v-loading="loading">
-        <div class="tree-head"><div><h3>组织层级</h3><p>展开节点查看下级组织，最多维护到 L4。</p></div></div>
+        <div class="tree-head"><div><h3>组织层级</h3><p>展开节点查看下级组织，最多维护到 L4；这里的 L1-L4 是组织层级，不是系统角色。</p></div></div>
         <el-tree :data="displayTree" node-key="id" default-expand-all :expand-on-click-node="false">
           <template #default="{ data }">
             <div v-if="data.node_type==='user'" class="tree-node user-node"><div><span class="user-dot"></span><strong>{{ data.name }}</strong><span>{{ data.employee_no }}</span><el-tag v-if="data.status==='disabled'" size="small" type="info">已停用</el-tag></div></div>
@@ -178,7 +178,7 @@ onMounted(load)
     </section>
 
     <el-dialog v-model="departmentDialog" :title="departmentId?'编辑部门':'新增部门'" width="500px">
-      <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item v-if="departmentId" label="L3（部门负责人/追加工时审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in l3Users.filter(user=>user.department_id===departmentId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select></el-form-item><el-alert v-else title="请先创建部门，再把 L3 用户分配到该部门，最后回到编辑部门设置负责人。" type="info" :closable="false" show-icon /></el-form>
+      <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item v-if="departmentId" label="部门主管（项目/资源审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in l3Users.filter(user=>user.department_id===departmentId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select></el-form-item><el-alert v-else title="请先创建部门，再把部门主管用户分配到该部门，最后回到编辑部门设置负责人。" type="info" :closable="false" show-icon /></el-form>
       <template #footer><el-button @click="departmentDialog=false">取消</el-button><el-button type="primary" @click="saveDepartment">保存</el-button></template>
     </el-dialog>
     <el-dialog v-model="organizationDialog" :title="organizationId?'编辑组织':'新增组织'" width="540px">

@@ -3,28 +3,25 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  addProjectMember,
-  approveProjectHourRequest,
-  createProjectHourRequest,
+  approveProjectResourceRequest,
+  createProjectResourceRequest,
   completeProject,
   getProject,
-  getProjectHourRequests,
+  getProjectResourceRequests,
   getProjectMembers,
-  rejectProjectHourRequest,
-  removeProjectMember,
+  rejectProjectResourceRequest,
 } from '@/api/project'
 import { getAllTasks } from '@/api/task'
 import { getAllSchedules } from '@/api/schedule'
 import { getUserOptions } from '@/api/user'
 import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
 import type { DepartmentOption, OrganizationNode } from '@/types/organization'
-import type { Project, ProjectHourRequest, ProjectMember } from '@/types/project'
+import type { Project, ProjectMember, ProjectResourceRequest } from '@/types/project'
 import type { Schedule } from '@/types/schedule'
 import type { Task } from '@/types/task'
 import type { UserOption } from '@/types/user'
 import { formatDate, formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
-import { beijingNow } from '@/utils/time'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,41 +32,46 @@ const project = ref<Project>()
 const members = ref<ProjectMember[]>([])
 const tasks = ref<Task[]>([])
 const schedules = ref<Schedule[]>([])
-const hourRequests = ref<ProjectHourRequest[]>([])
+const resourceRequests = ref<ProjectResourceRequest[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
 const activeTab = ref('basic')
-const memberDialog = ref(false)
-const hourDialog = ref(false)
-const memberForm = reactive({
-  department_id: undefined as number | undefined,
-  organization_id: undefined as number | undefined,
-  user_id: undefined as number | undefined,
-  project_role: 'member',
-  allocation_percent: 100,
-  joined_at: '',
+const resourceDialog = ref(false)
+const resourceForm = reactive({
+  requested_hours: 0,
+  add_member_ids: [] as number[],
+  remove_member_ids: [] as number[],
+  reason: '',
 })
-const hourForm = reactive({ requested_hours: 8, reason: '' })
-const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已通过', rejected: '已驳回' }
-const hourStatusLabel = { pending: '待 L3 审批', approved: '已批准', rejected: '已驳回' }
-const activeOrganizationTree = (nodes: OrganizationNode[]): OrganizationNode[] =>
-  nodes
-    .filter((item) => item.status === 'active')
-    .map((item) => ({ ...item, children: activeOrganizationTree(item.children || []) }))
-const organizationOptions = computed(() =>
-  activeOrganizationTree(
-    organizations.value.filter((item) => item.department_id === memberForm.department_id),
-  ),
-)
-const candidateUsers = computed(() =>
-  users.value.filter(
-    (item) =>
-      item.department_id === memberForm.department_id
-      && (!memberForm.organization_id || item.organization_id === memberForm.organization_id)
-      && !members.value.some((member) => member.user_id === item.id),
-  ),
-)
+const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已通过', rejected: '已驳回' }
+const resourceStatusLabel = { pending: '待部门主管审批', approved: '已批准', rejected: '已驳回' }
+interface MemberCascaderOption { value: string | number; label: string; children?: MemberCascaderOption[] }
+const memberCascaderProps = { multiple: true, emitPath: false }
+function organizationMemberOption(node: OrganizationNode): MemberCascaderOption | undefined {
+  if (node.status !== 'active') return undefined
+  const childOrganizations = (node.children || []).map(organizationMemberOption).filter((item): item is MemberCascaderOption => Boolean(item))
+  const existingIds = new Set(members.value.map((item) => item.user_id))
+  const userOptions = users.value
+    .filter((item) => item.organization_id === node.id && !existingIds.has(item.id))
+    .map((item) => ({ value: item.id, label: `${item.name} (${item.employee_no})` }))
+  const children = [...childOrganizations, ...userOptions]
+  return children.length ? { value: `organization-${node.id}`, label: node.name, children } : undefined
+}
+const memberCascaderOptions = computed<MemberCascaderOption[]>(() => {
+  const existingIds = new Set(members.value.map((item) => item.user_id))
+  return departments.value.map((department) => {
+    const organizationChildren = organizations.value
+      .filter((node) => node.department_id === department.id)
+      .map(organizationMemberOption)
+      .filter((item): item is MemberCascaderOption => Boolean(item))
+    const unassignedMembers = users.value
+      .filter((item) => item.department_id === department.id && !item.organization_id && !existingIds.has(item.id))
+      .map((item) => ({ value: item.id, label: `${item.name} (${item.employee_no})` }))
+    return { value: `department-${department.id}`, label: department.name, children: [...organizationChildren, ...unassignedMembers] }
+  }).filter((item) => item.children.length)
+})
+const removableMembers = computed(() => members.value.filter((item) => item.user_id !== project.value?.manager_id))
 const canManageProject = computed(() => {
   if (!project.value || !userStore.hasPermission('project:edit')) return false
   return project.value.can_manage
@@ -77,15 +79,21 @@ const canManageProject = computed(() => {
 const canModifyProject = computed(
   () => canManageProject.value && !['Completed', 'Cancelled'].includes(project.value?.status || ''),
 )
-const canRequestHours = computed(
+const canRequestResources = computed(
   () =>
     project.value?.approval_status === 'approved'
     && !['Completed', 'Cancelled'].includes(project.value?.status || '')
     && canManageProject.value,
 )
-const canReviewHours = (item: ProjectHourRequest) =>
+const canReviewResources = (item: ProjectResourceRequest) =>
   item.status === 'pending'
-  && (userStore.profile?.roles || []).some(role => ['super_admin', 'department_manager'].includes(role))
+  && (
+    userStore.profile?.roles.includes('super_admin')
+    || (
+      userStore.profile?.roles.includes('department_manager')
+      && project.value?.department_manager_id === userStore.profile?.id
+    )
+  )
 
 async function load() {
   loading.value = true
@@ -102,17 +110,17 @@ async function load() {
     schedules.value = s
     if (canManageProject.value) {
       const [h, u, d, o] = await Promise.all([
-        getProjectHourRequests(projectId.value),
+        getProjectResourceRequests(projectId.value),
         getUserOptions(),
         getDepartmentOptions(),
         getOrganizationTree(),
       ])
-      hourRequests.value = h
+      resourceRequests.value = h
       users.value = u
       departments.value = d
       organizations.value = o
     } else {
-      hourRequests.value = []
+      resourceRequests.value = []
       users.value = []
       departments.value = []
       organizations.value = []
@@ -122,79 +130,46 @@ async function load() {
   }
 }
 
-function openMember() {
-  Object.assign(memberForm, {
-    department_id: undefined,
-    organization_id: undefined,
-    user_id: undefined,
-    project_role: 'member',
-    allocation_percent: 100,
-    joined_at: beijingNow().format('YYYY-MM-DD'),
-  })
-  memberDialog.value = true
+function openResourceRequest() {
+  Object.assign(resourceForm, { requested_hours: 0, add_member_ids: [], remove_member_ids: [], reason: '' })
+  resourceDialog.value = true
 }
 
-async function saveMember() {
-  if (!memberForm.department_id) return ElMessage.warning('请先选择部门')
-  if (!memberForm.user_id) return ElMessage.warning('请选择成员')
-  await addProjectMember(projectId.value, {
-    user_id: memberForm.user_id,
-    project_role: memberForm.project_role,
-    allocation_percent: memberForm.allocation_percent,
-    joined_at: `${memberForm.joined_at} 00:00:00`,
-  })
-  ElMessage.success('成员已添加')
-  memberDialog.value = false
-  await load()
-}
-
-async function removeMember(row: ProjectMember) {
-  await ElMessageBox.confirm(`确认移除成员“${row.user_name}”吗？`, '移除成员', {
-    type: 'warning',
-  })
-  await removeProjectMember(projectId.value, row.user_id)
-  ElMessage.success('成员已移除')
-  await load()
-}
-
-function openHourRequest() {
-  hourForm.requested_hours = 8
-  hourForm.reason = ''
-  hourDialog.value = true
-}
-
-async function submitHourRequest() {
-  if (hourForm.requested_hours <= 0 || !hourForm.reason.trim()) {
-    return ElMessage.warning('请填写追加工时与申请原因')
+async function submitResourceRequest() {
+  if (resourceForm.requested_hours <= 0 && !resourceForm.add_member_ids.length && !resourceForm.remove_member_ids.length) {
+    return ElMessage.warning('请至少申请一项工时或成员变更')
   }
-  await createProjectHourRequest(
-    projectId.value,
-    hourForm.requested_hours,
-    hourForm.reason.trim(),
-  )
-  ElMessage.success('追加工时申请已提交 L3 审批')
-  hourDialog.value = false
+  if (!resourceForm.reason.trim()) return ElMessage.warning('请填写申请原因')
+  await createProjectResourceRequest(projectId.value, { ...resourceForm, reason: resourceForm.reason.trim() })
+  ElMessage.success('项目资源申请已提交部门主管审批')
+  resourceDialog.value = false
   await load()
 }
 
-async function approveHours(item: ProjectHourRequest) {
+const resourceSummary = (item: ProjectResourceRequest) => [
+  item.requested_hours > 0 ? `${item.requested_hours}h 工时` : '',
+  item.add_member_ids.length ? `新增 ${item.add_member_ids.length} 人` : '',
+  item.remove_member_ids.length ? `移除 ${item.remove_member_ids.length} 人` : '',
+].filter(Boolean).join('、')
+
+async function approveResources(item: ProjectResourceRequest) {
   await ElMessageBox.confirm(
-    `确认批准追加 ${item.requested_hours} 小时吗？`,
-    'L3 工时审批',
+    `确认批准资源申请（${resourceSummary(item)}）吗？`,
+    '部门主管资源审批',
     { type: 'warning' },
   )
-  await approveProjectHourRequest(projectId.value, item.id)
-  ElMessage.success('追加工时已批准并计入项目额度')
+  await approveProjectResourceRequest(projectId.value, item.id)
+  ElMessage.success('项目资源申请已批准')
   await load()
 }
 
-async function rejectHours(item: ProjectHourRequest) {
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', 'L3 工时审批', {
+async function rejectResources(item: ProjectResourceRequest) {
+  const { value } = await ElMessageBox.prompt('请输入驳回原因', '部门主管资源审批', {
     inputType: 'textarea',
     inputValidator: (value) => Boolean(value?.trim()) || '请填写驳回原因',
   })
-  await rejectProjectHourRequest(projectId.value, item.id, value)
-  ElMessage.success('追加工时申请已驳回')
+  await rejectProjectResourceRequest(projectId.value, item.id, value)
+  ElMessage.success('项目资源申请已驳回')
   await load()
 }
 
@@ -216,14 +191,14 @@ onMounted(load)
         <h1 class="page-title detail-title">{{ project?.name || '项目详情' }}</h1>
         <p class="page-subtitle">{{ project?.code }} · {{ project?.manager_name }} · {{ project?.status }}</p>
       </div>
-      <el-button v-if="canRequestHours" type="primary" @click="openHourRequest">申请追加工时</el-button>
+      <el-button v-if="canRequestResources" type="primary" @click="openResourceRequest">项目资源申请</el-button>
     </header>
     <el-alert v-if="project?.all_tasks_completed && canModifyProject && project.approval_status==='approved'" type="success" :closable="false" show-icon title="当前项目全部任务已完成，项目尚未关闭。">
       <template #default>可以继续补充或调整任务；全部工作结束后，请 <el-button link type="success" @click="finishProject">确认项目完成</el-button>。</template>
     </el-alert>
     <el-alert
       v-if="project && project.approval_status!=='approved'"
-      :title="project.approval_status==='draft' ? '项目尚未提交审批，审批前不能添加成员、任务或预约人力。' : project.approval_status==='pending' ? `项目正在等待 ${project.approval_required_name || '创建人的直属主管'} 审批。` : `项目已被驳回：${project.approval_note || '未填写原因'}`"
+      :title="project.approval_status==='draft' ? '项目尚未提交审批，审批前不能添加成员、任务或预约人力。' : project.approval_status==='pending' ? `项目正在等待 ${project.approval_required_name || '所属部门主管'} 审批。` : `项目已被驳回：${project.approval_note || '未填写原因'}`"
       :type="project.approval_status==='draft' ? 'info' : project.approval_status==='pending' ? 'warning' : 'error'"
       :closable="false"
       show-icon
@@ -239,7 +214,6 @@ onMounted(load)
         <el-tab-pane label="基本信息" name="basic">
           <el-descriptions v-if="project" :column="3" border>
             <el-descriptions-item label="项目编号">{{ project.code }}</el-descriptions-item>
-            <el-descriptions-item label="项目类型">{{ project.project_type }}</el-descriptions-item>
             <el-descriptions-item label="状态">{{ project.status }}</el-descriptions-item>
             <el-descriptions-item label="项目经理">{{ project.manager_name }}</el-descriptions-item>
             <el-descriptions-item label="所属部门">{{ project.department_name || '—' }}</el-descriptions-item>
@@ -254,29 +228,26 @@ onMounted(load)
         <el-tab-pane name="members">
           <template #label>项目成员 <el-badge :value="members.length" type="info" /></template>
           <div class="tab-tools">
-            <span>仅展示当前有效成员</span>
-            <el-button v-if="project?.approval_status==='approved' && canModifyProject" type="primary" size="small" @click="openMember">添加成员</el-button>
+            <span>仅展示当前有效成员；成员增删统一通过“项目资源申请”并由部门主管审批</span>
+            <el-button v-if="canRequestResources" type="primary" size="small" @click="openResourceRequest">申请成员变更</el-button>
           </div>
           <el-table :data="members">
             <el-table-column prop="user_name" label="成员"/>
             <el-table-column label="项目角色"><template #default="{row}">{{ row.project_role === 'manager' ? '项目经理' : row.project_role }}</template></el-table-column>
-            <el-table-column prop="allocation_percent" label="投入比例"><template #default="{row}">{{ row.allocation_percent }}%</template></el-table-column>
             <el-table-column label="加入时间"><template #default="{row}">{{ formatDate(row.joined_at) }}</template></el-table-column>
-            <el-table-column v-if="project?.approval_status==='approved' && canModifyProject" label="操作" width="90"><template #default="{row}"><el-button v-if="row.user_id!==project?.manager_id" link type="danger" @click="removeMember(row)">移除</el-button><span v-else>固定成员</span></template></el-table-column>
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`项目任务 (${tasks.length})`" name="tasks">
-          <div class="tab-tools"><span>项目下一级与二级任务</span><el-button size="small" @click="router.push('/tasks')">进入任务管理</el-button></div>
+          <div class="tab-tools"><span>项目下多级任务</span><el-button size="small" @click="router.push('/tasks')">进入任务管理</el-button></div>
           <el-table :data="tasks">
             <el-table-column prop="name" label="任务" min-width="180"/>
-            <el-table-column prop="task_type" label="类型"/>
-            <el-table-column prop="owner_name" label="负责人"/>
+            <el-table-column prop="owner_name" label="项目成员"/>
             <el-table-column label="计划日期" width="220"><template #default="{row}">{{ formatDate(row.planned_start) }} 至 {{ formatDate(row.planned_end) }}</template></el-table-column>
             <el-table-column prop="effective_status" label="状态"/>
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`人力预约 (${schedules.length})`" name="schedules">
-          <div class="tab-tools"><span>预约工时在提交时占用项目额度</span><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
+          <div class="tab-tools"><span>预约经成员确认后才占用项目额度</span><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
           <el-table :data="schedules">
             <el-table-column prop="user_name" label="人员"/>
             <el-table-column prop="task_name" label="任务" min-width="180"/>
@@ -285,39 +256,35 @@ onMounted(load)
             <el-table-column prop="status" label="状态"/>
           </el-table>
         </el-tab-pane>
-        <el-tab-pane v-if="canManageProject" :label="`工时申请 (${hourRequests.length})`" name="hours">
-          <div class="tab-tools"><span>追加额度必须由项目所属部门当前 L3 审批</span><el-button v-if="canRequestHours" size="small" type="primary" @click="openHourRequest">申请追加</el-button></div>
-          <el-table :data="hourRequests">
+        <el-tab-pane v-if="canManageProject" :label="`资源申请 (${resourceRequests.length})`" name="resources">
+          <div class="tab-tools"><span>工时与项目成员变更都必须由项目所属部门主管审批</span><el-button v-if="canRequestResources" size="small" type="primary" @click="openResourceRequest">发起申请</el-button></div>
+          <el-table :data="resourceRequests">
             <el-table-column prop="requester_name" label="申请人" width="110"/>
-            <el-table-column prop="requested_hours" label="追加工时" width="100"/>
+            <el-table-column label="资源变更" min-width="170"><template #default="{row}">{{ resourceSummary(row) }}</template></el-table-column>
             <el-table-column prop="reason" label="申请原因" min-width="180"/>
-            <el-table-column label="状态" width="115"><template #default="{row}">{{ hourStatusLabel[row.status] }}</template></el-table-column>
+            <el-table-column label="状态" width="115"><template #default="{row}">{{ resourceStatusLabel[row.status] }}</template></el-table-column>
             <el-table-column prop="reviewer_name" label="审批人" width="110"/>
             <el-table-column prop="review_note" label="审批意见" min-width="150"/>
             <el-table-column label="申请时间" width="160"><template #default="{row}">{{ formatDateTime(row.created_at) }}</template></el-table-column>
-            <el-table-column label="操作" width="130"><template #default="{row}"><el-button v-if="canReviewHours(row)" link type="success" @click="approveHours(row)">批准</el-button><el-button v-if="canReviewHours(row)" link type="danger" @click="rejectHours(row)">驳回</el-button></template></el-table-column>
+            <el-table-column label="操作" width="130"><template #default="{row}"><el-button v-if="canReviewResources(row)" link type="success" @click="approveResources(row)">批准</el-button><el-button v-if="canReviewResources(row)" link type="danger" @click="rejectResources(row)">驳回</el-button></template></el-table-column>
           </el-table>
         </el-tab-pane>
       </el-tabs>
     </section>
 
-    <el-dialog v-model="memberDialog" title="添加项目成员" width="500px">
-      <el-form :model="memberForm" label-position="top">
-        <el-form-item label="部门" required><el-select v-model="memberForm.department_id" filterable style="width:100%" @change="memberForm.organization_id=undefined;memberForm.user_id=undefined"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
-        <el-form-item label="组织（可选）"><el-tree-select v-model="memberForm.organization_id" :data="organizationOptions" :props="{label:'name',children:'children'}" node-key="id" check-strictly clearable filterable :disabled="!memberForm.department_id" style="width:100%" @change="memberForm.user_id=undefined"/></el-form-item>
-        <el-form-item label="成员" required><el-select v-model="memberForm.user_id" filterable :disabled="!memberForm.department_id" placeholder="可按姓名或工号搜索" style="width:100%"><el-option v-for="item in candidateUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
-        <el-form-item label="项目角色"><el-input model-value="项目成员" disabled/></el-form-item>
-        <el-form-item label="投入比例"><el-input-number v-model="memberForm.allocation_percent" :min="0" :max="100" style="width:100%"/></el-form-item>
-        <el-form-item label="加入日期"><el-date-picker v-model="memberForm.joined_at" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
+    <el-dialog v-model="resourceDialog" title="项目资源申请" width="620px">
+      <el-form :model="resourceForm" label-position="top">
+        <el-alert title="追加工时、添加成员和移除成员统一提交，部门主管批准后才生效。" type="info" :closable="false" show-icon/>
+        <el-form-item label="追加工时（可选）"><el-input-number v-model="resourceForm.requested_hours" :min="0" :step="0.5" :precision="2" style="width:100%"/></el-form-item>
+        <el-form-item label="添加项目成员（可选）">
+          <el-cascader v-model="resourceForm.add_member_ids" :options="memberCascaderOptions" :props="memberCascaderProps" clearable collapse-tags collapse-tags-tooltip filterable placeholder="按部门 / 组织选择成员" style="width:100%"/>
+        </el-form-item>
+        <el-form-item label="移除项目成员（可选）">
+          <el-select v-model="resourceForm.remove_member_ids" multiple filterable clearable collapse-tags placeholder="项目经理不可移除" style="width:100%"><el-option v-for="item in removableMembers" :key="item.user_id" :label="item.user_name" :value="item.user_id"/></el-select>
+        </el-form-item>
+        <el-form-item label="申请原因" required><el-input v-model="resourceForm.reason" type="textarea" :rows="4" maxlength="2000" show-word-limit/></el-form-item>
       </el-form>
-      <template #footer><el-button @click="memberDialog=false">取消</el-button><el-button type="primary" @click="saveMember">添加</el-button></template>
-    </el-dialog>
-    <el-dialog v-model="hourDialog" title="申请追加项目工时" width="500px">
-      <el-form :model="hourForm" label-position="top">
-        <el-form-item label="追加工时" required><el-input-number v-model="hourForm.requested_hours" :min="0.5" :step="0.5" :precision="2" style="width:100%"/></el-form-item>
-        <el-form-item label="申请原因" required><el-input v-model="hourForm.reason" type="textarea" :rows="4" maxlength="2000" show-word-limit/></el-form-item>
-      </el-form>
-      <template #footer><el-button @click="hourDialog=false">取消</el-button><el-button type="primary" @click="submitHourRequest">提交 L3 审批</el-button></template>
+      <template #footer><el-button @click="resourceDialog=false">取消</el-button><el-button type="primary" @click="submitResourceRequest">提交部门主管审批</el-button></template>
     </el-dialog>
   </div>
 </template>

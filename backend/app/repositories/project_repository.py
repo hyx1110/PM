@@ -8,17 +8,10 @@ from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
-from app.utils.time import beijing_now
 
 def booked_schedule_predicate():
-    """Count accepted work and only still-actionable approval requests."""
-    return or_(
-        ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
-        (
-            ScheduleBooking.status.in_({"pending", "changed"})
-            & (ScheduleBooking.end_time > beijing_now())
-        ),
-    )
+    """Only accepted work consumes project capacity; proposals do not."""
+    return ScheduleBooking.status.in_({"confirmed", "running", "completed"})
 
 
 def booked_hours_expression():
@@ -119,6 +112,7 @@ class ProjectRepository:
                 manager.organization_id.label("manager_organization_id"),
                 manager_organization.name.label("manager_organization_name"),
                 Department.name.label("department_name"),
+                Department.manager_id.label("department_manager_id"),
                 creator.name.label("creator_name"),
                 approver.name.label("approver_name"),
                 approval_required_user.name.label("approval_required_name"),
@@ -144,7 +138,7 @@ class ProjectRepository:
         if project_ids:
             for project_id, task_status, count in db.execute(
                 select(Task.project_id, Task.status, func.count(Task.id)).where(
-                    Task.project_id.in_(project_ids), Task.is_deleted.is_(False), Task.status != "cancelled",
+                    Task.project_id.in_(project_ids), Task.is_deleted.is_(False),
                 ).group_by(Task.project_id, Task.status)
             ).all():
                 total_tasks, complete_tasks = task_counts.get(project_id, (0, 0))
@@ -156,6 +150,7 @@ class ProjectRepository:
             manager_organization_id,
             manager_organization_name,
             department_name,
+            department_manager_id,
             creator_name,
             approver_name,
             approval_required_name,
@@ -170,6 +165,7 @@ class ProjectRepository:
                 manager_organization_id=manager_organization_id,
                 manager_organization_name=manager_organization_name,
                 department_name=department_name,
+                department_manager_id=department_manager_id,
                 creator_name=creator_name,
                 approver_name=approver_name,
                 approval_required_name=approval_required_name,

@@ -6,7 +6,6 @@ export interface Project {
   id: number
   code: string
   name: string
-  project_type: string
   manager_id: number
   manager_name?: string
   manager_employee_no?: string
@@ -14,6 +13,7 @@ export interface Project {
   manager_organization_name?: string
   department_id: number
   department_name?: string
+  department_manager_id?: number | null
   status: string
   planned_start: string
   planned_end: string
@@ -40,7 +40,6 @@ export interface Project {
 
 export interface ProjectPayload {
   name: string
-  project_type: string
   manager_id: number
   member_ids: number[]
   department_id: number
@@ -72,15 +71,16 @@ export interface ProjectMember {
   user_id: number
   user_name?: string
   project_role: string
-  allocation_percent: number
   joined_at: string
   left_at?: string
 }
 
-export interface ProjectHourRequest {
+export interface ProjectResourceRequest {
   id: number
   project_id: number
   requested_hours: number
+  add_member_ids: number[]
+  remove_member_ids: number[]
   reason: string
   status: 'pending' | 'approved' | 'rejected'
   requested_by: number
@@ -93,4 +93,11 @@ export interface ProjectHourRequest {
   review_note?: string
   created_at: string
   updated_at: string
+}
+
+export interface ProjectResourceRequestPayload {
+  requested_hours: number
+  add_member_ids: number[]
+  remove_member_ids: number[]
+  reason: string
 }

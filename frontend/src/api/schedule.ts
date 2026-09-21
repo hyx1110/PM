@@ -1,6 +1,6 @@
 import { api } from './request'
 import type { PageData } from '@/types/common'
-import type { Schedule, ScheduleBatchPayload, ScheduleCopyResult, ScheduleCopyWeekPayload, SchedulePayload, ScheduleQuery } from '@/types/schedule'
+import type { Schedule, ScheduleBatchPayload, SchedulePayload, ScheduleQuery } from '@/types/schedule'
 
 export const getSchedules = (params: ScheduleQuery = {}) => api.get<PageData<Schedule>>('/schedules', { params })
 export async function getAllSchedules(params: ScheduleQuery = {}) {
@@ -30,5 +30,3 @@ export const moveSchedule = (id: number, payload: { start_time: string; end_time
   api.post<Schedule>(`/schedules/${id}/move`, payload)
 export const batchCreateSchedules = (payload: ScheduleBatchPayload) =>
   api.post<{ created: number; schedule_ids: number[] }>('/schedules/batch', payload)
-export const copyScheduleWeek = (payload: ScheduleCopyWeekPayload) =>
-  api.post<ScheduleCopyResult>('/schedules/copy-week', payload)

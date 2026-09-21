@@ -1,7 +1,5 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
-
 from pydantic import Field, model_validator
 
 from app.schemas.common import ORMModel
@@ -9,12 +7,11 @@ from app.schemas.common import ORMModel
 
 PROJECT_STATUSES = {"Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"}
 PROJECT_APPROVAL_STATUSES = {"draft", "pending", "approved", "rejected"}
-HOUR_REQUEST_STATUSES = {"pending", "approved", "rejected"}
+RESOURCE_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 
 
 class ProjectBase(ORMModel):
     name: str = Field(min_length=1, max_length=200)
-    project_type: str = Field(default="General", max_length=50)
     manager_id: int
     department_id: int
     budget_hours: Decimal = Field(gt=0, decimal_places=2)
@@ -45,7 +42,6 @@ class ProjectCreate(ProjectBase):
 
 class ProjectUpdate(ORMModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    project_type: str | None = None
     manager_id: int | None = None
     department_id: int | None = None
     budget_hours: Decimal | None = Field(default=None, gt=0, decimal_places=2)
@@ -64,6 +60,7 @@ class ProjectResponse(ProjectBase):
     manager_organization_id: int | None = None
     manager_organization_name: str | None = None
     department_name: str | None = None
+    department_manager_id: int | None = None
     status: str
     actual_start: date | None = None
     actual_end: date | None = None
@@ -85,20 +82,12 @@ class ProjectResponse(ProjectBase):
     updated_at: datetime
 
 
-class ProjectMemberCreate(ORMModel):
-    user_id: int
-    project_role: Literal["member"] = "member"
-    allocation_percent: Decimal = Field(default=100, ge=0, le=100)
-    joined_at: datetime
-
-
 class ProjectMemberResponse(ORMModel):
     id: int
     project_id: int
     user_id: int
     user_name: str | None = None
     project_role: str
-    allocation_percent: Decimal
     joined_at: datetime
     left_at: datetime | None
     created_at: datetime
@@ -109,15 +98,29 @@ class ProjectDecision(ORMModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
-class ProjectHourRequestCreate(ORMModel):
-    requested_hours: Decimal = Field(gt=0, decimal_places=2)
+class ProjectResourceRequestCreate(ORMModel):
+    requested_hours: Decimal = Field(default=0, ge=0, decimal_places=2)
+    add_member_ids: list[int] = Field(default_factory=list)
+    remove_member_ids: list[int] = Field(default_factory=list)
     reason: str = Field(min_length=1, max_length=2000)
 
+    @model_validator(mode="after")
+    def validate_resources(self):
+        self.add_member_ids = list(dict.fromkeys(self.add_member_ids))
+        self.remove_member_ids = list(dict.fromkeys(self.remove_member_ids))
+        if set(self.add_member_ids) & set(self.remove_member_ids):
+            raise ValueError("the same member cannot be added and removed")
+        if self.requested_hours <= 0 and not self.add_member_ids and not self.remove_member_ids:
+            raise ValueError("at least one resource change is required")
+        return self
 
-class ProjectHourRequestResponse(ORMModel):
+
+class ProjectResourceRequestResponse(ORMModel):
     id: int
     project_id: int
     requested_hours: Decimal
+    add_member_ids: list[int] = Field(default_factory=list)
+    remove_member_ids: list[int] = Field(default_factory=list)
     reason: str
     status: str
     requested_by: int

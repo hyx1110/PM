@@ -1,6 +1,6 @@
 import { api } from './request'
 import type { PageData } from '@/types/common'
-import type { Project, ProjectHourRequest, ProjectMember, ProjectPayload, ProjectQuery } from '@/types/project'
+import type { Project, ProjectMember, ProjectPayload, ProjectQuery, ProjectResourceRequest, ProjectResourceRequestPayload } from '@/types/project'
 
 export const getProjects = (params: ProjectQuery = {}) => api.get<PageData<Project>>('/projects', { params })
 export async function getAllProjects(params: ProjectQuery = {}) {
@@ -26,22 +26,16 @@ export const approveProject = (id: number, note?: string) =>
   api.post<Project>(`/projects/${id}/approve`, { note })
 export const rejectProject = (id: number, note: string) =>
   api.post<Project>(`/projects/${id}/reject`, { note })
-export const getProjectHourRequests = (id: number) =>
-  api.get<ProjectHourRequest[]>(`/projects/${id}/hour-requests`)
-export const getPendingProjectHourRequests = () =>
-  api.get<ProjectHourRequest[]>('/projects/hour-requests/pending')
+export const getProjectResourceRequests = (id: number) =>
+  api.get<ProjectResourceRequest[]>(`/projects/${id}/resource-requests`)
+export const getPendingProjectResourceRequests = () =>
+  api.get<ProjectResourceRequest[]>('/projects/resource-requests/pending')
 export const getPendingProjectApprovals = () =>
   api.get<Project[]>('/projects/approvals/pending')
-export const createProjectHourRequest = (id: number, requestedHours: number, reason: string) =>
-  api.post<ProjectHourRequest>(`/projects/${id}/hour-requests`, { requested_hours: requestedHours, reason })
-export const approveProjectHourRequest = (projectId: number, requestId: number, note?: string) =>
-  api.post<ProjectHourRequest>(`/projects/${projectId}/hour-requests/${requestId}/approve`, { note })
-export const rejectProjectHourRequest = (projectId: number, requestId: number, note: string) =>
-  api.post<ProjectHourRequest>(`/projects/${projectId}/hour-requests/${requestId}/reject`, { note })
+export const createProjectResourceRequest = (id: number, payload: ProjectResourceRequestPayload) =>
+  api.post<ProjectResourceRequest>(`/projects/${id}/resource-requests`, payload)
+export const approveProjectResourceRequest = (projectId: number, requestId: number, note?: string) =>
+  api.post<ProjectResourceRequest>(`/projects/${projectId}/resource-requests/${requestId}/approve`, { note })
+export const rejectProjectResourceRequest = (projectId: number, requestId: number, note: string) =>
+  api.post<ProjectResourceRequest>(`/projects/${projectId}/resource-requests/${requestId}/reject`, { note })
 export const getProjectMembers = (id: number) => api.get<ProjectMember[]>(`/projects/${id}/members`)
-export const addProjectMember = (
-  id: number,
-  payload: Pick<ProjectMember, 'user_id' | 'project_role' | 'allocation_percent' | 'joined_at'>,
-) => api.post<ProjectMember>(`/projects/${id}/members`, payload)
-export const removeProjectMember = (id: number, userId: number) =>
-  api.delete<void>(`/projects/${id}/members/${userId}`)

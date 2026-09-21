@@ -56,7 +56,7 @@ onMounted(async () => {
 <template>
   <div class="page-shell">
     <header class="page-header">
-      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">按当前账号可见项目展示；项目和任务完成后，由项目负责人、L3 或超级管理员进行一次性评价。</p></div>
+      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">按当前账号可见项目展示；项目和任务完成后，由项目负责人、部门主管或超级管理员进行一次性评价。</p></div>
     </header>
     <section class="surface report-card">
       <div class="report-filter">
@@ -69,9 +69,8 @@ onMounted(async () => {
       </div>
       <el-table v-loading="loading" :data="items" stripe>
         <el-table-column prop="project_name" label="项目" fixed min-width="150"/>
-        <el-table-column prop="level1_task" label="一级任务" fixed min-width="150"/>
-        <el-table-column prop="level2_task" label="二级任务" min-width="160"/>
-        <el-table-column prop="owner_name" label="负责人" width="120"/>
+        <el-table-column prop="task_path" label="任务层级" fixed min-width="260" show-overflow-tooltip/>
+        <el-table-column prop="owner_name" label="项目成员" width="120"/>
         <el-table-column label="计划开始" width="120"><template #default="{row}">{{formatDate(row.planned_start)}}</template></el-table-column>
         <el-table-column label="计划结束" width="120"><template #default="{row}">{{formatDate(row.planned_end)}}</template></el-table-column>
         <el-table-column label="实际开始" width="120"><template #default="{row}">{{formatDate(row.actual_start)}}</template></el-table-column>

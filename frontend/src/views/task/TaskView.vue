@@ -20,7 +20,7 @@ const projectTasks = ref<Task[]>([])
 const total = ref(0)
 const projects = ref<Project[]>([])
 const users = ref<UserOption[]>([])
-const ownerOptions = ref<UserOption[]>([])
+const projectMemberOptions = ref<UserOption[]>([])
 const query = reactive({
   page: 1, page_size: 100, project_id: undefined as number | undefined,
   status: '', organization_keyword: '', personnel_keyword: '',
@@ -30,7 +30,7 @@ const editingId = ref<number>()
 const editingProjectName = ref('')
 const formRef = ref<FormInstance>()
 const emptyForm = (): TaskPayload => ({
-  project_id: 0, parent_id: undefined, name: '', task_type: 'Project', owner_ids: [],
+  project_id: 0, parent_id: undefined, name: '', owner_ids: [],
   planned_start: '', planned_end: '', estimated_hours: 0,
   description: '', remark: '',
 })
@@ -38,30 +38,49 @@ const form = reactive<TaskPayload>(emptyForm())
 const rules: FormRules = {
   project_id: [{ required: true, message: '请选择项目' }],
   name: [{ required: true, message: '请输入任务名称' }],
-  owner_ids: [{ required: true, type: 'array', min: 1, message: '请至少选择一名负责人' }],
+  owner_ids: [{ required: true, type: 'array', min: 1, message: '请至少选择一名项目成员' }],
   planned_start: [{ required: true, message: '请选择计划开始日期' }],
   planned_end: [{ required: true, message: '请选择计划结束日期' }],
 }
-const filterStatuses = ['not_started', 'running', 'completed', 'suspended', 'cancelled', 'delayed']
-const statusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', suspended: '已暂停', cancelled: '已取消', delayed: '已延期' }
-const taskTypes = ['Project', 'Routine', 'Training', 'Leave', 'Other']
+const filterStatuses = ['not_started', 'running', 'completed', 'delayed']
+const statusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', delayed: '已逾期' }
 const canManageProject = (project?: Project) => Boolean(project?.can_manage)
 const canExecuteTask = (task: Task) => task.owner_ids.includes(userStore.profile?.id || -1)
   || Boolean(userStore.profile?.roles.some(role => ['super_admin', 'department_manager'].includes(role)))
 const manageableProjects = computed(() => projects.value.filter(canManageProject))
 const approvedProjects = computed(() => manageableProjects.value.filter((item) => item.approval_status === 'approved' && !['Completed', 'Cancelled'].includes(item.status)))
+const selectedProject = computed(() => projects.value.find((item) => item.id === form.project_id))
+const selectedParent = computed(() => projectTasks.value.find((item) => item.id === form.parent_id))
+const descendantIds = computed(() => {
+  const ids = new Set<number>()
+  if (!editingId.value) return ids
+  const visit = (parentId: number) => projectTasks.value
+    .filter((item) => item.parent_id === parentId)
+    .forEach((item) => { ids.add(item.id); visit(item.id) })
+  visit(editingId.value)
+  return ids
+})
 const parentOptions = computed(() => projectTasks.value.filter(
   (item) =>
-    !item.parent_id
-    && item.id !== editingId.value
+    item.id !== editingId.value
+    && !descendantIds.value.has(item.id)
     && item.status === 'not_started'
     && Number(item.booked_hours) === 0,
 ))
+const ownerOptions = computed(() => {
+  if (!selectedParent.value) return projectMemberOptions.value
+  const allowed = new Set(selectedParent.value.owner_ids)
+  return projectMemberOptions.value.filter((item) => allowed.has(item.id))
+})
 const treeTasks = computed(() => {
-  const visibleIds = new Set(tasks.value.map((item) => item.id))
-  const roots = tasks.value.filter((item) => !item.parent_id || !visibleIds.has(item.parent_id)).map((item) => ({ ...item, children: [] as Task[] }))
-  const rootMap = new Map(roots.map((item) => [item.id, item]))
-  tasks.value.filter((item) => item.parent_id).forEach((item) => rootMap.get(item.parent_id!)?.children?.push({ ...item }))
+  const nodes = new Map<number, Task>()
+  tasks.value.forEach((item) => nodes.set(item.id, { ...item, children: [] }))
+  const roots: Task[] = []
+  nodes.forEach((item) => {
+    const parent = item.parent_id ? nodes.get(item.parent_id) : undefined
+    if (parent) parent.children?.push(item)
+    else roots.push(item)
+  })
   return roots
 })
 
@@ -88,7 +107,7 @@ async function loadOptions() {
 async function loadOwnerOptions(projectId: number) {
   const members = await getProjectMembers(projectId)
   const ids = new Set(members.map((item) => item.user_id))
-  ownerOptions.value = users.value.filter((item) => ids.has(item.id))
+  projectMemberOptions.value = users.value.filter((item) => ids.has(item.id))
 }
 
 async function loadProjectTaskOptions(projectId: number) {
@@ -99,6 +118,21 @@ async function changeProject(projectId: number) {
   form.parent_id = undefined
   form.owner_ids = []
   await Promise.all([loadOwnerOptions(projectId), loadProjectTaskOptions(projectId)])
+  const project = projects.value.find((item) => item.id === projectId)
+  if (project) {
+    form.planned_start = project.planned_start
+    form.planned_end = project.planned_end
+  }
+}
+
+function changeParent(parentId?: number) {
+  const parent = projectTasks.value.find((item) => item.id === parentId)
+  if (!parent) return
+  const allowed = new Set(parent.owner_ids)
+  form.owner_ids = form.owner_ids.filter((id) => allowed.has(id))
+  if (!form.owner_ids.length) form.owner_ids = [...parent.owner_ids]
+  form.planned_start = parent.planned_start
+  form.planned_end = parent.planned_end
 }
 
 async function openCreate(parent?: Task) {
@@ -106,8 +140,8 @@ async function openCreate(parent?: Task) {
   editingId.value = undefined
   editingProjectName.value = ''
   Object.assign(form, emptyForm(), parent
-    ? { project_id: parent.project_id, parent_id: parent.id }
-    : { project_id: approvedProjects.value[0].id })
+    ? { project_id: parent.project_id, parent_id: parent.id, owner_ids: [...parent.owner_ids], planned_start: parent.planned_start, planned_end: parent.planned_end }
+    : { project_id: approvedProjects.value[0].id, planned_start: approvedProjects.value[0].planned_start, planned_end: approvedProjects.value[0].planned_end })
   await Promise.all([loadOwnerOptions(form.project_id), loadProjectTaskOptions(form.project_id)])
   dialogVisible.value = true
 }
@@ -117,7 +151,7 @@ async function openEdit(row: Task) {
   editingProjectName.value = row.project_name || `项目 #${row.project_id}`
   Object.assign(form, {
     project_id: row.project_id, parent_id: row.parent_id, name: row.name,
-    task_type: row.task_type, owner_ids: [...row.owner_ids], planned_start: row.planned_start,
+    owner_ids: [...row.owner_ids], planned_start: row.planned_start,
     planned_end: row.planned_end, estimated_hours: Number(row.estimated_hours),
     description: row.description || '', remark: row.remark || '',
   })
@@ -146,7 +180,7 @@ async function remove(row: Task) {
 }
 
 async function editRemark(row: Task) {
-  const { value } = await ElMessageBox.prompt('任务负责人可以维护备注；负责人、计划工时等核心字段由项目负责人维护。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '' })
+  const { value } = await ElMessageBox.prompt('任务项目成员可以维护备注；项目成员、计划工时等核心字段由项目负责人维护。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '' })
   await updateTask(row.id, { remark: value || '' })
   ElMessage.success('备注已保存')
   await load()
@@ -164,7 +198,7 @@ onMounted(async () => { await loadOptions(); await load() })
     <section class="surface filter-bar">
       <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:210px"><el-option v-for="item in projects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
       <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:190px" @keyup.enter="query.page=1;load()"/>
-      <el-input v-model="query.personnel_keyword" clearable placeholder="负责人姓名 / 工号" style="width:180px" @keyup.enter="query.page=1;load()"/>
+      <el-input v-model="query.personnel_keyword" clearable placeholder="项目成员姓名 / 工号" style="width:190px" @keyup.enter="query.page=1;load()"/>
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:130px"><el-option v-for="item in filterStatuses" :key="item" :label="statusLabel[item]" :value="item"/></el-select>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>
@@ -172,12 +206,11 @@ onMounted(async () => { await loadOptions(); await load() })
       <el-table v-loading="loading" :data="treeTasks" row-key="id" default-expand-all>
         <el-table-column prop="name" label="任务名称" min-width="220"><template #default="{row}"><span class="task-name" :class="{child:row.parent_id}">{{row.name}}</span></template></el-table-column>
         <el-table-column prop="project_name" label="项目" min-width="160" show-overflow-tooltip/>
-        <el-table-column prop="task_type" label="类型" width="100"/>
-        <el-table-column prop="owner_name" label="负责人" min-width="130"/>
+        <el-table-column prop="owner_name" label="项目成员" min-width="130"/>
         <el-table-column label="计划日期" width="220"><template #default="{row}">{{formatDate(row.planned_start)}} 至 {{formatDate(row.planned_end)}}</template></el-table-column>
         <el-table-column label="预计工时" width="95"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
-        <el-table-column label="状态" width="95"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':''" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></template></el-table-column>
-        <el-table-column label="操作" fixed="right" width="265"><template #default="{row}"><el-button v-if="!row.parent_id&&row.status==='not_started'&&Number(row.booked_hours)===0&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.children?.length" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
+        <el-table-column label="状态" width="95"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></template></el-table-column>
+        <el-table-column label="操作" fixed="right" width="265"><template #default="{row}"><el-button v-if="row.status==='not_started'&&Number(row.booked_hours)===0&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.children?.length" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[50,100,200]" layout="total, sizes, prev, pager, next" @change="load"/></div>
     </section>
@@ -185,17 +218,17 @@ onMounted(async () => { await loadOptions(); await load() })
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
           <el-form-item label="所属项目" prop="project_id"><el-input v-if="editingId" :model-value="editingProjectName" disabled/><el-select v-else v-model="form.project_id" filterable style="width:100%" @change="changeProject"><el-option v-for="item in approvedProjects" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
-          <el-form-item label="父任务"><el-select v-model="form.parent_id" clearable :disabled="Boolean(editingId&&form.parent_id)" style="width:100%"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="父任务"><el-select v-model="form.parent_id" clearable style="width:100%" @change="changeParent"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+          <el-alert v-if="selectedProject" class="project-window" type="info" :closable="false" show-icon :title="`项目计划周期：${formatDate(selectedProject.planned_start)} 至 ${formatDate(selectedProject.planned_end)}`"/>
           <el-form-item label="任务名称" prop="name"><el-input v-model="form.name"/></el-form-item>
-          <el-form-item label="任务类型"><el-select v-model="form.task_type" style="width:100%"><el-option v-for="item in taskTypes" :key="item" :value="item"/></el-select></el-form-item>
-          <el-form-item label="负责人" prop="owner_ids"><el-select v-model="form.owner_ids" multiple filterable collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in ownerOptions" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="项目成员" prop="owner_ids"><el-select v-model="form.owner_ids" multiple filterable collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in ownerOptions" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
           <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
           <el-form-item label="预计工时"><el-input-number v-model="form.estimated_hours" :min="0" :precision="1" style="width:100%"/></el-form-item>
         </div>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2"/></el-form-item>
-        <div class="form-hint">新增任务不再设置优先级；负责人支持多选，且必须是当前有效项目成员。</div>
+        <div class="form-hint">项目成员支持多选；子任务只能选择父任务已有的项目成员。顶级任务工时合计不能超过项目工时，同级子任务工时合计不能超过父任务工时。</div>
       </el-form>
       <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-dialog>
@@ -203,5 +236,5 @@ onMounted(async () => { await loadOptions(); await load() })
 </template>
 
 <style scoped>
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.task-name{font-weight:600;color:#39465a}.task-name.child{font-weight:400;color:#5f6b7c}.form-hint{margin-top:-4px;color:#9aa3b1;font-size:11px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.project-window{grid-column:1/-1;margin-bottom:18px}.task-name{font-weight:600;color:#39465a}.task-name.child{font-weight:400;color:#5f6b7c}.form-hint{margin-top:-4px;color:#9aa3b1;font-size:11px}
 </style>

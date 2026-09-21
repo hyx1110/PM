@@ -4,13 +4,13 @@ import { Calendar, Collection, Timer, TrendCharts } from '@element-plus/icons-vu
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDashboardSummary } from '@/api/report'
-import { approveProject, approveProjectHourRequest, getPendingProjectApprovals, getPendingProjectHourRequests, rejectProject, rejectProjectHourRequest } from '@/api/project'
+import { approveProject, approveProjectResourceRequest, getPendingProjectApprovals, getPendingProjectResourceRequests, rejectProject, rejectProjectResourceRequest } from '@/api/project'
 import { getMyTasks } from '@/api/task'
 import { confirmSchedule, getMyPendingSchedules, rejectSchedule } from '@/api/schedule'
 import type { DashboardSummary } from '@/types/report'
 import type { Schedule } from '@/types/schedule'
 import type { Project } from '@/types/project'
-import type { ProjectHourRequest } from '@/types/project'
+import type { ProjectResourceRequest } from '@/types/project'
 import type { Task } from '@/types/task'
 import { formatDate, formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
@@ -24,7 +24,7 @@ const loading = ref(false)
 const decisionState = ref<{ id: number; action: 'approve' | 'reject' }>()
 const pendingBookings = ref<Schedule[]>([])
 const pendingProjectApprovals = ref<Project[]>([])
-const pendingHourRequests = ref<ProjectHourRequest[]>([])
+const pendingResourceRequests = ref<ProjectResourceRequest[]>([])
 const myTasks = ref<Task[]>([])
 const data = ref<DashboardSummary>({
   projects_total: 0, projects_running: 0, projects_completed: 0, projects_delayed: 0,
@@ -69,30 +69,36 @@ async function loadDashboard() {
       getDashboardSummary(),
       canViewSchedules ? getMyPendingSchedules(8) : Promise.resolve([]),
       getPendingProjectApprovals(),
-      isGlobalManager ? getPendingProjectHourRequests() : Promise.resolve([]),
+      isGlobalManager ? getPendingProjectResourceRequests() : Promise.resolve([]),
       canViewTasks ? getMyTasks({ page: 1, page_size: 10 }) : Promise.resolve({ items: [], total: 0, page: 1, page_size: 10 }),
     ])
     if (summary.status === 'fulfilled') data.value = summary.value
     if (pending.status === 'fulfilled') pendingBookings.value = pending.value
     if (projects.status === 'fulfilled') pendingProjectApprovals.value = projects.value
-    if (hours.status === 'fulfilled') pendingHourRequests.value = hours.value
+    if (hours.status === 'fulfilled') pendingResourceRequests.value = hours.value
     if (tasks.status === 'fulfilled') myTasks.value = tasks.value.items
   } finally {
     loading.value = false
   }
 }
 
-async function approveHours(item: ProjectHourRequest) {
-  await ElMessageBox.confirm(`确认批准项目“${item.project_name}”追加 ${item.requested_hours} 小时吗？`, 'L3 工时审批', { type: 'warning' })
-  await approveProjectHourRequest(item.project_id, item.id)
-  ElMessage.success('追加工时已批准')
+const resourceSummary = (item: ProjectResourceRequest) => [
+  item.requested_hours > 0 ? `追加 ${item.requested_hours}h` : '',
+  item.add_member_ids.length ? `新增 ${item.add_member_ids.length} 人` : '',
+  item.remove_member_ids.length ? `移除 ${item.remove_member_ids.length} 人` : '',
+].filter(Boolean).join('、')
+
+async function approveResources(item: ProjectResourceRequest) {
+  await ElMessageBox.confirm(`确认批准项目“${item.project_name}”的资源申请（${resourceSummary(item)}）吗？`, '部门主管资源审批', { type: 'warning' })
+  await approveProjectResourceRequest(item.project_id, item.id)
+  ElMessage.success('项目资源申请已批准')
   await loadDashboard()
 }
 
-async function rejectHours(item: ProjectHourRequest) {
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', 'L3 工时审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
-  await rejectProjectHourRequest(item.project_id, item.id, value)
-  ElMessage.success('追加工时申请已驳回')
+async function rejectResources(item: ProjectResourceRequest) {
+  const { value } = await ElMessageBox.prompt('请输入驳回原因', '部门主管资源审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
+  await rejectProjectResourceRequest(item.project_id, item.id, value)
+  ElMessage.success('项目资源申请已驳回')
   await loadDashboard()
 }
 
@@ -172,15 +178,15 @@ onMounted(loadDashboard)
     <section class="surface decision-card">
       <div class="decision-header"><div><span class="overline">MY TASKS</span><h2>我的任务</h2><p>首页直接展示由你负责的任务。</p></div><el-button text type="primary" @click="$router.push('/tasks')">查看全部任务</el-button></div>
       <el-empty v-if="!myTasks.length" :image-size="54" description="当前没有由你负责的任务" />
-      <el-table v-else :data="myTasks" size="small" class="dashboard-table"><el-table-column prop="name" label="任务" min-width="180"/><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="owner_name" label="负责人" min-width="120"/><el-table-column label="计划结束" width="130"><template #default="{row}">{{ formatDate(row.planned_end) }}</template></el-table-column><el-table-column prop="effective_status" label="状态" width="100"/></el-table>
+      <el-table v-else :data="myTasks" size="small" class="dashboard-table"><el-table-column prop="name" label="任务" min-width="180"/><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="owner_name" label="项目成员" min-width="120"/><el-table-column label="计划结束" width="130"><template #default="{row}">{{ formatDate(row.planned_end) }}</template></el-table-column><el-table-column prop="effective_status" label="状态" width="100"/></el-table>
     </section>
-    <section v-if="pendingHourRequests.length" class="surface decision-card">
-      <div class="decision-header"><div><span class="overline">HOUR APPROVALS</span><h2>L3 待审批追加工时</h2><p>批准后工时立即计入项目额度。</p></div></div>
-      <div class="decision-list"><article v-for="item in pendingHourRequests" :key="item.id" class="decision-item"><div class="decision-info"><strong>{{ item.project_code }} · {{ item.project_name }}</strong><span>{{ item.requester_name }} 申请追加 {{ item.requested_hours }}h · {{ item.reason }}</span></div><div class="decision-actions"><el-button @click="rejectHours(item)">驳回</el-button><el-button type="success" @click="approveHours(item)">批准</el-button></div></article></div>
+    <section v-if="pendingResourceRequests.length" class="surface decision-card">
+      <div class="decision-header"><div><span class="overline">RESOURCE APPROVALS</span><h2>部门主管待审批项目资源</h2><p>工时和项目成员变更统一在这里审批。</p></div></div>
+      <div class="decision-list"><article v-for="item in pendingResourceRequests" :key="item.id" class="decision-item"><div class="decision-info"><strong>{{ item.project_code }} · {{ item.project_name }}</strong><span>{{ item.requester_name }} 申请{{ resourceSummary(item) }} · {{ item.reason }}</span></div><div class="decision-actions"><el-button @click="rejectResources(item)">驳回</el-button><el-button type="success" @click="approveResources(item)">批准</el-button></div></article></div>
     </section>
     <section v-if="pendingProjectApprovals.length" class="surface decision-card">
       <div class="decision-header">
-        <div><span class="overline">PROJECT APPROVALS</span><h2>待我审批的项目</h2><p>L3 和超级管理员可处理全部待审批项目，其他审批人仅处理分配给自己的项目。</p></div>
+        <div><span class="overline">PROJECT APPROVALS</span><h2>待我审批的项目</h2><p>这里只显示分配给当前部门主管的项目审批。</p></div>
       </div>
       <div class="decision-list">
         <article v-for="item in pendingProjectApprovals.slice(0,8)" :key="item.id" class="decision-item">

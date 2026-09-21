@@ -10,7 +10,6 @@ from app.core.responses import success
 from app.models.user import User
 from app.schemas.schedule import (
     ScheduleBatchCreate,
-    ScheduleCopyWeek,
     ScheduleCreate,
     ScheduleDecision,
     ScheduleMove,
@@ -71,15 +70,6 @@ def batch_create_schedules(
     db: Session = Depends(get_db),
 ):
     return success(schedule_service.batch_create_schedules(db, payload, current_user))
-
-
-@router.post("/copy-week")
-def copy_week(
-    payload: ScheduleCopyWeek,
-    current_user: User = Depends(require_permission("schedule:edit")),
-    db: Session = Depends(get_db),
-):
-    return success(schedule_service.copy_week(db, payload, current_user))
 
 
 @router.get("/my-pending")

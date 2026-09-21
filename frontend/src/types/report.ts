@@ -6,6 +6,7 @@ export interface ProcessReportItem {
   project_status: string
   level1_task?: string
   level2_task?: string
+  task_path: string
   task_id: number
   owner_id: number
   owner_name: string

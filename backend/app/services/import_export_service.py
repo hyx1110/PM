@@ -36,11 +36,13 @@ from app.services.project_service import (
     _add_initial_project_members,
     _generate_project_code,
     _validate_initial_project_members,
+    get_department_manager,
     manageable_project_ids,
     visible_project_ids,
     _validate_project_manager,
 )
 from app.services.rbac_service import ensure_default_system_role
+from app.services.task_service import _validate_assignees_with_parent, _validate_estimated_hours
 from app.services.visibility_service import related_user_ids, has_global_project_access
 from app.utils.time import beijing_now
 
@@ -59,7 +61,6 @@ RESOURCE_HEADERS = {
     "projects": [
         ("code", "项目编号（系统自动生成，导入值忽略）"),
         ("name", "项目名称*"),
-        ("project_type", "项目类型"),
         ("manager_employee_no", "项目经理员工号*"),
         ("member_employee_nos", "项目成员员工号*(逗号分隔)"),
         ("department_code", "部门编码*"),
@@ -73,8 +74,7 @@ RESOURCE_HEADERS = {
         ("project_code", "项目编号*"),
         ("parent_task_name", "上级任务名称"),
         ("name", "任务名称*"),
-        ("task_type", "任务类型"),
-        ("owner_employee_nos", "负责人员工号*(逗号分隔)"),
+        ("owner_employee_nos", "项目成员员工号*(逗号分隔)"),
         ("planned_start", "计划开始*"),
         ("planned_end", "计划结束*"),
         ("estimated_hours", "预计工时"),
@@ -85,8 +85,8 @@ RESOURCE_HEADERS = {
 
 EXAMPLES = {
     "users": ["E10001", "张三", "", "zhangsan@example.com", "D001", "", "E10000", "project_member", "active"],
-    "projects": ["P-2026-001", "示例项目", "General", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "", ""],
-    "tasks": ["P-2026-001", "", "需求分析", "Project", "E10002,E10003", date(2026, 10, 1), date(2026, 10, 3), 24, "", ""],
+    "projects": ["P-2026-001", "示例项目", "E10001", "E10002,E10003", "D001", 160, date(2026, 10, 1), date(2026, 12, 31), "", ""],
+    "tasks": ["P-2026-001", "", "需求分析", "E10002,E10003", date(2026, 10, 1), date(2026, 10, 3), 24, "", ""],
 }
 
 
@@ -138,13 +138,11 @@ def create_template(resource_type: str) -> bytes:
         status_values = {
             "users": ["active", "disabled"],
             "projects": ["Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"],
-            "tasks": ["not_started", "running", "completed", "suspended", "cancelled"],
+            "tasks": ["not_started", "running", "completed"],
         }[resource_type]
         _add_list_validation(book, sheet, field_index["status"], status_values)
     if "priority" in field_index:
         _add_list_validation(book, sheet, field_index["priority"], ["low", "medium", "high", "critical"])
-    if "task_type" in field_index:
-        _add_list_validation(book, sheet, field_index["task_type"], ["Project", "Routine", "Training", "Leave", "Other"])
     notes = book.create_sheet("填写说明", 1)
     notes.append(["规则", "说明"])
     notes.append(["必填字段", "标题包含 * 的列必须填写；请勿修改标题行。"])
@@ -153,7 +151,7 @@ def create_template(resource_type: str) -> bytes:
     if resource_type == "projects":
         notes.append(["项目成员", "创建项目时必须填写至少一名项目成员；多个员工号使用英文逗号分隔，项目经理无需重复填写。"])
     if resource_type == "tasks":
-        notes.append(["任务负责人", "至少填写一名当前有效项目成员；多个员工号使用英文逗号分隔。"])
+        notes.append(["任务项目成员", "至少填写一名当前有效项目成员；多个员工号使用英文逗号分隔。"])
     notes.append(["导入策略", "按行校验并导入；失败行会保留错误明细，成功行不会被回滚。"])
     _style_sheet(notes, [20, 76])
     stream = BytesIO()
@@ -330,7 +328,6 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         raise ValueError(exc.message) from exc
     payload = ProjectCreate(
         name=row.get("name"),
-        project_type=row.get("project_type") or "General",
         manager_id=manager.id,
         member_ids=[member.id for member in ordered_member_users],
         department_id=department.id,
@@ -340,40 +337,33 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         description=row.get("description") or None,
         remark=row.get("remark") or None,
     )
-    auto_approved = bool(operator_roles & {"department_manager", "super_admin"})
-    approver = None
-    if not auto_approved:
-        approver = db.get(User, operator.supervisor_id) if operator.supervisor_id else None
-        if not approver or approver.is_deleted or approver.status != "active":
-            raise ValueError("当前用户未设置有效直属主管，无法导入并提交项目")
-        if approver.id == operator.id:
-            raise ValueError("项目创建人不能审批自己的项目")
+    try:
+        approver = get_department_manager(db, department.id)
+    except BusinessException as exc:
+        raise ValueError(exc.message) from exc
     item = Project(
         **payload.model_dump(exclude={"member_ids"}),
         code=_generate_project_code(db),
-        status="Planned" if auto_approved else "Draft",
-        approval_status="approved" if auto_approved else "pending",
+        status="Draft",
+        approval_status="pending",
         created_by=operator.id,
-        approver_id=approver.id if approver else None,
-        approved_at=beijing_now() if auto_approved else None,
-        approval_note="创建人属于 L3 或超级管理员，系统自动通过" if auto_approved else None,
+        approver_id=approver.id,
     )
     db.add(item)
     db.flush()
     _add_initial_project_members(db, item, manager, ordered_member_users)
     db.flush()
-    if approver:
-        create_notification(
-            db,
-            approver.id,
-            "project_approval_required",
-            "导入项目等待直属主管审批",
-            f"{operator.name} 导入了项目 {item.code} - {item.name}，"
-            f"请审核项目与 {item.budget_hours} 小时工时额度。",
-            level="warning",
-            related_type="project",
-            related_id=item.id,
-        )
+    create_notification(
+        db,
+        approver.id,
+        "project_approval_required",
+        "导入项目等待部门主管审批",
+        f"{operator.name} 导入了项目 {item.code} - {item.name}，"
+        f"请审核项目与 {item.budget_hours} 小时工时额度。",
+        level="warning",
+        related_type="project",
+        related_id=item.id,
+    )
     return item
 
 
@@ -393,7 +383,7 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     ]
     owner_employee_nos = list(dict.fromkeys(owner_employee_nos))
     if not owner_employee_nos:
-        raise ValueError("至少填写一名任务负责人的员工号")
+        raise ValueError("至少填写一名任务项目成员的员工号")
     owners = db.scalars(
         select(User).where(
             User.employee_no.in_(owner_employee_nos),
@@ -409,7 +399,7 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     ]
     if missing_owner_nos:
         raise ValueError(
-            f"任务负责人员工号不存在或已停用：{', '.join(missing_owner_nos)}"
+            f"任务项目成员员工号不存在或已停用：{', '.join(missing_owner_nos)}"
         )
     ordered_owners = [owners_by_no[employee_no] for employee_no in owner_employee_nos]
     active_member_ids = set(
@@ -425,7 +415,7 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     ]
     if invalid_owners:
         raise ValueError(
-            f"任务负责人必须是当前有效项目成员：{', '.join(invalid_owners)}"
+            f"任务项目成员必须是当前有效项目成员：{', '.join(invalid_owners)}"
         )
     parent = None
     if row.get("parent_task_name"):
@@ -443,10 +433,8 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         if len(parent_matches) > 1:
             raise ValueError("上级任务名称不唯一，请先调整任务名称后再导入")
         parent = parent_matches[0]
-        if parent.parent_id is not None:
-            raise ValueError("系统只支持两级任务，上级任务不能是二级任务")
-        if parent.status in {"completed", "cancelled"}:
-            raise ValueError("不能在已完成或已取消的任务下导入子任务")
+        if parent.status == "completed":
+            raise ValueError("不能在已完成的任务下导入子任务")
         if db.scalar(
             select(ExecutionRecord.id).where(
                 ExecutionRecord.task_id == parent.id,
@@ -465,7 +453,6 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         project_id=project.id,
         parent_id=parent.id if parent else None,
         name=row.get("name"),
-        task_type=row.get("task_type") or "Project",
         owner_ids=[owner.id for owner in ordered_owners],
         planned_start=_to_date(row.get("planned_start"), "计划开始"),
         planned_end=_to_date(row.get("planned_end"), "计划结束"),
@@ -478,6 +465,20 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         or payload.planned_end > project.planned_end
     ):
         raise ValueError("任务计划时间必须位于项目计划日期范围内")
+    if parent and (
+        payload.planned_start < parent.planned_start
+        or payload.planned_end > parent.planned_end
+    ):
+        raise ValueError("子任务计划时间必须位于父任务计划日期范围内")
+    _validate_assignees_with_parent(
+        db, parent, [owner.id for owner in ordered_owners]
+    )
+    _validate_estimated_hours(
+        db,
+        project.id,
+        parent.id if parent else None,
+        payload.estimated_hours,
+    )
     item = Task(
         **payload.model_dump(exclude={"owner_ids"}),
         owner_id=ordered_owners[0].id,
@@ -765,7 +766,7 @@ def export_process_report(db: Session, user: User, start_date: date, end_date: d
     )
     values = [
         [
-            item["project_name"], item.get("level1_task"), item.get("level2_task"), item["owner_name"],
+            item["project_name"], item.get("task_path"), item["owner_name"],
             item["planned_start"], item["planned_end"], item.get("actual_start"), item.get("actual_end"),
             float(item["estimated_hours"] or 0), float(item["actual_hours"] or 0),
             float(item["achievement_rate"]) if item.get("achievement_rate") is not None else None,
@@ -774,4 +775,4 @@ def export_process_report(db: Session, user: User, start_date: date, end_date: d
         ]
         for item in report["items"]
     ]
-    return _export_book("项目过程报表", ["项目", "一级任务", "二级任务", "负责人", "计划开始", "计划结束", "实际开始", "实际结束", "预计工时", "实际工时", "达成率", "达成质量", "状态"], values, {5, 6, 7, 8})
+    return _export_book("项目过程报表", ["项目", "任务层级", "负责人", "计划开始", "计划结束", "实际开始", "实际结束", "预计工时", "实际工时", "达成率", "达成质量", "状态"], values, {4, 5, 6, 7})

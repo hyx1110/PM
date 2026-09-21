@@ -6,7 +6,6 @@ import type { AxiosError } from 'axios'
 import {
   batchCreateSchedules,
   confirmSchedule,
-  copyScheduleWeek,
   createSchedule,
   deleteSchedule,
   getSchedules,
@@ -209,7 +208,9 @@ const bookableProjects = computed(() => {
       item.approval_status !== 'approved'
       || ['Completed', 'Cancelled'].includes(item.status)
     ) return false
-    return hasGlobalAccess || item.manager_id === currentUserId
+    return hasGlobalAccess
+      || item.manager_id === currentUserId
+      || tasks.value.some((task) => task.project_id === item.id && task.owner_ids.includes(currentUserId || -1))
   })
 })
 const canBook = computed(
@@ -232,7 +233,13 @@ const dateTitle = computed(() =>
       : dayjs(anchorDate.value).format('YYYY年MM月'),
 )
 const batchTasks = computed(() =>
-  tasks.value.filter((item) => item.project_id === batchForm.project_id),
+  tasks.value.filter((item) => {
+    if (item.project_id !== batchForm.project_id) return false
+    const project = bookableProjects.value.find((projectItem) => projectItem.id === item.project_id)
+    return canManageAllSchedules.value
+      || project?.manager_id === userStore.profile?.id
+      || item.owner_ids.includes(userStore.profile?.id || -1)
+  }),
 )
 
 function canBookUserForProject(item: UserOption, project?: Project) {
@@ -241,6 +248,10 @@ function canBookUserForProject(item: UserOption, project?: Project) {
   const currentUserId = userStore.profile?.id
   return roles.some((role) => ['super_admin', 'department_manager'].includes(role))
     || project.manager_id === currentUserId
+    || (
+      item.id === currentUserId
+      && tasks.value.some((task) => task.project_id === project.id && task.owner_ids.includes(item.id))
+    )
 }
 
 async function loadBatchUsers(projectId: number) {
@@ -443,7 +454,7 @@ async function loadOptions() {
     getOrganizationTree(),
   ])
   const taskGroups = await Promise.all(
-    projectItems.map((project) => getAllTasks({ project_id: project.id, managed_project_scope: true })),
+    projectItems.map((project) => getAllTasks({ project_id: project.id })),
   )
   projects.value = projectItems
   filterProjects.value = scheduleProjectItems
@@ -456,7 +467,7 @@ async function loadOptions() {
   tasks.value = allProjectTasks.filter(
     (task) =>
       !summaryTaskIds.has(task.id)
-      && !['completed', 'cancelled'].includes(task.status),
+      && task.status !== 'completed',
   )
   users.value = userResult
   departments.value = departmentResult
@@ -845,7 +856,7 @@ async function saveBatch() {
   }
   const remaining = bookableProjects.value.find((item) => item.id === batchForm.project_id)?.remaining_hours
   if (remaining !== undefined && batchHours.value * batchForm.user_ids.length > remaining) {
-    return ElMessage.warning('项目剩余工时不足，请先申请追加工时并等待 L3 审批')
+    return ElMessage.warning('项目剩余工时不足，请先提交项目资源申请并等待部门主管审批')
   }
   batchSaving.value = true
   try {
@@ -870,18 +881,6 @@ async function saveBatch() {
   } finally {
     batchSaving.value = false
   }
-}
-
-async function copyPreviousWeek() {
-  if (viewMode.value !== 'week') return ElMessage.warning('复制周预约前请切换到周视图')
-  const target = dayjs(weekDays.value[0])
-  const result = await copyScheduleWeek({
-    source_week_start: target.subtract(7, 'day').format('YYYY-MM-DD HH:mm:ss'),
-    target_week_start: target.format('YYYY-MM-DD HH:mm:ss'),
-  })
-  ElMessage.success(`已提交 ${result.created} 条预约，跳过 ${result.skipped.length} 条；本人预约自动确认，其余预约等待对应人员确认`)
-  await loadOptions()
-  await load()
 }
 
 watch(
@@ -921,7 +920,7 @@ onMounted(async () => {
       </div>
       <div class="header-actions">
         <el-button @click="openMyTimeDrawer">我的时间安排</el-button>
-        <template v-if="canBook"><el-button @click="copyPreviousWeek">复制上周</el-button><el-button @click="openBatch">批量预约</el-button><el-button type="primary" @click="openBookingButton">预约人力</el-button></template>
+        <template v-if="canBook"><el-button @click="openBatch">批量预约</el-button><el-button type="primary" @click="openBookingButton">预约人力</el-button></template>
       </div>
     </header>
     <section class="surface board-tools">

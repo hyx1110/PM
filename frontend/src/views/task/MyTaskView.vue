@@ -8,14 +8,12 @@ const loading = ref(false)
 const tasks = ref<Task[]>([])
 const total = ref(0)
 const query = reactive({ page: 1, page_size: 20, status: '' })
-const statuses = ['not_started', 'running', 'completed', 'suspended', 'cancelled', 'delayed']
+const statuses = ['not_started', 'running', 'completed', 'delayed']
 const statusLabel: Record<string, string> = {
   not_started: '未开始',
   running: '进行中',
   completed: '已完成',
-  suspended: '已暂停',
-  cancelled: '已取消',
-  delayed: '已延期',
+  delayed: '已逾期',
 }
 
 async function load() {

@@ -6,7 +6,6 @@ export interface Task {
   project_name?: string
   parent_id?: number
   name: string
-  task_type: string
   owner_id: number
   owner_ids: number[]
   owner_names: string[]
@@ -32,7 +31,6 @@ export interface TaskPayload {
   project_id: number
   parent_id?: number
   name: string
-  task_type: string
   owner_ids: number[]
   planned_start: string
   planned_end: string

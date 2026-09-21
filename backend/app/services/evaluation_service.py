@@ -46,7 +46,7 @@ def upsert_evaluation(db: Session, task_id: int, payload: EvaluationUpsert, user
         raise not_found("project not found")
     roles = get_role_codes(db, user.id)
     if not roles & {"super_admin", "department_manager"} and project.manager_id != user.id:
-        raise forbidden("只有超级管理员、L3 或本项目负责人可以进行评价")
+        raise forbidden("只有超级管理员、部门主管或本项目负责人可以进行评价")
     if not project or project.status != "Completed":
         raise bad_request("项目执行完成后才能进行评价")
     if task.status != "completed":

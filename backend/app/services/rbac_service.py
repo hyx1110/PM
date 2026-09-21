@@ -142,7 +142,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
         ).limit(1)
     ):
         raise conflict(
-            "用户仍负责未结束项目，须保留项目经理、L4、L3 或超级管理员角色",
+            "用户仍负责未结束项目，须保留项目经理、职能主管、部门主管或超级管理员角色",
             40908,
             {"dependencies": ["active managed projects"]},
         )
@@ -150,7 +150,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
         select(Department.id).where(Department.manager_id == user_id).limit(1)
     ):
         raise conflict(
-            "用户仍是部门负责人，不能移除 L3 角色",
+            "用户仍是部门负责人，不能移除部门主管角色",
             40909,
             {"dependencies": ["managed departments"]},
         )

@@ -22,6 +22,8 @@ backend/alembic/versions/20260916_0009_simplify_user_schema.py
 backend/alembic/versions/20260916_0010_task_multi_assignees.py
 backend/alembic/versions/20260917_0011_task_execution_dates.py
 backend/alembic/versions/20260918_0012_permission_status_alignment.py
+backend/alembic/versions/20260921_0013_remove_project_task_types.py
+backend/alembic/versions/20260921_0014_task_hierarchy_and_project_resources.py
 backend/app/models/import_job.py
 backend/app/models/notification.py
 backend/app/models/personal_time.py
@@ -55,7 +57,7 @@ backend/app/utils/employee_no.py
 backend/app/utils/time.py
 ```
 
-后端同时修改了用户账号/Schema/Repository/Service/API、系统角色直接关联、登录认证、人员查找项、项目模型/Schema/Repository/Service/API、项目创建成员事务、任务创建限制、人力预约状态机/人员范围/配额校验、组织 L3 校验、员工号 Excel 导入、主路由和初始化权限。旧 `employee_profile` 模型、Schema 和 Service 已由 `20260916_0009` 对应代码删除。
+后端同时修改了用户账号/Schema/Repository/Service/API、系统角色直接关联、登录认证、人员查找项、项目模型/Schema/Repository/Service/API、项目创建成员事务、任务创建限制、人力预约状态机/人员范围/配额校验、部门主管校验、员工号 Excel 导入、主路由和初始化权限。旧 `employee_profile` 模型、Schema 和 Service 已由 `20260916_0009` 对应代码删除。
 
 ## 前端新增文件
 
@@ -81,7 +83,7 @@ frontend/src/views/schedule/WorkCalendarView.vue
 frontend/src/views/task/MyTaskView.vue
 ```
 
-前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与分角色项目范围、任务多人负责人及项目关系范围、首页任务和 L3 工时审批、共享看板人员联合筛选与本人预约自动确认、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
+前端同时修改了员工号登录、用户组织筛选和必填校验、项目自动编号与分角色项目范围、任务多人项目成员及项目关系范围、首页任务和部门主管工时审批、共享看板人员联合筛选与本人预约自动确认、个人时间展示/撤回、通知右上角入口、导航/顶栏、路由、项目/排期 API 与类型。工作日历、负载和风险页面源码保留但不注册路由；经营分析页面已删除。
 
 ## 文档
 

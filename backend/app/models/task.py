@@ -15,7 +15,6 @@ class Task(TimestampMixin, Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="RESTRICT"), index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    task_type: Mapped[str] = mapped_column(String(30), nullable=False, default="Project", index=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     planned_start: Mapped[date] = mapped_column(Date, nullable=False)
     planned_end: Mapped[date] = mapped_column(Date, nullable=False, index=True)

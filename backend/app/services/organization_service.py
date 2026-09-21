@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_role_codes
@@ -30,9 +30,9 @@ def _validate_department_l3(
     if manager_id:
         manager = db.get(User, manager_id)
         if "department_manager" not in get_role_codes(db, manager_id):
-            raise bad_request("部门负责人必须具有 L3 角色")
+            raise bad_request("部门负责人必须具有部门主管角色")
         if department_id and manager.department_id != department_id:
-            raise bad_request("L3 必须属于其负责的部门")
+            raise bad_request("部门主管必须属于其负责的部门")
 
 
 def list_departments(db: Session):
@@ -43,7 +43,7 @@ def create_department(db: Session, payload: DepartmentCreate, operator_id: int) 
     if db.scalar(select(Department).where(Department.code == payload.code)):
         raise conflict("department code already exists", 40911)
     if payload.manager_id:
-        raise bad_request("请先创建部门并把 L3 用户分配到该部门，再设置部门负责人")
+        raise bad_request("请先创建部门并把部门主管用户分配到该部门，再设置部门负责人")
     item = Department(**payload.model_dump())
     db.add(item)
     db.flush()
@@ -64,6 +64,14 @@ def update_department(db: Session, department_id: int, payload: DepartmentUpdate
         raise bad_request("部门名称和状态不能为空")
     if "manager_id" in values:
         _validate_department_l3(db, values.get("manager_id"), department_id)
+        if values.get("manager_id") is None and db.scalar(
+            select(Project.id).where(
+                Project.department_id == department_id,
+                Project.approval_status == "pending",
+                Project.is_deleted.is_(False),
+            ).limit(1)
+        ):
+            raise bad_request("该部门仍有待审批项目，不能清空部门主管")
     if values.get("status") == "disabled" and item.status != "disabled":
         dependencies: list[str] = []
         if db.scalar(
@@ -97,6 +105,16 @@ def update_department(db: Session, department_id: int, payload: DepartmentUpdate
             )
     for key, value in values.items():
         setattr(item, key, value)
+    if values.get("manager_id"):
+        db.execute(
+            update(Project)
+            .where(
+                Project.department_id == department_id,
+                Project.approval_status == "pending",
+                Project.is_deleted.is_(False),
+            )
+            .values(approver_id=values["manager_id"])
+        )
     db.flush()
     log_operation(db, operator_id=operator_id, module="organization", action="update_department", object_type="department", object_id=item.id, before_data=before, after_data=model_to_dict(item))
     db.commit()

@@ -22,7 +22,7 @@ from app.services.visibility_service import visible_schedule_user_ids
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_now
 
-OPEN_TASK_STATUSES = {"not_started", "running", "suspended"}
+OPEN_TASK_STATUSES = {"not_started", "running"}
 ACTIVE_SCHEDULE_STATUSES = {"pending", "confirmed", "changed", "running"}
 def _risk_scopes(db: Session, user: User) -> tuple[set[int] | None, set[int] | None]:
     """Resolve risk scopes without coupling them to the project-list scope."""

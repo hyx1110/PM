@@ -9,7 +9,6 @@ export interface Schedule {
   project_name?: string
   task_id: number
   task_name?: string
-  task_type?: string
   start_time: string
   end_time: string
   planned_hours: number
@@ -68,18 +67,4 @@ export interface ScheduleBatchPayload {
   end_time: string
   planned_hours?: number
   remark?: string
-}
-
-export interface ScheduleCopyWeekPayload {
-  source_week_start: string
-  target_week_start: string
-  user_ids?: number[]
-  include_statuses?: string[]
-}
-
-export interface ScheduleCopyResult {
-  source_count: number
-  created: number
-  schedule_ids: number[]
-  skipped: Array<{ source_schedule_id: number; reason: string; conflicts?: ScheduleConflict[] }>
 }

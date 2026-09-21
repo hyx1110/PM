@@ -17,40 +17,40 @@ def _execution_derived_status(db: Session, task: Task) -> str:
     )
     if not latest:
         return "not_started"
-    return {"completed": "completed", "paused": "suspended", "running": "running"}.get(latest.status, "not_started")
+    return {"completed": "completed", "running": "running"}.get(latest.status, "not_started")
 
 
 def synchronize_parent_status(db: Session, parent_id: int | None) -> None:
     if not parent_id:
         return
     parent = db.get(Task, parent_id)
-    if not parent or parent.is_deleted or parent.status == "cancelled":
+    if not parent or parent.is_deleted:
         return
-    child_statuses = [
-        status
-        for status in db.scalars(
+    child_statuses = list(
+        db.scalars(
             select(Task.status).where(
                 Task.parent_id == parent.id,
                 Task.is_deleted.is_(False),
             )
         ).all()
-        if status != "cancelled"
-    ]
+    )
     if not child_statuses:
         parent.status = _execution_derived_status(db, parent)
+        db.flush()
+        synchronize_parent_status(db, parent.parent_id)
         return
     if all(status == "completed" for status in child_statuses):
         parent.status = "completed"
     elif any(status == "running" for status in child_statuses):
         parent.status = "running"
-    elif any(status == "suspended" for status in child_statuses):
-        parent.status = "suspended"
     elif any(status == "completed" for status in child_statuses):
         # A parent with completed and not-started children has already begun;
         # reporting it as not_started would make progress move backwards.
         parent.status = "running"
     else:
         parent.status = "not_started"
+    db.flush()
+    synchronize_parent_status(db, parent.parent_id)
 
 
 def synchronize_project_status(db: Session, project_id: int) -> None:
@@ -78,11 +78,9 @@ def synchronize_project_status(db: Session, project_id: int) -> None:
         project.actual_start = None
         project.actual_end = None
         return
-    statuses = [task.status for task in tasks if task.status != "cancelled"]
+    statuses = [task.status for task in tasks]
     if any(status == "running" for status in statuses):
         project.status = "Running"
-    elif any(status == "suspended" for status in statuses):
-        project.status = "Suspended"
     elif any(status == "completed" for status in statuses):
         # Partially completed work means the project has started even when all
         # remaining tasks are still not_started.
@@ -107,7 +105,7 @@ def synchronize_project_status(db: Session, project_id: int) -> None:
 
 def synchronize_task_status(db: Session, task_id: int) -> None:
     task = db.get(Task, task_id)
-    if not task or task.is_deleted or task.status == "cancelled":
+    if not task or task.is_deleted:
         return
     has_children = bool(
         db.scalar(

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -14,7 +14,6 @@ class Project(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    project_type: Mapped[str] = mapped_column(String(50), nullable=False, default="General")
     manager_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"), index=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="Draft", index=True)
@@ -45,17 +44,18 @@ class ProjectMember(TimestampMixin, Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     project_role: Mapped[str] = mapped_column(String(50), nullable=False, default="member")
-    allocation_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=100)
     joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     left_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class ProjectHourRequest(TimestampMixin, Base):
-    __tablename__ = "project_hour_requests"
+class ProjectResourceRequest(TimestampMixin, Base):
+    __tablename__ = "project_resource_requests"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
-    requested_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    requested_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    add_member_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    remove_member_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     requested_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)

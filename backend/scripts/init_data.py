@@ -40,7 +40,7 @@ PERMISSIONS = {
 ROLES = {
     "super_admin": ("超级管理员", set(PERMISSIONS)),
     "department_manager": (
-        "L3",
+        "部门主管",
         {
             "dashboard:view", "user:view", "organization:view", "role:view", "project:view", "project:edit",
             "task:view", "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit",
@@ -50,7 +50,7 @@ ROLES = {
         },
     ),
     "functional_manager": (
-        "L4",
+        "职能主管",
         {
             "dashboard:view", "user:view", "organization:view", "project:view", "project:edit", "task:view",
             "task:edit", "schedule:view", "schedule:edit", "execution:view", "execution:edit", "process_report:view", "evaluation:edit",
@@ -70,7 +70,7 @@ ROLES = {
     "project_member": (
         "项目成员",
         {
-            "dashboard:view", "project:view", "task:view", "task:edit", "schedule:view", "execution:view",
+            "dashboard:view", "project:view", "task:view", "task:edit", "schedule:view", "schedule:edit", "execution:view",
             "execution:edit", "risk:view", "notification:view",
         },
     ),
@@ -78,8 +78,8 @@ ROLES = {
 
 ROLE_DESCRIPTIONS = {
     "super_admin": "系统最高权限角色。",
-    "department_manager": "L3 系统功能角色。",
-    "functional_manager": "L4 系统功能角色。",
+    "department_manager": "部门主管系统功能角色。",
+    "functional_manager": "职能主管系统功能角色。",
     "project_manager": "项目经理系统功能角色。",
     "project_member": "项目成员系统功能角色。",
 }

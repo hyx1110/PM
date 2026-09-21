@@ -139,7 +139,7 @@ def _collect_active_dependencies(
         .where(
             TaskAssignee.user_id == user_id,
             Task.is_deleted.is_(False),
-            Task.status.notin_({"completed", "cancelled"}),
+            Task.status != "completed",
             Project.is_deleted.is_(False),
             Project.status.notin_({"Completed", "Cancelled"}),
         )
@@ -330,7 +330,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
             ).limit(1)
         ):
             raise conflict(
-                "请先解除用户的 L3 部门负责人设置，再变更所属部门",
+                "请先解除用户的部门主管负责人设置，再变更所属部门",
                 40907,
                 {"dependencies": ["managed departments"]},
             )
@@ -348,7 +348,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
             ).limit(1)
         ):
             raise conflict(
-                "用户仍负责未结束项目，须保留项目经理、L4、L3 或超级管理员角色",
+                "用户仍负责未结束项目，须保留项目经理、职能主管、部门主管或超级管理员角色",
                 40908,
                 {"dependencies": ["active managed projects"]},
             )
@@ -356,7 +356,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
             select(Department.id).where(Department.manager_id == user.id).limit(1)
         ):
             raise conflict(
-                "用户仍是部门负责人，不能移除 L3 角色",
+                "用户仍是部门负责人，不能移除部门主管角色",
                 40909,
                 {"dependencies": ["managed departments"]},
             )

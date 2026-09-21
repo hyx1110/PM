@@ -9,7 +9,8 @@ from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
 
-ACTIVE_CONFLICT_STATUSES = {"pending", "confirmed", "changed", "running"}
+ACTIVE_CONFLICT_STATUSES = {"confirmed", "running"}
+PUBLIC_SCHEDULE_STATUSES = {"confirmed", "running", "completed"}
 
 
 class ScheduleRepository:
@@ -24,7 +25,6 @@ class ScheduleRepository:
                 User.department_id,
                 Project.name.label("project_name"),
                 Task.name.label("task_name"),
-                Task.task_type,
             )
             .join(User, User.id == ScheduleBooking.user_id)
             .join(Project, Project.id == ScheduleBooking.project_id)
@@ -33,14 +33,13 @@ class ScheduleRepository:
         ).first()
         if not row:
             return None
-        item, user_name, department_id, project_name, task_name, task_type = row
+        item, user_name, department_id, project_name, task_name = row
         data = {col.name: getattr(item, col.name) for col in ScheduleBooking.__table__.columns}
         data.update(
             user_name=user_name,
             department_id=department_id,
             project_name=project_name,
             task_name=task_name,
-            task_type=task_type,
             has_conflict=False,
         )
         return data
@@ -59,7 +58,6 @@ class ScheduleRepository:
                 User.department_id,
                 Project.name.label("project_name"),
                 Task.name.label("task_name"),
-                Task.task_type,
                 creator.name.label("created_by_name"),
             )
             .join(User, User.id == ScheduleBooking.user_id)
@@ -80,7 +78,6 @@ class ScheduleRepository:
             dept_id,
             project_name,
             task_name,
-            task_type,
             created_by_name,
         ) in rows:
             data = {
@@ -92,7 +89,6 @@ class ScheduleRepository:
                 department_id=dept_id,
                 project_name=project_name,
                 task_name=task_name,
-                task_type=task_type,
                 created_by_name=created_by_name,
                 has_conflict=False,
             )
@@ -187,6 +183,14 @@ class ScheduleRepository:
             )
         if visible_user_ids is not None:
             filters.append(ScheduleBooking.user_id.in_(visible_user_ids or {-1}))
+        if viewer_user_id is not None:
+            filters.append(
+                or_(
+                    ScheduleBooking.status.in_(PUBLIC_SCHEDULE_STATUSES),
+                    ScheduleBooking.user_id == viewer_user_id,
+                    ScheduleBooking.created_by == viewer_user_id,
+                )
+            )
         base = (
             select(ScheduleBooking)
             .join(User, User.id == ScheduleBooking.user_id)
@@ -210,7 +214,6 @@ class ScheduleRepository:
                 User.department_id,
                 Project.name.label("project_name"),
                 Task.name.label("task_name"),
-                Task.task_type,
             )
             .join(User, User.id == ScheduleBooking.user_id)
             .join(Project, Project.id == ScheduleBooking.project_id)
@@ -221,14 +224,13 @@ class ScheduleRepository:
             .limit(page_size)
         ).all()
         items = []
-        for item, user_name, dept_id, project_name, task_name, task_type in rows:
+        for item, user_name, dept_id, project_name, task_name in rows:
             data = {col.name: getattr(item, col.name) for col in ScheduleBooking.__table__.columns}
             data.update(
                 user_name=user_name,
                 department_id=dept_id,
                 project_name=project_name,
                 task_name=task_name,
-                task_type=task_type,
                 has_conflict=False,
             )
             items.append(data)

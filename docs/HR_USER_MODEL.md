@@ -34,12 +34,12 @@
 | 角色代码 | 页面名称 |
 |---|---|
 | `super_admin` | 超级管理员 |
-| `department_manager` | L3 |
-| `functional_manager` | L4 |
+| `department_manager` | 部门主管 |
+| `functional_manager` | 职能主管 |
 | `project_manager` | 项目经理 |
 | `project_member` | 项目成员 |
 
-系统角色由项目管理系统直接分配。`user_roles` 不再包含 `is_manual`、`is_hr_auto`，也不再根据人事职级自动授予 L3/L4。用户没有选择任何角色时，系统自动授予 `project_member`。
+系统角色由项目管理系统直接分配。`user_roles` 不再包含 `is_manual`、`is_hr_auto`，也不再根据人事职级自动授予主管角色。用户没有选择任何角色时，系统自动授予 `project_member`。
 
 ## 登录与删除
 

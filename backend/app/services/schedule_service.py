@@ -5,17 +5,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_role_codes
-from app.core.exceptions import BusinessException, bad_request, conflict, forbidden, not_found
+from app.core.exceptions import bad_request, conflict, forbidden, not_found
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
-from app.models.task import Task
+from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.personal_time_repository import personal_time_repository
 from app.repositories.project_repository import booked_schedule_predicate
 from app.repositories.schedule_repository import schedule_repository
 from app.schemas.schedule import (
     ScheduleBatchCreate,
-    ScheduleCopyWeek,
     ScheduleCreate,
     ScheduleDecision,
     ScheduleMove,
@@ -28,6 +27,7 @@ from app.services.schedule_lifecycle_service import synchronize_schedule_statuse
 from app.services.work_calendar_service import calculate_work_hours
 from app.utils.model import model_to_dict
 from app.services.visibility_service import visible_schedule_user_ids
+from app.utils.time import beijing_now
 
 
 def _can_manage_all_schedules(db: Session, user: User) -> bool:
@@ -35,8 +35,8 @@ def _can_manage_all_schedules(db: Session, user: User) -> bool:
 
 
 def _submission_status(project: Project, target_user_id: int, actor: User, previous_status: str | None = None) -> str:
-    """A project owner booking their own time never needs a second approval."""
-    if target_user_id == actor.id == project.manager_id:
+    """A user booking their own assigned task never approves themselves twice."""
+    if target_user_id == actor.id:
         return "confirmed"
     return "changed" if previous_status in {"confirmed", "changed"} else "pending"
 
@@ -70,8 +70,8 @@ def _validate_relations(
         raise not_found("task not found")
     if task.project_id != project_id:
         raise bad_request("task does not belong to project")
-    if task.status in {"completed", "cancelled"}:
-        raise bad_request("已完成或已取消的任务不能继续预约人力")
+    if task.status == "completed":
+        raise bad_request("已完成的任务不能继续预约人力")
     if db.scalar(
         select(Task.id).where(
             Task.parent_id == task.id,
@@ -99,6 +99,13 @@ def _validate_relations(
         )
     ):
         raise bad_request("被预约人必须是当前有效项目成员")
+    if not db.scalar(
+        select(TaskAssignee.id).where(
+            TaskAssignee.task_id == task_id,
+            TaskAssignee.user_id == user_id,
+        )
+    ):
+        raise bad_request("只能为该任务已指定的项目成员预约时间")
 
 
 def _lock_users(db: Session, user_ids: list[int]) -> None:
@@ -173,7 +180,33 @@ def _assert_project_capacity(
     if requested_hours > remaining:
         raise bad_request(
             f"项目剩余工时不足：剩余 {max(remaining, Decimal('0'))} 小时，"
-            f"本次需要 {requested_hours} 小时。请先发起追加工时申请并等待 L3 审批"
+            f"本次需要 {requested_hours} 小时。请先发起项目资源申请并等待部门主管审批"
+        )
+
+
+def _assert_task_capacity(
+    db: Session,
+    task_id: int,
+    requested_hours: Decimal,
+    exclude_id: int | None = None,
+) -> None:
+    task = db.get(Task, task_id)
+    if not task or task.is_deleted:
+        raise not_found("task not found")
+    filters = [
+        ScheduleBooking.task_id == task_id,
+        booked_schedule_predicate(),
+    ]
+    if exclude_id:
+        filters.append(ScheduleBooking.id != exclude_id)
+    used = db.scalar(
+        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(*filters)
+    ) or Decimal("0")
+    remaining = task.estimated_hours - used
+    if requested_hours > remaining:
+        raise bad_request(
+            f"任务剩余预计工时不足：剩余 {max(remaining, Decimal('0'))} 小时，"
+            f"本次需要 {requested_hours} 小时。请先调整任务预计工时"
         )
 
 
@@ -198,6 +231,58 @@ def _get_schedule_for_update(db: Session, schedule_id: int) -> ScheduleBooking |
         .where(ScheduleBooking.id == schedule_id)
         .with_for_update()
     )
+
+
+def _get_schedule_for_ordered_update(
+    db: Session,
+    schedule_id: int,
+) -> ScheduleBooking | None:
+    """Use project -> user -> booking locks for every schedule mutation."""
+    preview = schedule_repository.get(db, schedule_id)
+    if not preview:
+        return None
+    db.scalar(
+        select(Project)
+        .where(Project.id == preview.project_id)
+        .with_for_update()
+    )
+    _lock_users(db, [preview.user_id])
+    return _get_schedule_for_update(db, schedule_id)
+
+
+def _reject_competing_proposals(
+    db: Session,
+    accepted: ScheduleBooking,
+    actor_id: int,
+) -> None:
+    competing_items = list(
+        db.scalars(
+            select(ScheduleBooking)
+            .where(
+                ScheduleBooking.user_id == accepted.user_id,
+                ScheduleBooking.id != accepted.id,
+                ScheduleBooking.status.in_({"pending", "changed"}),
+                ScheduleBooking.start_time < accepted.end_time,
+                ScheduleBooking.end_time > accepted.start_time,
+            )
+            .with_for_update()
+        ).all()
+    )
+    for competing in competing_items:
+        competing.status = "rejected"
+        competing.version += 1
+        competing.rejection_reason = "该时间段的其他预约已由被预约人确认"
+        if competing.created_by != actor_id:
+            create_notification(
+                db,
+                competing.created_by,
+                "schedule_rejected_due_to_conflict",
+                "人力预约未被选中",
+                f"预约 #{competing.id} 因同一时间段的其他预约已确认而自动关闭。",
+                level="warning",
+                related_type="schedule",
+                related_id=competing.id,
+            )
 
 
 def list_schedules(db: Session, user: User, page: int, page_size: int, **filters):
@@ -245,6 +330,12 @@ def schedule_detail(db: Session, schedule_id: int, user: User) -> dict:
         and item.created_by != user.id
     ):
         raise forbidden("schedule is outside your data scope")
+    if (
+        item.status not in {"confirmed", "running", "completed"}
+        and item.user_id != user.id
+        and item.created_by != user.id
+    ):
+        raise forbidden("待确认或未成功的预约仅对申请人和被预约人可见")
     return schedule_repository.detail(db, schedule_id)
 
 
@@ -265,6 +356,7 @@ def create_schedule(db: Session, payload: ScheduleCreate, user: User) -> Schedul
     _lock_users(db, [payload.user_id])
     _raise_conflicts(db, payload.user_id, payload.start_time, payload.end_time)
     _assert_project_capacity(db, project, hours)
+    _assert_task_capacity(db, payload.task_id, hours)
     values = payload.model_dump(exclude={"planned_hours"})
     item = ScheduleBooking(
         **values,
@@ -274,6 +366,8 @@ def create_schedule(db: Session, payload: ScheduleCreate, user: User) -> Schedul
     )
     db.add(item)
     db.flush()
+    if item.status == "confirmed":
+        _reject_competing_proposals(db, item, user.id)
     _notify_assignee(
         db,
         item,
@@ -301,7 +395,7 @@ def update_schedule(
     payload: ScheduleUpdate,
     user: User,
 ) -> ScheduleBooking:
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     if item.status not in {"pending", "changed", "rejected", "confirmed"}:
@@ -337,6 +431,12 @@ def update_schedule(
         hours,
         schedule_id if project_id == item.project_id else None,
     )
+    _assert_task_capacity(
+        db,
+        task_id,
+        hours,
+        schedule_id if task_id == item.task_id else None,
+    )
     for key, value in values.items():
         setattr(item, key, value)
     item.planned_hours = hours
@@ -344,6 +444,8 @@ def update_schedule(
     item.version += 1
     item.rejection_reason = None
     db.flush()
+    if item.status == "confirmed":
+        _reject_competing_proposals(db, item, user.id)
     _notify_assignee(
         db,
         item,
@@ -368,7 +470,7 @@ def update_schedule(
 
 def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBooking:
     """Submit legacy draft rows created before v2.0; new bookings are submitted directly."""
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     if item.status not in {"draft", "rejected"}:
@@ -391,11 +493,15 @@ def submit_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBookin
     _lock_users(db, [item.user_id])
     _raise_conflicts(db, item.user_id, item.start_time, item.end_time, item.id)
     _assert_project_capacity(db, project, hours, item.id)
+    _assert_task_capacity(db, item.task_id, hours, item.id)
     before = model_to_dict(item)
     item.planned_hours = hours
     item.status = _submission_status(project, item.user_id, user)
     item.version += 1
     item.rejection_reason = None
+    db.flush()
+    if item.status == "confirmed":
+        _reject_competing_proposals(db, item, user.id)
     _notify_assignee(
         db,
         item,
@@ -428,7 +534,7 @@ def confirm_schedule(
     payload: ScheduleDecision,
     user: User,
 ) -> ScheduleBooking:
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     _assert_decision_access(db, item, user)
@@ -443,12 +549,17 @@ def confirm_schedule(
         item.end_time,
     )
     calculate_work_hours(db, item.start_time, item.end_time)
-    _lock_users(db, [item.user_id])
     _raise_conflicts(db, item.user_id, item.start_time, item.end_time, item.id)
+    project = db.get(Project, item.project_id)
+    if not project or project.is_deleted:
+        raise not_found("project not found")
+    _assert_project_capacity(db, project, item.planned_hours, item.id)
+    _assert_task_capacity(db, item.task_id, item.planned_hours, item.id)
     before = model_to_dict(item)
     item.status = "confirmed"
     item.version += 1
     item.rejection_reason = None
+    _reject_competing_proposals(db, item, user.id)
     if item.created_by != user.id:
         create_notification(
             db,
@@ -481,7 +592,7 @@ def reject_schedule(
     payload: ScheduleDecision,
     user: User,
 ) -> ScheduleBooking:
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     _assert_decision_access(db, item, user)
@@ -521,7 +632,7 @@ def reject_schedule(
 
 
 def withdraw_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBooking:
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     if item.created_by != user.id and not _can_manage_all_schedules(db, user):
@@ -556,7 +667,7 @@ def withdraw_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBook
 
 
 def delete_schedule(db: Session, schedule_id: int, user: User) -> None:
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     if item.status not in {"draft", "rejected", "cancelled", "withdrawn"}:
@@ -585,7 +696,7 @@ def move_schedule(
     payload: ScheduleMove,
     user: User,
 ) -> ScheduleBooking:
-    item = _get_schedule_for_update(db, schedule_id)
+    item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
     if item.created_by != user.id and not _can_manage_all_schedules(db, user):
@@ -614,6 +725,7 @@ def move_schedule(
     _lock_users(db, [item.user_id])
     _raise_conflicts(db, item.user_id, payload.start_time, payload.end_time, item.id)
     _assert_project_capacity(db, project, hours, item.id)
+    _assert_task_capacity(db, item.task_id, hours, item.id)
     before = model_to_dict(item)
     item.start_time = payload.start_time
     item.end_time = payload.end_time
@@ -621,6 +733,9 @@ def move_schedule(
     item.version += 1
     item.status = _submission_status(project, item.user_id, user, item.status)
     item.rejection_reason = None
+    db.flush()
+    if item.status == "confirmed":
+        _reject_competing_proposals(db, item, user.id)
     _notify_assignee(
         db,
         item,
@@ -672,7 +787,10 @@ def batch_create_schedules(
         )
     if all_conflicts:
         raise conflict("schedule conflict", 40901, {"conflicts": all_conflicts})
-    _assert_project_capacity(db, project, hours * len(payload.user_ids))
+    # Pending proposals do not reserve capacity. Each proposal must be
+    # individually feasible; confirmation performs the serialized final check.
+    _assert_project_capacity(db, project, hours)
+    _assert_task_capacity(db, payload.task_id, hours)
     items = []
     for user_id in payload.user_ids:
         item = ScheduleBooking(
@@ -688,6 +806,8 @@ def batch_create_schedules(
         )
         db.add(item)
         db.flush()
+        if item.status == "confirmed":
+            _reject_competing_proposals(db, item, user.id)
         _notify_assignee(
             db,
             item,
@@ -707,104 +827,3 @@ def batch_create_schedules(
         items.append(item)
     db.commit()
     return {"created": len(items), "schedule_ids": [item.id for item in items]}
-
-
-def copy_week(db: Session, payload: ScheduleCopyWeek, user: User) -> dict:
-    source_start = payload.source_week_start
-    source_end = source_start + timedelta(days=7)
-    delta = payload.target_week_start - source_start
-    filters = [
-        ScheduleBooking.start_time >= source_start,
-        ScheduleBooking.start_time < source_end,
-        ScheduleBooking.status.in_(payload.include_statuses),
-        ScheduleBooking.created_by == user.id,
-    ]
-    if payload.user_ids:
-        filters.append(ScheduleBooking.user_id.in_(payload.user_ids))
-    source_items = db.scalars(
-        select(ScheduleBooking).where(*filters).order_by(ScheduleBooking.start_time)
-    ).all()
-    project_ids = sorted({item.project_id for item in source_items})
-    if project_ids:
-        db.scalars(
-            select(Project)
-            .where(Project.id.in_(project_ids))
-            .order_by(Project.id)
-            .with_for_update()
-        ).all()
-    _lock_users(db, [item.user_id for item in source_items])
-    created_ids: list[int] = []
-    skipped: list[dict] = []
-    for source in source_items:
-        start_time = source.start_time + delta
-        end_time = source.end_time + delta
-        try:
-            _validate_future_schedule(start_time)
-            project = assert_project_booking_access(
-                db, source.project_id, user, [source.user_id]
-            )
-            _validate_relations(
-                db,
-                source.user_id,
-                source.project_id,
-                source.task_id,
-                start_time,
-                end_time,
-            )
-            hours = calculate_work_hours(db, start_time, end_time)
-            _assert_project_capacity(db, project, hours)
-        except BusinessException as exc:
-            skipped.append(
-                {"source_schedule_id": source.id, "reason": exc.message}
-            )
-            continue
-        conflicts = _collect_conflicts(
-            db, source.user_id, start_time, end_time
-        )
-        if conflicts:
-            skipped.append(
-                {
-                    "source_schedule_id": source.id,
-                    "reason": "conflict",
-                    "conflicts": conflicts,
-                }
-            )
-            continue
-        item = ScheduleBooking(
-            user_id=source.user_id,
-            project_id=source.project_id,
-            task_id=source.task_id,
-            start_time=start_time,
-            end_time=end_time,
-            planned_hours=hours,
-            remark=source.remark,
-            status=_submission_status(project, source.user_id, user),
-            created_by=user.id,
-            source_booking_id=source.id,
-        )
-        db.add(item)
-        db.flush()
-        _notify_assignee(
-            db,
-            item,
-            "收到复制的人力预约",
-            f"项目经理预约了你 {item.start_time:%Y-%m-%d %H:%M} 至 "
-            f"{item.end_time:%H:%M}，请由你本人确认。",
-        )
-        created_ids.append(item.id)
-        log_operation(
-            db,
-            operator_id=user.id,
-            module="schedule",
-            action="copy_week",
-            object_type="schedule_booking",
-            object_id=item.id,
-            after_data=model_to_dict(item),
-        )
-    db.commit()
-    return {
-        "source_count": len(source_items),
-        "created": len(created_ids),
-        "schedule_ids": created_ids,
-        "skipped": skipped,
-    }

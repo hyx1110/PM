@@ -97,8 +97,8 @@ const activeDepartments = computed(() =>
 function roleLabel(code: string) {
   const systemRoleNames: Record<string, string> = {
     super_admin: '超级管理员',
-    department_manager: 'L3',
-    functional_manager: 'L4',
+    department_manager: '部门主管',
+    functional_manager: '职能主管',
     project_manager: '项目经理',
     project_member: '项目成员',
   }
@@ -263,7 +263,7 @@ onMounted(async () => { await loadOptions(); await load() })
           <el-form-item :label="editingId?'重置密码（留空不修改）':'初始密码'" prop="password" :required="!editingId"><el-input v-model="form.password" type="password" show-password /></el-form-item>
           <el-form-item :label="editingId?'确认新密码':'确认初始密码'" prop="confirm_password" :required="!editingId"><el-input v-model="form.confirm_password" type="password" show-password /></el-form-item>
         </div>
-        <el-alert title="用户管理可分配 L3、L4、项目经理和项目成员；超级管理员只能在系统初始化时配置。未选择角色时默认授予项目成员。" type="info" :closable="false" show-icon />
+        <el-alert title="用户管理可分配部门主管、职能主管、项目经理和项目成员；超级管理员只能在系统初始化时配置。未选择角色时默认授予项目成员。" type="info" :closable="false" show-icon />
       </el-form>
       <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
     </el-dialog>

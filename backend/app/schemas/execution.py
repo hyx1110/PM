@@ -5,7 +5,7 @@ from pydantic import Field, model_validator
 
 from app.schemas.common import ORMModel
 
-EXECUTION_STATUSES = {"running", "completed", "paused"}
+EXECUTION_STATUSES = {"running", "completed"}
 
 
 class ExecutionCreate(ORMModel):

@@ -10,6 +10,7 @@ class ProcessReportItem(ORMModel):
     project_status: str
     level1_task: str | None
     level2_task: str | None
+    task_path: str
     task_id: int
     owner_id: int
     owner_name: str

@@ -45,7 +45,6 @@ const canCreateProject = computed(() => userStore.hasPermission('project:edit') 
 const canManageProject = (project: Project) => project.can_manage
 const emptyForm = (): ProjectPayload => ({
   name: '',
-  project_type: 'General',
   manager_id: userStore.profile?.id || 0,
   member_ids: [],
   department_id: userStore.profile?.department_id || 0,
@@ -74,7 +73,7 @@ const statusLabel: Record<string, string> = {
   Completed: '已完成',
   Cancelled: '已取消',
 }
-const approvalLabel = { draft: '草稿', pending: '待直属主管审批', approved: '已审批', rejected: '已驳回' }
+const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已审批', rejected: '已驳回' }
 const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
 const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
   Running: 'primary',
@@ -82,10 +81,11 @@ const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> 
   Suspended: 'warning',
   Cancelled: 'info',
 }
-const statusType = (status: string) => statusTypeMap[status] || ''
+const statusType = (status: string) => statusTypeMap[status] || 'info'
 const canReview = (row: Project) =>
   row.approval_status === 'pending'
-  && (privileged.value || row.approver_id === userStore.profile?.id)
+  && row.approver_id === userStore.profile?.id
+  && Boolean(userStore.profile?.roles.includes('department_manager'))
 
 interface MemberCascaderOption {
   value: string | number
@@ -199,7 +199,6 @@ function openEdit(row: Project) {
   editingProject.value = row
   Object.assign(form, {
     name: row.name,
-    project_type: row.project_type,
     manager_id: row.manager_id,
     member_ids: [],
     department_id: row.department_id,
@@ -236,8 +235,8 @@ async function save(submitAfterSave = false) {
   }
   if (submitAfterSave && saved.approval_status !== 'approved') {
     await submitProject(saved.id)
-    ElMessage.success('项目已提交直属主管审批')
-  } else ElMessage.success(saved.approval_status === 'approved' ? '项目已自动审批通过' : '项目草稿已保存')
+    ElMessage.success('项目已提交部门主管审批')
+  } else ElMessage.success(editingId.value ? '项目已保存' : '项目草稿已保存')
   dialogVisible.value = false
   await load()
 }
@@ -245,7 +244,7 @@ async function save(submitAfterSave = false) {
 async function submitExisting(row: Project) {
   await ElMessageBox.confirm(`确认提交项目“${row.name}”审批吗？`, '提交项目', { type: 'warning' })
   await submitProject(row.id)
-  ElMessage.success('项目已提交直属主管审批')
+  ElMessage.success('项目已提交部门主管审批')
   await load()
 }
 
@@ -297,13 +296,13 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">项目管理</h1>
-        <p class="page-subtitle">展示权限范围内的项目；项目负责人维护自己的项目，超级管理员与 L3 可管理全部项目。</p>
+        <p class="page-subtitle">展示权限范围内的项目；项目负责人维护自己的项目，超级管理员与部门主管可管理全部项目。</p>
       </div>
       <el-button v-if="canCreateProject" type="primary" @click="openCreate">新建项目</el-button>
     </header>
     <el-alert
       v-if="userStore.hasPermission('project:edit') && !canCreateProject"
-      title="作为成员参与的项目可以查看；项目维护由项目负责人、超级管理员或 L3 操作。"
+      title="作为成员参与的项目可以查看；项目维护由项目负责人、超级管理员或部门主管操作。"
       type="info"
       :closable="false"
       show-icon
@@ -374,7 +373,7 @@ onMounted(async () => {
     <el-dialog v-model="dialogVisible" :title="editingId?'编辑项目':'新建项目'" width="720px" destroy-on-close>
       <el-alert
         v-if="!editingId"
-        title="项目编号由系统自动生成；请指定项目成员，提交后由直属主管审批。"
+        title="项目编号由系统自动生成；请指定项目成员，所有项目提交后均由项目所属部门的部门主管审批。"
         type="info"
         :closable="false"
         show-icon
@@ -383,7 +382,6 @@ onMounted(async () => {
         <div class="form-grid">
           <el-form-item label="项目编号"><el-input model-value="保存后由系统自动生成" disabled/></el-form-item>
           <el-form-item label="项目名称" prop="name"><el-input v-model="form.name"/></el-form-item>
-          <el-form-item label="项目类型"><el-input v-model="form.project_type"/></el-form-item>
           <el-form-item label="项目经理" prop="manager_id">
             <el-select v-model="form.manager_id" filterable :disabled="Boolean(editingId) || !privileged" style="width:100%" @change="changeManager">
               <el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/>

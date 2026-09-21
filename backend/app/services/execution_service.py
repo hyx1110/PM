@@ -1,3 +1,4 @@
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -7,6 +8,7 @@ from app.core.exceptions import bad_request, forbidden, not_found
 from app.models.evaluation import TaskEvaluation
 from app.models.execution import ExecutionRecord
 from app.models.project import Project
+from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.execution_repository import execution_repository
@@ -20,7 +22,7 @@ from app.utils.time import beijing_today
 
 
 def _has_global_execution_access(db: Session, user: User) -> bool:
-    """Super administrators and L3 share the global project/task scope."""
+    """Super administrators and department managers share the global project/task scope."""
     return has_global_project_access(db, user)
 
 
@@ -90,6 +92,27 @@ def _resolve_actual_hours(
     return actual_hours
 
 
+def _assert_scheduled_before_execution(
+    db: Session,
+    task_id: int,
+    user_id: int,
+    actual_start,
+    actual_end,
+) -> None:
+    range_start = datetime.combine(actual_start, time.min)
+    range_end = datetime.combine((actual_end or actual_start) + timedelta(days=1), time.min)
+    if not db.scalar(
+        select(ScheduleBooking.id).where(
+            ScheduleBooking.task_id == task_id,
+            ScheduleBooking.user_id == user_id,
+            ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+            ScheduleBooking.start_time < range_end,
+            ScheduleBooking.end_time > range_start,
+        ).limit(1)
+    ):
+        raise bad_request("填写执行记录前，执行人必须先在任务共享看板中预约并确认该任务的工作时间")
+
+
 def list_executions(db: Session, user: User, page: int, page_size: int, mine: bool = False, **filters):
     start_date = filters.get("start_date")
     end_date = filters.get("end_date")
@@ -120,8 +143,8 @@ def execution_detail(db: Session, execution_id: int, user: User) -> dict:
 def create_execution(db: Session, payload: ExecutionCreate, user: User) -> ExecutionRecord:
     task = _lock_executable_task(db, payload.task_id)
     _assert_project_not_evaluated(db, task.project_id)
-    if task.status in {"completed", "cancelled"}:
-        raise bad_request("已完成或已取消的任务不能新增执行记录")
+    if task.status == "completed":
+        raise bad_request("已完成的任务不能新增执行记录")
     if db.scalar(
         select(Task.id).where(
             Task.parent_id == task.id,
@@ -138,6 +161,13 @@ def create_execution(db: Session, payload: ExecutionCreate, user: User) -> Execu
         raise forbidden("只能填写自己的执行记录")
     if not db.scalar(select(TaskAssignee.id).where(TaskAssignee.task_id == task.id, TaskAssignee.user_id == target_user_id)):
         raise forbidden("执行人员必须是该任务的负责人")
+    _assert_scheduled_before_execution(
+        db,
+        task.id,
+        target_user_id,
+        payload.actual_start,
+        payload.actual_end,
+    )
     # user_id and actual_hours are resolved below. Excluding both prevents
     # passing actual_hours twice when constructing ExecutionRecord.
     values = payload.model_dump(exclude={"user_id", "actual_hours"})
@@ -180,6 +210,13 @@ def update_execution(db: Session, execution_id: int, payload: ExecutionUpdate, u
         raise bad_request("invalid execution status")
     if status == "completed" and actual_end is None:
         raise bad_request("completed execution must have actual_end")
+    _assert_scheduled_before_execution(
+        db,
+        task.id,
+        record.user_id,
+        actual_start,
+        actual_end,
+    )
     supplied_hours = values.pop("actual_hours", record.actual_hours)
     for key, value in values.items():
         setattr(record, key, value)

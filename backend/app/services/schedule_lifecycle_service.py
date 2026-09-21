@@ -32,7 +32,7 @@ def synchronize_schedule_statuses(
             ),
             ScheduleBooking.task_id.in_(
                 select(Task.id).where(
-                    Task.status.notin_({"completed", "cancelled"}),
+                    Task.status != "completed",
                     Task.is_deleted.is_(False),
                 )
             ),

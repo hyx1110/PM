@@ -34,7 +34,30 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
     )
     roles = get_role_codes(db, user.id)
     global_evaluator = bool(roles & {"super_admin", "department_manager"})
+    project_ids = {item["project_id"] for item in items}
+    task_nodes = {
+        task_id: (parent_id, name)
+        for task_id, parent_id, name in db.execute(
+            select(Task.id, Task.parent_id, Task.name).where(
+                Task.project_id.in_(project_ids or {-1}),
+                Task.is_deleted.is_(False),
+            )
+        ).all()
+    }
+
+    def task_path(task_id: int) -> str:
+        names: list[str] = []
+        visited: set[int] = set()
+        cursor: int | None = task_id
+        while cursor and cursor in task_nodes and cursor not in visited:
+            visited.add(cursor)
+            parent_id, name = task_nodes[cursor]
+            names.append(name)
+            cursor = parent_id
+        return " / ".join(reversed(names))
+
     for item in items:
+        item["task_path"] = task_path(item["task_id"])
         item["task_status"] = item["status"]
         item["effective_status"] = effective_status(item.pop("status"), item["planned_end"])
         item["can_evaluate"] = (
@@ -115,7 +138,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
         select(
             func.coalesce(func.sum(case((and_(
                 Task.planned_end < today,
-                Task.status.notin_({"completed", "cancelled"}),
+                Task.status != "completed",
             ), 1), else_=0)), 0),
             func.count(Task.id),
             func.coalesce(func.sum(case((Task.status == "completed", 1), else_=0)), 0),
@@ -139,7 +162,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
         Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
         Task.project_id.in_(active_project_ids),
         Task.is_deleted.is_(False),
-        Task.status.notin_({"completed", "cancelled"}),
+        Task.status != "completed",
     ]
     my_today_tasks, my_upcoming_tasks = db.execute(
         select(

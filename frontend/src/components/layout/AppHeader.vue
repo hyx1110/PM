@@ -17,8 +17,8 @@ const profileForm = reactive({ name: '', email: '' })
 const passwordForm = reactive({ current_password: '', new_password: '', confirm_password: '' })
 const roleNames: Record<string, string> = {
   super_admin: '超级管理员',
-  department_manager: 'L3',
-  functional_manager: 'L4',
+  department_manager: '部门主管',
+  functional_manager: '职能主管',
   project_manager: '项目经理',
   project_member: '项目成员',
 }
