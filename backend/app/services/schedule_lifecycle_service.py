@@ -26,7 +26,7 @@ def synchronize_schedule_statuses(
                 select(Project.id).where(
                     Project.manager_id == ScheduleBooking.created_by,
                     Project.approval_status == "approved",
-                    Project.status.notin_({"Completed", "Cancelled"}),
+                    Project.status != "completed",
                     Project.is_deleted.is_(False),
                 )
             ),

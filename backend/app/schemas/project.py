@@ -5,7 +5,8 @@ from pydantic import Field, model_validator
 from app.schemas.common import ORMModel
 
 
-PROJECT_STATUSES = {"Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"}
+PROJECT_STATUSES = {"not_started", "running", "completed"}
+PROJECT_FILTER_STATUSES = PROJECT_STATUSES | {"delayed"}
 PROJECT_APPROVAL_STATUSES = {"draft", "pending", "approved", "rejected"}
 RESOURCE_REQUEST_STATUSES = {"pending", "approved", "rejected"}
 
@@ -45,7 +46,6 @@ class ProjectUpdate(ORMModel):
     manager_id: int | None = None
     department_id: int | None = None
     budget_hours: Decimal | None = Field(default=None, gt=0, decimal_places=2)
-    status: str | None = None
     planned_start: date | None = None
     planned_end: date | None = None
     description: str | None = None
@@ -62,6 +62,7 @@ class ProjectResponse(ProjectBase):
     department_name: str | None = None
     department_manager_id: int | None = None
     status: str
+    effective_status: str = "not_started"
     actual_start: date | None = None
     actual_end: date | None = None
     priority: str = "medium"

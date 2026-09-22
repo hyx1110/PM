@@ -137,7 +137,6 @@ def create_template(resource_type: str) -> bytes:
     if "status" in field_index:
         status_values = {
             "users": ["active", "disabled"],
-            "projects": ["Draft", "Planned", "Running", "Suspended", "Completed", "Cancelled"],
             "tasks": ["not_started", "running", "completed"],
         }[resource_type]
         _add_list_validation(book, sheet, field_index["status"], status_values)
@@ -344,7 +343,7 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
     item = Project(
         **payload.model_dump(exclude={"member_ids"}),
         code=_generate_project_code(db),
-        status="Draft",
+        status="not_started",
         approval_status="pending",
         created_by=operator.id,
         approver_id=approver.id,
@@ -374,8 +373,8 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         raise ValueError("任务只能由该项目的项目经理本人导入")
     if project.approval_status != "approved":
         raise ValueError("项目尚未通过审批，不能导入任务")
-    if project.status in {"Completed", "Cancelled"}:
-        raise ValueError("已完成或已取消的项目不能导入任务")
+    if project.status == "completed":
+        raise ValueError("已完成项目不能导入任务")
     owner_employee_nos = [
         value.strip()
         for value in re.split(r"[,，;；]", str(row.get("owner_employee_nos") or ""))

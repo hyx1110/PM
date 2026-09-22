@@ -8,6 +8,7 @@ from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
+from app.utils.time import beijing_today
 
 def booked_schedule_predicate():
     """Only accepted work consumes project capacity; proposals do not."""
@@ -57,7 +58,17 @@ class ProjectRepository:
         filters = [Project.is_deleted.is_(False)]
         if keyword:
             filters.append(or_(Project.name.like(f"%{keyword}%"), Project.code.like(f"%{keyword}%")))
-        if status:
+        if status == "delayed":
+            filters.extend([
+                Project.planned_end < beijing_today(),
+                Project.status != "completed",
+            ])
+        elif status in {"not_started", "running"}:
+            filters.extend([
+                Project.status == status,
+                Project.planned_end >= beijing_today(),
+            ])
+        elif status:
             filters.append(Project.status == status)
         if manager_id:
             filters.append(Project.manager_id == manager_id)
@@ -88,7 +99,9 @@ class ProjectRepository:
                     ProjectMember.user_id.in_(organization_people), ProjectMember.left_at.is_(None),
                 )),
             ))
-        if organization_id or employee_no or manager_name or personnel_keyword:
+        if organization_id:
+            filters.append(Project.manager_id.in_(people_filter))
+        elif employee_no or manager_name or personnel_keyword:
             filters.append(
                 or_(Project.manager_id.in_(people_filter), Project.id.in_(
                     select(ProjectMember.project_id).where(
@@ -159,6 +172,11 @@ class ProjectRepository:
             data = {col.name: getattr(project, col.name) for col in Project.__table__.columns}
             used = booked or 0
             data.update(
+                effective_status=(
+                    "delayed"
+                    if project.status != "completed" and project.planned_end < beijing_today()
+                    else project.status
+                ),
                 all_tasks_completed=bool(task_counts.get(project.id, (0, 0))[0]) and task_counts[project.id][0] == task_counts[project.id][1],
                 manager_name=manager_name,
                 manager_employee_no=manager_employee_no,

@@ -15,6 +15,7 @@ export interface Project {
   department_name?: string
   department_manager_id?: number | null
   status: string
+  effective_status: string
   planned_start: string
   planned_end: string
   actual_start?: string | null

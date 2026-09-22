@@ -138,7 +138,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
         select(Project.id).where(
             Project.manager_id == user_id,
             Project.is_deleted.is_(False),
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
         ).limit(1)
     ):
         raise conflict(

@@ -69,7 +69,7 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
         managed_project_ids = select(Project.id).where(
             Project.manager_id == user.id,
             Project.approval_status == "approved",
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
             Project.is_deleted.is_(False),
         )
         visible.update(
@@ -101,7 +101,7 @@ def dashboard_visibility_scopes(
         managed_project_ids = select(Project.id).where(
             Project.manager_id == user.id,
             Project.approval_status == "approved",
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
             Project.is_deleted.is_(False),
         )
         schedule_user_ids.update(

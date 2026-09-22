@@ -46,6 +46,7 @@ const resourceForm = reactive({
 })
 const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已通过', rejected: '已驳回' }
 const resourceStatusLabel = { pending: '待部门主管审批', approved: '已批准', rejected: '已驳回' }
+const projectStatusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', delayed: '已逾期' }
 interface MemberCascaderOption { value: string | number; label: string; children?: MemberCascaderOption[] }
 const memberCascaderProps = { multiple: true, emitPath: false }
 function organizationMemberOption(node: OrganizationNode): MemberCascaderOption | undefined {
@@ -77,12 +78,12 @@ const canManageProject = computed(() => {
   return project.value.can_manage
 })
 const canModifyProject = computed(
-  () => canManageProject.value && !['Completed', 'Cancelled'].includes(project.value?.status || ''),
+  () => canManageProject.value && project.value?.status !== 'completed',
 )
 const canRequestResources = computed(
   () =>
     project.value?.approval_status === 'approved'
-    && !['Completed', 'Cancelled'].includes(project.value?.status || '')
+    && project.value?.status !== 'completed'
     && canManageProject.value,
 )
 const canReviewResources = (item: ProjectResourceRequest) =>
@@ -189,7 +190,7 @@ onMounted(load)
       <div>
         <el-button link @click="router.push('/projects')">← 返回项目列表</el-button>
         <h1 class="page-title detail-title">{{ project?.name || '项目详情' }}</h1>
-        <p class="page-subtitle">{{ project?.code }} · {{ project?.manager_name }} · {{ project?.status }}</p>
+        <p class="page-subtitle">{{ project?.code }} · {{ project?.manager_name }} · {{ project ? (projectStatusLabel[project.effective_status] || project.effective_status) : '' }}</p>
       </div>
       <el-button v-if="canRequestResources" type="primary" @click="openResourceRequest">项目资源申请</el-button>
     </header>
@@ -214,7 +215,7 @@ onMounted(load)
         <el-tab-pane label="基本信息" name="basic">
           <el-descriptions v-if="project" :column="3" border>
             <el-descriptions-item label="项目编号">{{ project.code }}</el-descriptions-item>
-            <el-descriptions-item label="状态">{{ project.status }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ projectStatusLabel[project.effective_status] || project.effective_status }}</el-descriptions-item>
             <el-descriptions-item label="项目经理">{{ project.manager_name }}</el-descriptions-item>
             <el-descriptions-item label="所属部门">{{ project.department_name || '—' }}</el-descriptions-item>
             <el-descriptions-item label="计划周期">{{ formatDate(project.planned_start) }} 至 {{ formatDate(project.planned_end) }}</el-descriptions-item>

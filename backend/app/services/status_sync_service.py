@@ -59,7 +59,6 @@ def synchronize_project_status(db: Session, project_id: int) -> None:
         not project
         or project.is_deleted
         or project.approval_status != "approved"
-        or project.status == "Cancelled"
     ):
         return
     tasks = list(
@@ -71,22 +70,22 @@ def synchronize_project_status(db: Session, project_id: int) -> None:
         ).all()
     )
     # Completion is an explicit project-owner decision, never a task roll-up.
-    if project.status == "Completed":
+    if project.status == "completed":
         return
     if not tasks:
-        project.status = "Planned"
+        project.status = "not_started"
         project.actual_start = None
         project.actual_end = None
         return
     statuses = [task.status for task in tasks]
     if any(status == "running" for status in statuses):
-        project.status = "Running"
+        project.status = "running"
     elif any(status == "completed" for status in statuses):
         # Partially completed work means the project has started even when all
         # remaining tasks are still not_started.
-        project.status = "Running"
+        project.status = "running"
     else:
-        project.status = "Planned"
+        project.status = "not_started"
     actual_start, actual_end = db.execute(
         select(
             func.min(ExecutionRecord.actual_start),
@@ -100,7 +99,7 @@ def synchronize_project_status(db: Session, project_id: int) -> None:
         )
     ).one()
     project.actual_start = actual_start
-    project.actual_end = actual_end if project.status == "Completed" else None
+    project.actual_end = actual_end if project.status == "completed" else None
 
 
 def synchronize_task_status(db: Session, task_id: int) -> None:

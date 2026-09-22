@@ -76,7 +76,7 @@ def _detect_task_and_project_risks(
             select(Project.id).where(Project.is_deleted.is_(False))
         ),
     ]
-    project_filters = [Project.is_deleted.is_(False), Project.status.notin_({"Completed", "Cancelled"})]
+    project_filters = [Project.is_deleted.is_(False), Project.status != "completed"]
     if project_scope is not None or user_scope is not None:
         task_scope_filters = []
         if project_scope is not None:

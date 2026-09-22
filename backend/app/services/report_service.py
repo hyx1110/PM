@@ -62,7 +62,7 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
         item["effective_status"] = effective_status(item.pop("status"), item["planned_end"])
         item["can_evaluate"] = (
             (global_evaluator or item.pop("project_manager_id") == user.id)
-            and item["project_status"] == "Completed"
+            and item["project_status"] == "completed"
             and item["task_status"] == "completed"
             and item["evaluation_id"] is None
         )
@@ -126,11 +126,14 @@ def dashboard_summary(db: Session, user: User) -> dict:
     project_total, project_running, project_completed, delayed_projects = db.execute(
         select(
             func.count(Project.id),
-            func.coalesce(func.sum(case((Project.status == "Running", 1), else_=0)), 0),
-            func.coalesce(func.sum(case((Project.status == "Completed", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(
+                Project.status == "running",
+                Project.planned_end >= today,
+            ), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Project.status == "completed", 1), else_=0)), 0),
             func.coalesce(func.sum(case((and_(
                 Project.planned_end < today,
-                Project.status.notin_({"Completed", "Cancelled"}),
+                Project.status != "completed",
             ), 1), else_=0)), 0),
         ).where(*project_filters)
     ).one()

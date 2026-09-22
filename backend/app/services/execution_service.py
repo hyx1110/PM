@@ -40,8 +40,8 @@ def _lock_executable_task(db: Session, task_id: int) -> Task:
     )
     if not project:
         raise not_found("project not found")
-    if project.status in {"Completed", "Cancelled"}:
-        raise bad_request("项目已确认完成或已取消，不能再新增、修改或删除执行记录")
+    if project.status == "completed":
+        raise bad_request("项目已确认完成，不能再新增、修改或删除执行记录")
     if project.approval_status != "approved":
         raise bad_request("项目尚未通过审批，不能填报执行记录")
     task = db.scalar(

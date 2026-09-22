@@ -63,8 +63,8 @@ def _validate_relations(
         raise not_found("project not found")
     if project.approval_status != "approved":
         raise bad_request("项目尚未通过审批，不能预约人力")
-    if project.status in {"Completed", "Cancelled"}:
-        raise bad_request("已完成或已取消的项目不能预约人力")
+    if project.status == "completed":
+        raise bad_request("已完成项目不能预约人力")
     task = db.get(Task, task_id)
     if not task or task.is_deleted:
         raise not_found("task not found")

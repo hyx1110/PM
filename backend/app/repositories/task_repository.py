@@ -95,6 +95,8 @@ class TaskRepository:
             filters.append(Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == owner_id)))
         if status == "delayed":
             filters.extend([Task.planned_end < beijing_today(), Task.status != "completed"])
+        elif status in {"not_started", "running"}:
+            filters.extend([Task.status == status, Task.planned_end >= beijing_today()])
         elif status:
             filters.append(Task.status == status)
         if department_id or organization_id or employee_no or owner_name or personnel_keyword or organization_keyword:

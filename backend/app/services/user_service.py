@@ -119,7 +119,7 @@ def _collect_active_dependencies(
         .where(
             Project.manager_id == user_id,
             Project.is_deleted.is_(False),
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
         )
         .limit(1)
     ):
@@ -141,7 +141,7 @@ def _collect_active_dependencies(
             Task.is_deleted.is_(False),
             Task.status != "completed",
             Project.is_deleted.is_(False),
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
         )
         .limit(1)
     ):
@@ -156,7 +156,7 @@ def _collect_active_dependencies(
             ),
             ScheduleBooking.end_time > now,
             Project.is_deleted.is_(False),
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
         )
         .limit(1)
     ):
@@ -168,7 +168,7 @@ def _collect_active_dependencies(
             ProjectMember.user_id == user_id,
             ProjectMember.left_at.is_(None),
             Project.is_deleted.is_(False),
-            Project.status.notin_({"Completed", "Cancelled"}),
+            Project.status != "completed",
         )
         .limit(1)
     ):
@@ -315,7 +315,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
                 Project.manager_id == user.id,
                 Project.department_id != values["department_id"],
                 Project.is_deleted.is_(False),
-                Project.status.notin_({"Completed", "Cancelled"}),
+                Project.status != "completed",
             ).limit(1)
         ):
             raise conflict(
@@ -344,7 +344,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
             select(Project.id).where(
                 Project.manager_id == user.id,
                 Project.is_deleted.is_(False),
-                Project.status.notin_({"Completed", "Cancelled"}),
+                Project.status != "completed",
             ).limit(1)
         ):
             raise conflict(

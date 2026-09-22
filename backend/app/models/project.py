@@ -16,7 +16,7 @@ class Project(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     manager_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id", ondelete="SET NULL"), index=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="Draft", index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="not_started", index=True)
     planned_start: Mapped[date] = mapped_column(Date, nullable=False)
     planned_end: Mapped[date] = mapped_column(Date, nullable=False)
     actual_start: Mapped[date | None] = mapped_column(Date)

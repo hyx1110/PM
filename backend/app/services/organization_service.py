@@ -93,7 +93,7 @@ def update_department(db: Session, department_id: int, payload: DepartmentUpdate
             select(Project.id).where(
                 Project.department_id == department_id,
                 Project.is_deleted.is_(False),
-                Project.status.notin_({"Completed", "Cancelled"}),
+                Project.status != "completed",
             ).limit(1)
         ):
             dependencies.append("未结束项目")

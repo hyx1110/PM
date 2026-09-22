@@ -29,7 +29,7 @@ const total = ref(0)
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
-const organizationScope = ref('')
+const filterScope = ref('')
 const query = reactive({
   page: 1,
   page_size: 20,
@@ -71,22 +71,19 @@ const rules: FormRules = {
   planned_start: [{ required: true, message: '请选择计划开始日期' }],
   planned_end: [{ required: true, message: '请选择计划结束日期' }],
 }
-const statuses = ['Draft', 'Planned', 'Running', 'Suspended', 'Completed', 'Cancelled']
+const statuses = ['not_started', 'running', 'completed', 'delayed']
 const statusLabel: Record<string, string> = {
-  Draft: '草稿',
-  Planned: '已计划',
-  Running: '进行中',
-  Suspended: '暂停',
-  Completed: '已完成',
-  Cancelled: '已取消',
+  not_started: '未开始',
+  running: '进行中',
+  completed: '已完成',
+  delayed: '已逾期',
 }
 const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已审批', rejected: '已驳回' }
 const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
-const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'info'> = {
-  Running: 'primary',
-  Completed: 'success',
-  Suspended: 'warning',
-  Cancelled: 'info',
+const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'danger' | 'info'> = {
+  running: 'primary',
+  completed: 'success',
+  delayed: 'danger',
 }
 const statusType = (status: string) => statusTypeMap[status] || 'info'
 const canReview = (row: Project) =>
@@ -100,30 +97,58 @@ interface MemberCascaderOption {
   children?: MemberCascaderOption[]
 }
 
-const organizationScopeOptions = computed(() => {
-  const options: Array<{ value: string; label: string }> = departments.value.map((item) => ({
-    value: `department:${item.id}`,
-    label: `部门 · ${item.name}`,
-  }))
-  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
-    options.push({
-      value: `organization:${node.id}`,
-      label: `组织 · ${prefix}${node.name}`,
-    })
-    walk(node.children || [], `${prefix}${node.name} / `)
-  })
-  walk(organizations.value)
-  return options
-})
+const filterCascaderProps = { checkStrictly: true, emitPath: false }
 
-function syncOrganizationScope() {
+function managerFilterOrganizationOption(node: OrganizationNode): MemberCascaderOption | undefined {
+  if (node.status !== 'active') return undefined
+  const childOrganizations = (node.children || [])
+    .map(managerFilterOrganizationOption)
+    .filter((item): item is MemberCascaderOption => Boolean(item))
+  const managerOptions = projectManagerOptions.value
+    .filter((item) => item.organization_id === node.id)
+    .map((item) => ({
+      value: `user:${item.id}`,
+      label: `${item.name}（${item.employee_no}）`,
+    }))
+  const children = [...childOrganizations, ...managerOptions]
+  return {
+    value: `organization:${node.id}`,
+    label: node.name,
+    ...(children.length ? { children } : {}),
+  }
+}
+
+const filterCascaderOptions = computed<MemberCascaderOption[]>(() =>
+  departments.value.map((department) => {
+    const organizationChildren = organizations.value
+      .filter((node) => node.department_id === department.id)
+      .map(managerFilterOrganizationOption)
+      .filter((item): item is MemberCascaderOption => Boolean(item))
+    const unassignedManagers = projectManagerOptions.value
+      .filter((item) => item.department_id === department.id && !item.organization_id)
+      .map((item) => ({
+        value: `user:${item.id}`,
+        label: `${item.name}（${item.employee_no}）`,
+      }))
+    const children = [...organizationChildren, ...unassignedManagers]
+    return {
+      value: `department:${department.id}`,
+      label: department.name,
+      ...(children.length ? { children } : {}),
+    }
+  }),
+)
+
+function syncFilterScope() {
+  query.manager_id = undefined
   query.department_id = undefined
   query.organization_id = undefined
-  if (!organizationScope.value) return
-  const [kind, rawId] = organizationScope.value.split(':')
+  if (!filterScope.value) return
+  const [kind, rawId] = filterScope.value.split(':')
   const id = Number(rawId)
   if (kind === 'department') query.department_id = id
   if (kind === 'organization') query.organization_id = id
+  if (kind === 'user') query.manager_id = id
 }
 
 const memberCascaderProps = {
@@ -215,7 +240,7 @@ async function loadOptions() {
 }
 
 async function applyFilters() {
-  syncOrganizationScope()
+  syncFilterScope()
   query.page = 1
   await load()
 }
@@ -353,12 +378,7 @@ onMounted(async () => {
       <el-select v-model="query.status" clearable placeholder="项目状态" style="width:150px">
         <el-option v-for="item in statuses" :key="item" :label="statusLabel[item]" :value="item"/>
       </el-select>
-      <el-select v-model="organizationScope" clearable filterable placeholder="部门 / 组织" style="width:220px" @change="syncOrganizationScope">
-        <el-option v-for="item in organizationScopeOptions" :key="item.value" :label="item.label" :value="item.value"/>
-      </el-select>
-      <el-select v-model="query.manager_id" clearable filterable placeholder="项目经理（姓名 / 工号）" style="width:230px">
-        <el-option v-for="item in projectManagerOptions" :key="item.id" :label="`${item.name}（${item.employee_no}）`" :value="item.id"/>
-      </el-select>
+      <el-cascader v-model="filterScope" :options="filterCascaderOptions" :props="filterCascaderProps" clearable filterable placeholder="部门 / 组织 / 项目经理" style="width:280px" @change="syncFilterScope"/>
       <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
@@ -383,7 +403,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{row}">
-            <el-tag :type="statusType(row.status)" effect="light">{{ statusLabel[row.status] }}</el-tag>
+            <el-tag :type="statusType(row.effective_status)" effect="light">{{ statusLabel[row.effective_status] }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="计划周期" width="205">
@@ -396,13 +416,13 @@ onMounted(async () => {
             <template v-if="userStore.hasPermission('project:edit')">
               <el-button v-if="['draft','rejected'].includes(row.approval_status)&&canManageProject(row)" link type="warning" @click="submitExisting(row)">提交审批</el-button>
               <el-button
-                v-if="!['Completed','Cancelled'].includes(row.status) && row.approval_status!=='pending' && canManageProject(row)"
+                v-if="row.status!=='completed' && row.approval_status!=='pending' && canManageProject(row)"
                 link
                 type="primary"
                 @click="openEdit(row)"
               >编辑</el-button>
               <el-button v-if="['draft','rejected'].includes(row.approval_status) && canManageProject(row)" link type="danger" @click="remove(row)">删除</el-button>
-              <el-button v-if="row.all_tasks_completed && row.approval_status==='approved' && !['Completed','Cancelled'].includes(row.status) && canManageProject(row)" link type="success" @click="finish(row)">确认完成</el-button>
+              <el-button v-if="row.all_tasks_completed && row.approval_status==='approved' && row.status!=='completed' && canManageProject(row)" link type="success" @click="finish(row)">确认完成</el-button>
             </template>
           </template>
         </el-table-column>

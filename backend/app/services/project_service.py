@@ -14,7 +14,7 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.project_repository import booked_schedule_predicate, project_repository
 from app.schemas.project import (
-    PROJECT_STATUSES,
+    PROJECT_FILTER_STATUSES,
     ProjectCreate,
     ProjectDecision,
     ProjectResourceRequestCreate,
@@ -28,15 +28,7 @@ from app.utils.model import model_to_dict
 from app.utils.time import beijing_now
 
 PROJECT_CREATOR_ROLES = {"project_manager", "functional_manager", "department_manager", "super_admin"}
-PROJECT_CLOSED_STATUSES = {"Completed", "Cancelled"}
-PROJECT_STATUS_TRANSITIONS = {
-    "Draft": {"Planned", "Running", "Cancelled"},
-    "Planned": {"Running", "Suspended", "Completed", "Cancelled"},
-    "Running": {"Suspended", "Completed", "Cancelled"},
-    "Suspended": {"Running", "Completed", "Cancelled"},
-    "Completed": set(),
-    "Cancelled": set(),
-}
+PROJECT_CLOSED_STATUSES = {"completed"}
 
 
 def visible_project_ids(db: Session, user: User) -> set[int] | None:
@@ -88,7 +80,7 @@ def assert_project_approved(db: Session, project_id: int) -> Project:
     if project.approval_status != "approved":
         raise bad_request("项目尚未通过审批，不能执行该操作")
     if project.status in PROJECT_CLOSED_STATUSES:
-        raise bad_request("已完成或已取消的项目不能继续增加业务数据")
+        raise bad_request("已完成项目不能继续增加业务数据")
     return project
 
 
@@ -105,7 +97,7 @@ def assert_project_owner_for_resource_request(
     if project.approval_status != "approved":
         raise bad_request("项目尚未通过审批，不能执行该操作")
     if project.status in PROJECT_CLOSED_STATUSES:
-        raise bad_request("已完成或已取消的项目不能继续预约人力")
+        raise bad_request("已完成项目不能继续预约人力")
     if project.manager_id != user.id and not has_global_project_access(db, user):
         raise forbidden("只有该项目的项目负责人可以申请项目资源变更")
     return project
@@ -128,7 +120,7 @@ def assert_project_booking_access(
     if project.approval_status != "approved":
         raise bad_request("项目尚未通过审批，不能执行该操作")
     if project.status in PROJECT_CLOSED_STATUSES:
-        raise bad_request("已完成或已取消的项目不能继续预约人力")
+        raise bad_request("已完成项目不能继续预约人力")
 
     target_ids = set(target_user_ids)
     if not target_ids:
@@ -274,6 +266,8 @@ def list_projects(
     organization_keyword: str | None = None,
     manageable_only: bool = False,
 ):
+    if status and status not in PROJECT_FILTER_STATUSES:
+        raise bad_request("invalid project status filter")
     items, total = project_repository.list(
         db,
         page,
@@ -349,7 +343,7 @@ def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
         **values,
         code=_generate_project_code(db),
         priority="medium",
-        status="Draft",
+        status="not_started",
         approval_status="draft",
         created_by=user.id,
     )
@@ -407,7 +401,7 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
     approver = get_department_manager(db, project.department_id)
     submitter = db.get(User, project.created_by) or user
     project.approval_status = "pending"
-    project.status = "Draft"
+    project.status = "not_started"
     project.approver_id = approver.id
     create_notification(
         db,
@@ -440,7 +434,7 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
 def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: User) -> Project:
     project = assert_project_manageable(db, project_id, user)
     if project.status in PROJECT_CLOSED_STATUSES:
-        raise bad_request("已完成或已取消的项目不能再修改")
+        raise bad_request("已完成项目不能再修改")
     before = model_to_dict(project)
     values = payload.model_dump(exclude_unset=True)
     required_fields = {
@@ -448,12 +442,11 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
         "manager_id",
         "department_id",
         "budget_hours",
-        "status",
         "planned_start",
         "planned_end",
     }
     if any(values.get(key) is None for key in required_fields if key in values):
-        raise bad_request("项目名称、负责人、部门、工时、状态和计划日期不能为空")
+        raise bad_request("项目名称、负责人、部门、工时和计划日期不能为空")
     # Actual project dates are derived from execution records by status_sync_service.
     # Never let a project edit overwrite those linked values.
     if "manager_id" in values and values["manager_id"] != project.manager_id:
@@ -493,70 +486,11 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
             ).limit(1)
         ):
             raise bad_request("项目计划日期不能排除已有预约时间")
-    if values.get("status") and values["status"] not in PROJECT_STATUSES:
-        raise bad_request("invalid project status")
     if project.approval_status != "approved":
         if project.manager_id != user.id and not has_global_project_access(db, user):
             raise forbidden("未审批项目只能由项目创建人修改")
         if project.approval_status == "pending":
             raise bad_request("待审批项目不能修改，请先由部门主管审批")
-        values["status"] = "Draft"
-    elif "status" in values and values["status"] != project.status:
-        if values["status"] != "Cancelled":
-            raise bad_request("请通过确认完成入口结束项目；其他状态随任务进度汇总")
-        allowed_statuses = PROJECT_STATUS_TRANSITIONS.get(project.status, set())
-        if values["status"] not in allowed_statuses:
-            raise bad_request(
-                f"项目状态不能从 {project.status} 变更为 {values['status']}"
-            )
-        if values["status"] in PROJECT_CLOSED_STATUSES:
-            synchronize_schedule_statuses(db)
-            dependencies: list[str] = []
-            if db.scalar(
-                select(Task.id).where(
-                    Task.project_id == project.id,
-                    Task.is_deleted.is_(False),
-                    Task.status != "completed",
-                ).limit(1)
-            ):
-                dependencies.append("未结束任务")
-            if db.scalar(
-                select(ExecutionRecord.id)
-                .join(Task, Task.id == ExecutionRecord.task_id)
-                .where(
-                    Task.project_id == project.id,
-                    Task.is_deleted.is_(False),
-                    ExecutionRecord.status == "running",
-                    ExecutionRecord.is_deleted.is_(False),
-                ).limit(1)
-            ):
-                dependencies.append("未结束执行记录")
-            if db.scalar(
-                select(ScheduleBooking.id).where(
-                    ScheduleBooking.project_id == project.id,
-                    or_(
-                        ScheduleBooking.status.in_({"pending", "changed"}),
-                        (
-                            ScheduleBooking.status.in_({"confirmed", "running"})
-                            & (ScheduleBooking.end_time > beijing_now())
-                        ),
-                    ),
-                ).limit(1)
-            ):
-                dependencies.append("待确认或未结束预约")
-            if db.scalar(
-                select(ProjectResourceRequest.id).where(
-                    ProjectResourceRequest.project_id == project.id,
-                    ProjectResourceRequest.status == "pending",
-                ).limit(1)
-            ):
-                dependencies.append("待审批项目资源申请")
-            if dependencies:
-                raise conflict(
-                    f"结束项目前请先处理：{', '.join(dependencies)}",
-                    40924,
-                    {"dependencies": dependencies},
-                )
     for key, value in values.items():
         setattr(project, key, value)
     if project.approval_status == "rejected":
@@ -611,7 +545,7 @@ def decide_project(
     before = model_to_dict(project)
     project.approver_id = approver.id
     project.approval_status = "approved" if approved else "rejected"
-    project.status = "Planned" if approved else "Draft"
+    project.status = "not_started"
     project.approved_by = user.id
     project.approved_at = beijing_now()
     project.approval_note = payload.note
@@ -654,7 +588,7 @@ def complete_project(db: Session, project_id: int, user: User) -> Project:
     if not project:
         raise not_found("project not found")
     assert_project_manageable(db, project_id, user)
-    if project.status == "Completed":
+    if project.status == "completed":
         raise bad_request("项目已确认完成，请勿重复操作")
     assert_project_approved(db, project_id)
     tasks = list(db.scalars(select(Task).where(
@@ -681,7 +615,7 @@ def complete_project(db: Session, project_id: int, user: User) -> Project:
         Task.project_id == project_id, Task.is_deleted.is_(False),
         ExecutionRecord.is_deleted.is_(False),
     )).one()
-    project.status = "Completed"
+    project.status = "completed"
     project.actual_start = actual_start
     project.actual_end = actual_end or beijing_now().date()
     log_operation(db, operator_id=user.id, module="project", action="complete",
