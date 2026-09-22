@@ -183,7 +183,7 @@ class ProjectRepository:
         )
         if active_only:
             statement = statement.where(ProjectMember.left_at.is_(None))
-        rows = db.execute(statement.order_by(ProjectMember.joined_at)).all()
+        rows = db.execute(statement.order_by(User.employee_no.asc(), User.id.asc())).all()
         return [
             {**{col.name: getattr(member, col.name) for col in ProjectMember.__table__.columns}, "user_name": user_name}
             for member, user_name in rows

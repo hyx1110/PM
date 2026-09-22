@@ -34,7 +34,7 @@ class TaskRepository:
             select(TaskAssignee.task_id, User.id, User.name, User.employee_no)
             .join(User, User.id == TaskAssignee.user_id)
             .where(TaskAssignee.task_id.in_(task_ids))
-            .order_by(TaskAssignee.id)
+            .order_by(User.employee_no.asc(), User.id.asc())
         ).all()
         result: dict[int, list[dict]] = {}
         for task_id, user_id, name, employee_no in rows:

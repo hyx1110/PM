@@ -713,7 +713,7 @@ def export_schedules(db: Session, user: User, start_date: date, end_date: date, 
         .join(Project, Project.id == ScheduleBooking.project_id)
         .join(Task, Task.id == ScheduleBooking.task_id)
         .where(*filters)
-        .order_by(ScheduleBooking.start_time, User.name)
+        .order_by(ScheduleBooking.start_time, User.employee_no.asc(), User.id.asc())
     ).all()
     values = [
         [item.id, user_name, code, project_name, task_name, item.start_time, item.end_time, float(item.planned_hours), item.status, item.remark]

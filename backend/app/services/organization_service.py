@@ -173,7 +173,7 @@ def organization_tree(db: Session, department_id: int | None = None) -> list[dic
             select(User).where(
                 User.organization_id.in_(nodes.keys()),
                 User.is_deleted.is_(False),
-            ).order_by(User.name, User.employee_no)
+            ).order_by(User.employee_no.asc(), User.id.asc())
         ).all()
         for user in users:
             nodes[user.organization_id]["users"].append(

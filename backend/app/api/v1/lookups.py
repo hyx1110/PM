@@ -27,7 +27,7 @@ def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_
             User.supervisor_id,
         )
         .where(User.status == "active", User.is_deleted.is_(False))
-        .order_by(User.name)
+        .order_by(User.employee_no.asc(), User.id.asc())
     ).all()
     return success([dict(row._mapping) for row in rows])
 
@@ -80,9 +80,15 @@ def schedule_user_options(
         statement = statement.where(User.department_id == department_id)
     if organization_id:
         statement = statement.where(User.organization_id == organization_id)
-    rows = db.execute(statement.order_by(User.name)).all()
+    rows = db.execute(statement.order_by(User.employee_no.asc(), User.id.asc())).all()
     items = [dict(row._mapping) for row in rows]
-    items.sort(key=lambda item: (item["id"] != current_user.id, item["name"]))
+    items.sort(
+        key=lambda item: (
+            item["id"] != current_user.id,
+            item["employee_no"],
+            item["id"],
+        )
+    )
     return success(items)
 
 
@@ -134,7 +140,7 @@ def l3_user_options(
             User.status == "active",
             User.is_deleted.is_(False),
         )
-        .order_by(User.name)
+        .order_by(User.employee_no.asc(), User.id.asc())
     ).all()
     return success([dict(row._mapping) for row in rows])
 

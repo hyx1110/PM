@@ -97,7 +97,7 @@ class UserRepository:
             .outerjoin(Organization, Organization.id == User.organization_id)
             .outerjoin(supervisor, supervisor.id == User.supervisor_id)
             .where(*filters)
-            .order_by(User.id.desc())
+            .order_by(User.employee_no.asc(), User.id.asc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )

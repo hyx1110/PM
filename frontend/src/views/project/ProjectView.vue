@@ -7,6 +7,7 @@ import {
   createProject,
   completeProject,
   deleteProject,
+  getAllProjects,
   getProjects,
   rejectProject,
   submitProject,
@@ -23,18 +24,20 @@ import { useUserStore } from '@/stores/user'
 const userStore = useUserStore()
 const loading = ref(false)
 const projects = ref<Project[]>([])
+const projectOptions = ref<Project[]>([])
 const total = ref(0)
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
+const organizationScope = ref('')
 const query = reactive({
   page: 1,
   page_size: 20,
   keyword: '',
   status: '',
   manager_id: undefined as number | undefined,
-  organization_keyword: '',
-  personnel_keyword: '',
+  department_id: undefined as number | undefined,
+  organization_id: undefined as number | undefined,
 })
 const dialogVisible = ref(false)
 const editingId = ref<number>()
@@ -43,6 +46,10 @@ const formRef = ref<FormInstance>()
 const privileged = computed(() => (userStore.profile?.roles || []).some(role => ['super_admin', 'department_manager'].includes(role)))
 const canCreateProject = computed(() => userStore.hasPermission('project:edit') && (privileged.value || userStore.profile?.roles.includes('project_manager') || userStore.profile?.roles.includes('functional_manager')))
 const canManageProject = (project: Project) => project.can_manage
+const projectManagerOptions = computed(() => {
+  const managerIds = new Set(projectOptions.value.map((item) => item.manager_id))
+  return users.value.filter((item) => managerIds.has(item.id))
+})
 const emptyForm = (): ProjectPayload => ({
   name: '',
   manager_id: userStore.profile?.id || 0,
@@ -91,6 +98,32 @@ interface MemberCascaderOption {
   value: string | number
   label: string
   children?: MemberCascaderOption[]
+}
+
+const organizationScopeOptions = computed(() => {
+  const options: Array<{ value: string; label: string }> = departments.value.map((item) => ({
+    value: `department:${item.id}`,
+    label: `部门 · ${item.name}`,
+  }))
+  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
+    options.push({
+      value: `organization:${node.id}`,
+      label: `组织 · ${prefix}${node.name}`,
+    })
+    walk(node.children || [], `${prefix}${node.name} / `)
+  })
+  walk(organizations.value)
+  return options
+})
+
+function syncOrganizationScope() {
+  query.department_id = undefined
+  query.organization_id = undefined
+  if (!organizationScope.value) return
+  const [kind, rawId] = organizationScope.value.split(':')
+  const id = Number(rawId)
+  if (kind === 'department') query.department_id = id
+  if (kind === 'organization') query.organization_id = id
 }
 
 const memberCascaderProps = {
@@ -160,8 +193,6 @@ async function load() {
       ...query,
       keyword: query.keyword || undefined,
       status: query.status || undefined,
-      personnel_keyword: query.personnel_keyword || undefined,
-      organization_keyword: query.organization_keyword || undefined,
     })
     projects.value = result.items
     total.value = result.total
@@ -171,14 +202,22 @@ async function load() {
 }
 
 async function loadOptions() {
-  const [departmentOptions, organizationTree, userOptions] = await Promise.all([
+  const [departmentOptions, organizationTree, userOptions, allProjects] = await Promise.all([
     getDepartmentOptions(),
     getOrganizationTree(),
-    userStore.hasPermission('project:edit') ? getUserOptions() : Promise.resolve([]),
+    getUserOptions(),
+    getAllProjects(),
   ])
   departments.value = departmentOptions
   organizations.value = organizationTree
   users.value = userOptions
+  projectOptions.value = allProjects
+}
+
+async function applyFilters() {
+  syncOrganizationScope()
+  query.page = 1
+  await load()
 }
 
 function openCreate() {
@@ -308,16 +347,19 @@ onMounted(async () => {
       show-icon
     />
     <section class="surface filter-bar">
-      <el-input v-model="query.keyword" clearable placeholder="项目编号或名称" style="width:220px" @keyup.enter="query.page=1;load()"/>
+      <el-select v-model="query.keyword" clearable filterable allow-create default-first-option placeholder="项目编号或名称" style="width:240px" @keyup.enter="applyFilters">
+        <el-option v-for="item in projectOptions" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.code"/>
+      </el-select>
       <el-select v-model="query.status" clearable placeholder="项目状态" style="width:150px">
         <el-option v-for="item in statuses" :key="item" :label="statusLabel[item]" :value="item"/>
       </el-select>
-      <el-select v-if="userStore.hasPermission('project:edit')" v-model="query.manager_id" clearable filterable placeholder="项目经理" style="width:160px">
-        <el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id"/>
+      <el-select v-model="organizationScope" clearable filterable placeholder="部门 / 组织" style="width:220px" @change="syncOrganizationScope">
+        <el-option v-for="item in organizationScopeOptions" :key="item.value" :label="item.label" :value="item.value"/>
       </el-select>
-      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:190px" @keyup.enter="query.page=1;load()"/>
-      <el-input v-model="query.personnel_keyword" clearable placeholder="姓名 / 工号" style="width:180px" @keyup.enter="query.page=1;load()"/>
-      <el-button @click="query.page=1;load()">查询</el-button>
+      <el-select v-model="query.manager_id" clearable filterable placeholder="项目经理（姓名 / 工号）" style="width:230px">
+        <el-option v-for="item in projectManagerOptions" :key="item.id" :label="`${item.name}（${item.employee_no}）`" :value="item.id"/>
+      </el-select>
+      <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
       <el-table v-loading="loading" :data="projects" stripe>

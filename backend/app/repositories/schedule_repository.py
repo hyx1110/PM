@@ -219,7 +219,7 @@ class ScheduleRepository:
             .join(Project, Project.id == ScheduleBooking.project_id)
             .join(Task, Task.id == ScheduleBooking.task_id)
             .where(*filters)
-            .order_by(start_order, id_order, User.name)
+            .order_by(start_order, User.employee_no.asc(), id_order)
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()

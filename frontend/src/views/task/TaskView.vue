@@ -6,6 +6,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { createTask, deleteTask, getAllTasks, getTasks, updateTask } from '@/api/task'
 import { getAllProjects, getProjectMembers } from '@/api/project'
 import { getUserOptions } from '@/api/user'
+import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
+import type { DepartmentOption, OrganizationNode } from '@/types/organization'
 import type { Project } from '@/types/project'
 import type { Task, TaskPayload } from '@/types/task'
 import type { UserOption } from '@/types/user'
@@ -20,10 +22,16 @@ const projectTasks = ref<Task[]>([])
 const total = ref(0)
 const projects = ref<Project[]>([])
 const users = ref<UserOption[]>([])
+const departments = ref<DepartmentOption[]>([])
+const organizations = ref<OrganizationNode[]>([])
+const organizationScope = ref('')
 const projectMemberOptions = ref<UserOption[]>([])
 const query = reactive({
   page: 1, page_size: 100, project_id: undefined as number | undefined,
-  status: '', organization_keyword: '', personnel_keyword: '',
+  owner_id: undefined as number | undefined,
+  department_id: undefined as number | undefined,
+  organization_id: undefined as number | undefined,
+  status: '',
 })
 const dialogVisible = ref(false)
 const editingId = ref<number>()
@@ -83,6 +91,31 @@ const treeTasks = computed(() => {
   })
   return roots
 })
+const organizationScopeOptions = computed(() => {
+  const options: Array<{ value: string; label: string }> = departments.value.map((item) => ({
+    value: `department:${item.id}`,
+    label: `部门 · ${item.name}`,
+  }))
+  const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
+    options.push({
+      value: `organization:${node.id}`,
+      label: `组织 · ${prefix}${node.name}`,
+    })
+    walk(node.children || [], `${prefix}${node.name} / `)
+  })
+  walk(organizations.value)
+  return options
+})
+
+function syncOrganizationScope() {
+  query.department_id = undefined
+  query.organization_id = undefined
+  if (!organizationScope.value) return
+  const [kind, rawId] = organizationScope.value.split(':')
+  const id = Number(rawId)
+  if (kind === 'department') query.department_id = id
+  if (kind === 'organization') query.organization_id = id
+}
 
 async function load() {
   loading.value = true
@@ -90,8 +123,6 @@ async function load() {
     const result = await getTasks({
       ...query,
       status: query.status || undefined,
-      personnel_keyword: query.personnel_keyword || undefined,
-      organization_keyword: query.organization_keyword || undefined,
     })
     tasks.value = result.items
     total.value = result.total
@@ -99,9 +130,15 @@ async function load() {
 }
 
 async function loadOptions() {
-  [projects.value, users.value] = await Promise.all([
-    getAllProjects(), getUserOptions(),
+  [projects.value, users.value, departments.value, organizations.value] = await Promise.all([
+    getAllProjects(), getUserOptions(), getDepartmentOptions(), getOrganizationTree(),
   ])
+}
+
+async function applyFilters() {
+  syncOrganizationScope()
+  query.page = 1
+  await load()
 }
 
 async function loadOwnerOptions(projectId: number) {
@@ -197,10 +234,10 @@ onMounted(async () => { await loadOptions(); await load() })
     </header>
     <section class="surface filter-bar">
       <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:210px"><el-option v-for="item in projects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:190px" @keyup.enter="query.page=1;load()"/>
-      <el-input v-model="query.personnel_keyword" clearable placeholder="项目成员姓名 / 工号" style="width:190px" @keyup.enter="query.page=1;load()"/>
+      <el-select v-model="organizationScope" clearable filterable placeholder="部门 / 组织" style="width:220px" @change="syncOrganizationScope"><el-option v-for="item in organizationScopeOptions" :key="item.value" :label="item.label" :value="item.value"/></el-select>
+      <el-select v-model="query.owner_id" clearable filterable placeholder="项目成员（姓名 / 工号）" style="width:230px"><el-option v-for="item in users" :key="item.id" :label="`${item.name}（${item.employee_no}）`" :value="item.id"/></el-select>
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:130px"><el-option v-for="item in filterStatuses" :key="item" :label="statusLabel[item]" :value="item"/></el-select>
-      <el-button @click="query.page=1;load()">查询</el-button>
+      <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
       <el-table v-loading="loading" :data="treeTasks" row-key="id" default-expand-all>

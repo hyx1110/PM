@@ -130,7 +130,7 @@ class ReportRepository:
                 select(TaskAssignee.task_id, User.name)
                 .join(User, User.id == TaskAssignee.user_id)
                 .where(TaskAssignee.task_id.in_(task_ids))
-                .order_by(TaskAssignee.id)
+                .order_by(User.employee_no.asc(), User.id.asc())
             ).all()
             owner_names: dict[int, list[str]] = {}
             for task_id, owner_name in assignee_rows:
@@ -177,8 +177,8 @@ class ReportRepository:
             )
             .join(User, User.id == ScheduleBooking.user_id)
             .where(*filters)
-            .group_by(ScheduleBooking.user_id, User.name, booking_date)
-            .order_by(booking_date, User.name)
+            .group_by(ScheduleBooking.user_id, User.name, User.employee_no, booking_date)
+            .order_by(booking_date, User.employee_no.asc())
         ).all()
         return [dict(row._mapping) for row in rows]
 

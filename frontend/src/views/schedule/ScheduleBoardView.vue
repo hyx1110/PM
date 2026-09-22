@@ -58,11 +58,12 @@ const tasks = ref<Task[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
+const organizationScope = ref('')
 const filter = reactive({
   project_id: undefined as number | undefined,
   department_id: undefined as number | undefined,
   organization_id: undefined as number | undefined,
-  person_keyword: '',
+  user_id: undefined as number | undefined,
 })
 const bookingDialog = ref(false)
 const detailDialog = ref(false)
@@ -181,24 +182,56 @@ const timelineDayMeta = computed<Record<string, ScheduleDayMeta>>(() =>
   Object.fromEntries(days.value.map((date) => [date, scheduleDayMeta(date)])),
 )
 const visibleUsers = computed(() => {
-  const filtered = users.value.filter(
+  const currentProfile = userStore.profile
+  const current = currentProfile
+    ? users.value.find((item) => item.id === currentProfile.id) || {
+      id: currentProfile.id,
+      employee_no: currentProfile.employee_no,
+      name: currentProfile.name,
+      department_id: currentProfile.department_id,
+      organization_id: currentProfile.organization_id,
+      supervisor_id: currentProfile.supervisor_id,
+    }
+    : undefined
+  const others = users.value.filter(
     (item) =>
-      !filter.department_id || item.department_id === filter.department_id,
+      item.id !== current?.id
+      && (!filter.department_id || item.department_id === filter.department_id)
+      && (!filter.organization_id || item.organization_id === filter.organization_id)
+      && (!filter.user_id || item.id === filter.user_id),
   )
-  const current = filtered.find((item) => item.id === userStore.profile?.id)
-  return current
-    ? [current, ...filtered.filter((item) => item.id !== current.id)]
-    : filtered
+  others.sort((left, right) => left.employee_no.localeCompare(
+    right.employee_no,
+    undefined,
+    { numeric: true, sensitivity: 'base' },
+  ) || left.id - right.id)
+  return current ? [current, ...others] : others
 })
-const flatOrganizations = computed(() => {
-  const result: Array<OrganizationNode & { label: string }> = []
+const organizationScopeOptions = computed(() => {
+  const options: Array<{ value: string; label: string }> = departments.value.map((item) => ({
+    value: `department:${item.id}`,
+    label: `部门 · ${item.name}`,
+  }))
   const walk = (nodes: OrganizationNode[], prefix = '') => nodes.forEach((node) => {
-    result.push({ ...node, label: `${prefix}${node.name}` })
-    walk(node.children || [], `${prefix}　`)
+    options.push({
+      value: `organization:${node.id}`,
+      label: `组织 · ${prefix}${node.name}`,
+    })
+    walk(node.children || [], `${prefix}${node.name} / `)
   })
   walk(organizations.value)
-  return result
+  return options
 })
+
+function syncOrganizationScope() {
+  filter.department_id = undefined
+  filter.organization_id = undefined
+  if (!organizationScope.value) return
+  const [kind, rawId] = organizationScope.value.split(':')
+  const id = Number(rawId)
+  if (kind === 'department') filter.department_id = id
+  if (kind === 'organization') filter.organization_id = id
+}
 const bookableProjects = computed(() => {
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
@@ -446,7 +479,6 @@ async function loadOptions() {
     getScheduleProjectOptions(),
     getScheduleUserOptions({
       project_id: filter.project_id,
-      keyword: filter.person_keyword || undefined,
       department_id: filter.department_id,
       organization_id: filter.organization_id,
     }),
@@ -475,7 +507,11 @@ async function loadOptions() {
 }
 
 async function applyFilters() {
+  syncOrganizationScope()
   await loadOptions()
+  if (filter.user_id && !users.value.some((item) => item.id === filter.user_id)) {
+    filter.user_id = undefined
+  }
   await load()
 }
 
@@ -926,9 +962,8 @@ onMounted(async () => {
     <section class="surface board-tools">
       <div class="filters">
         <el-select v-model="filter.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in filterProjects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-        <el-select v-model="filter.department_id" clearable placeholder="部门" style="width:150px"><el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/></el-select>
-        <el-select v-model="filter.organization_id" clearable filterable placeholder="组织" style="width:170px"><el-option v-for="item in flatOrganizations" :key="item.id" :label="item.label" :value="item.id"/></el-select>
-        <el-input v-model="filter.person_keyword" clearable placeholder="姓名 / 工号" style="width:180px" @keyup.enter="applyFilters"/>
+        <el-select v-model="organizationScope" clearable filterable placeholder="部门 / 组织" style="width:220px" @change="syncOrganizationScope"><el-option v-for="item in organizationScopeOptions" :key="item.value" :label="item.label" :value="item.value"/></el-select>
+        <el-select v-model="filter.user_id" clearable filterable placeholder="人员（姓名 / 工号）" style="width:230px"><el-option v-for="item in users" :key="item.id" :label="`${item.name}（${item.employee_no}）`" :value="item.id"/></el-select>
         <el-button @click="applyFilters">查询</el-button>
       </div>
       <div class="date-nav">
