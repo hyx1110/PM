@@ -62,6 +62,7 @@ class UserRepository:
         organization_id: int | None = None,
         status: str | None = None,
         organization_keyword: str | None = None,
+        personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         supervisor = aliased(User)
         filters = [User.is_deleted.is_(False)]
@@ -85,6 +86,8 @@ class UserRepository:
                 User.department_id.in_(select(Department.id).where(Department.name.like(term))),
                 User.organization_id.in_(select(Organization.id).where(Organization.name.like(term))),
             ))
+        if personnel_scope_user_ids is not None:
+            filters.append(User.id.in_(personnel_scope_user_ids or {-1}))
         count = db.scalar(select(func.count(User.id)).where(*filters)) or 0
         statement = (
             select(

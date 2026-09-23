@@ -50,4 +50,5 @@ export interface TaskQuery extends PageQuery {
   managed_project_scope?: boolean
   personnel_keyword?: string
   organization_keyword?: string
+  personnel_scope?: string
 }

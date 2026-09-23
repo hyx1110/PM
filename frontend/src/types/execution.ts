@@ -38,4 +38,5 @@ export interface ExecutionQuery extends PageQuery {
   mine?: boolean
   personnel_keyword?: string
   organization_keyword?: string
+  personnel_scope?: string
 }

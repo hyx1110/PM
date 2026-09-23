@@ -16,6 +16,7 @@ from app.services.project_service import visible_project_ids
 from app.services.visibility_service import dashboard_visibility_scopes, visible_schedule_user_ids
 from app.services.work_calendar_service import count_workdays, is_workday
 from app.utils.time import beijing_now
+from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 
 def process_report(db: Session, user: User, page: int, page_size: int, **filters):
@@ -25,11 +26,13 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
         from app.core.exceptions import bad_request
 
         raise bad_request("结束日期不能早于开始日期")
+    personnel_scope = filters.pop("personnel_scope", None)
     items, total = report_repository.process_report(
         db,
         page,
         page_size,
         visible_project_ids=visible_project_ids(db, user),
+        personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
         **filters,
     )
     roles = get_role_codes(db, user.id)
@@ -63,7 +66,6 @@ def process_report(db: Session, user: User, page: int, page_size: int, **filters
         item["can_evaluate"] = (
             (global_evaluator or item.pop("project_manager_id") == user.id)
             and item["project_status"] == "completed"
-            and item["task_status"] == "completed"
             and item["evaluation_id"] is None
         )
     return {"items": items, "total": total, "page": page, "page_size": page_size}

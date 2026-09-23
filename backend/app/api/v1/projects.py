@@ -32,6 +32,7 @@ def list_projects(
     approver_id: int | None = None,
     personnel_keyword: str | None = None,
     organization_keyword: str | None = None,
+    personnel_scope: str | None = None,
     manageable_only: bool = False,
     current_user: User = Depends(require_permission("project:view")),
     db: Session = Depends(get_db),
@@ -53,6 +54,7 @@ def list_projects(
             approver_id,
             personnel_keyword,
             organization_keyword,
+            personnel_scope,
             manageable_only,
         )
     )
@@ -215,4 +217,3 @@ def list_members(
     db: Session = Depends(get_db),
 ):
     return success(project_service.list_members(db, project_id, current_user))
-

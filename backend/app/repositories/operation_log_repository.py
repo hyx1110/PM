@@ -18,10 +18,15 @@ class OperationLogRepository:
         module: str | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         filters = []
         if operator_id:
             filters.append(OperationLog.operator_id == operator_id)
+        if personnel_scope_user_ids is not None:
+            filters.append(
+                OperationLog.operator_id.in_(personnel_scope_user_ids or {-1})
+            )
         if module:
             filters.append(OperationLog.module == module)
         if start_date:

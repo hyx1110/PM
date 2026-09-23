@@ -41,6 +41,8 @@ import type { ScheduleDayMeta, WorkCalendarDay } from '@/types/work-calendar'
 import { formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
+import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
+import { resolvePersonnelScopeUserIds } from '@/utils/personnel-scope'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -59,12 +61,9 @@ const users = ref<UserOption[]>([])
 const projectUserIds = ref<Set<number>>()
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
-const filterScope = ref('')
+const filterScopes = ref<string[]>([])
 const filter = reactive({
   project_id: undefined as number | undefined,
-  department_id: undefined as number | undefined,
-  organization_id: undefined as number | undefined,
-  user_id: undefined as number | undefined,
 })
 const bookingDialog = ref(false)
 const detailDialog = ref(false)
@@ -198,9 +197,7 @@ const visibleUsers = computed(() => {
     (item) =>
       item.id !== current?.id
       && (!projectUserIds.value || projectUserIds.value.has(item.id))
-      && (!filter.department_id || item.department_id === filter.department_id)
-      && (!filter.organization_id || item.organization_id === filter.organization_id)
-      && (!filter.user_id || item.id === filter.user_id),
+      && (!selectedScopeUserIds.value || selectedScopeUserIds.value.has(item.id)),
   )
   others.sort((left, right) => left.employee_no.localeCompare(
     right.employee_no,
@@ -209,64 +206,9 @@ const visibleUsers = computed(() => {
   ) || left.id - right.id)
   return current ? [current, ...others] : others
 })
-interface FilterCascaderOption {
-  value: string
-  label: string
-  children?: FilterCascaderOption[]
-}
-const filterCascaderProps = { checkStrictly: true, emitPath: false }
-
-function userFilterOrganizationOption(node: OrganizationNode): FilterCascaderOption | undefined {
-  if (node.status !== 'active') return undefined
-  const childOrganizations = (node.children || [])
-    .map(userFilterOrganizationOption)
-    .filter((item): item is FilterCascaderOption => Boolean(item))
-  const userOptions = users.value
-    .filter((item) => item.organization_id === node.id)
-    .map((item) => ({
-      value: `user:${item.id}`,
-      label: `${item.name}（${item.employee_no}）`,
-    }))
-  const children = [...childOrganizations, ...userOptions]
-  return {
-    value: `organization:${node.id}`,
-    label: node.name,
-    ...(children.length ? { children } : {}),
-  }
-}
-
-const filterCascaderOptions = computed<FilterCascaderOption[]>(() =>
-  departments.value.map((department) => {
-    const organizationChildren = organizations.value
-      .filter((node) => node.department_id === department.id)
-      .map(userFilterOrganizationOption)
-      .filter((item): item is FilterCascaderOption => Boolean(item))
-    const unassignedUsers = users.value
-      .filter((item) => item.department_id === department.id && !item.organization_id)
-      .map((item) => ({
-        value: `user:${item.id}`,
-        label: `${item.name}（${item.employee_no}）`,
-      }))
-    const children = [...organizationChildren, ...unassignedUsers]
-    return {
-      value: `department:${department.id}`,
-      label: department.name,
-      ...(children.length ? { children } : {}),
-    }
-  }),
+const selectedScopeUserIds = computed(() =>
+  resolvePersonnelScopeUserIds(filterScopes.value, users.value, organizations.value),
 )
-
-function syncFilterScope() {
-  filter.user_id = undefined
-  filter.department_id = undefined
-  filter.organization_id = undefined
-  if (!filterScope.value) return
-  const [kind, rawId] = filterScope.value.split(':')
-  const id = Number(rawId)
-  if (kind === 'department') filter.department_id = id
-  if (kind === 'organization') filter.organization_id = id
-  if (kind === 'user') filter.user_id = id
-}
 const bookableProjects = computed(() => {
   const roles = userStore.profile?.roles || []
   const currentUserId = userStore.profile?.id
@@ -544,7 +486,6 @@ async function loadOptions() {
 }
 
 async function applyFilters() {
-  syncFilterScope()
   await loadOptions()
   await load()
 }
@@ -996,7 +937,7 @@ onMounted(async () => {
     <section class="surface board-tools">
       <div class="filters">
         <el-select v-model="filter.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in filterProjects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-        <el-cascader v-model="filterScope" :options="filterCascaderOptions" :props="filterCascaderProps" clearable filterable placeholder="部门 / 组织 / 人员" style="width:280px" @change="syncFilterScope"/>
+        <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 人员（可多选）" />
         <el-button @click="applyFilters">查询</el-button>
       </div>
       <div class="date-nav">

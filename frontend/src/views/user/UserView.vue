@@ -10,13 +10,15 @@ import type { Role } from '@/types/role'
 import type { User, UserOption, UserPayload } from '@/types/user'
 import { formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
 
 const userStore = useUserStore()
 const loading = ref(false)
 const users = ref<User[]>([])
 const userOptions = ref<UserOption[]>([])
 const total = ref(0)
-const query = reactive({ page: 1, page_size: 20, keyword: '', organization_keyword: '', status: '' })
+const query = reactive({ page: 1, page_size: 20, status: '' })
+const filterScopes = ref<string[]>([])
 const departments = ref<Department[]>([])
 const organizations = ref<OrganizationNode[]>([])
 const roles = ref<Role[]>([])
@@ -108,7 +110,11 @@ function roleLabel(code: string) {
 async function load() {
   loading.value = true
   try {
-    const result = await getUsers({ ...query, keyword: query.keyword || undefined, status: query.status || undefined })
+    const result = await getUsers({
+      ...query,
+      status: query.status || undefined,
+      personnel_scope: filterScopes.value.length ? filterScopes.value.join(',') : undefined,
+    })
     users.value = result.items
     total.value = result.total
   } finally { loading.value = false }
@@ -119,7 +125,7 @@ async function loadOptions() {
     getDepartments(),
     getOrganizationTree(),
     userStore.hasPermission('role:view') ? getRoles() : Promise.resolve([]),
-    getUserOptions(),
+    getUserOptions(false),
   ])
   departments.value = departmentData
   organizations.value = organizationData
@@ -228,8 +234,7 @@ onMounted(async () => { await loadOptions(); await load() })
   <div class="page-shell">
     <header class="page-header"><div><h1 class="page-title">用户管理</h1><p class="page-subtitle">员工号同时作为登录账号；用户只维护基础身份、组织关系和五类系统角色。</p></div><el-button v-if="userStore.hasPermission('user:edit')" type="primary" @click="openCreate">新增用户</el-button></header>
     <section class="surface filter-bar">
-      <el-input v-model="query.keyword" clearable placeholder="姓名、员工号或邮箱" style="width:220px" @keyup.enter="query.page=1;load()" />
-      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:220px" @keyup.enter="query.page=1;load()" />
+      <PersonnelScopeCascader v-model="filterScopes" :users="userOptions" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 用户（可多选）" />
       <el-select v-model="query.status" clearable placeholder="账号状态" style="width:140px"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>

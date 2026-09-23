@@ -14,7 +14,7 @@ class EvaluationUpsert(ORMModel):
 
 class EvaluationResponse(ORMModel):
     id: int
-    task_id: int
+    project_id: int
     evaluator_id: int
     evaluator_name: str | None = None
     achievement_rate: Decimal
@@ -23,4 +23,3 @@ class EvaluationResponse(ORMModel):
     evaluated_at: datetime
     created_at: datetime
     updated_at: datetime
-

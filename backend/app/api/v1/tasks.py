@@ -25,10 +25,11 @@ def list_tasks(
     managed_project_scope: bool = False,
     personnel_keyword: str | None = None,
     organization_keyword: str | None = None,
+    personnel_scope: str | None = None,
     current_user: User = Depends(require_permission("task:view")),
     db: Session = Depends(get_db),
 ):
-    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name, managed_project_scope, personnel_keyword, organization_keyword))
+    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name, managed_project_scope, personnel_keyword, organization_keyword, personnel_scope))
 
 
 @router.post("")

@@ -18,6 +18,7 @@ from app.services.rbac_service import (
     ensure_default_system_role,
 )
 from app.utils.model import model_to_dict
+from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 from app.utils.time import beijing_now
 
 
@@ -56,8 +57,18 @@ def _validate_relations(
         cursor = db.get(User, cursor.supervisor_id) if cursor.supervisor_id else None
 
 
-def list_users(db: Session, page: int, page_size: int, keyword: str | None, department_id: int | None, organization_id: int | None, status: str | None, organization_keyword: str | None = None):
-    items, total = user_repository.list(db, page, page_size, keyword, department_id, organization_id, status, organization_keyword)
+def list_users(db: Session, page: int, page_size: int, keyword: str | None, department_id: int | None, organization_id: int | None, status: str | None, organization_keyword: str | None = None, personnel_scope: str | None = None):
+    items, total = user_repository.list(
+        db,
+        page,
+        page_size,
+        keyword,
+        department_id,
+        organization_id,
+        status,
+        organization_keyword,
+        personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
+    )
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 

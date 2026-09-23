@@ -6,16 +6,22 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createExecution, deleteExecution, getExecutions, updateExecution } from '@/api/execution'
 import { getAllTasks } from '@/api/task'
+import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
+import { getUserOptions } from '@/api/user'
 import type { Execution, ExecutionPayload } from '@/types/execution'
+import type { DepartmentOption, OrganizationNode } from '@/types/organization'
 import type { Task } from '@/types/task'
+import type { UserOption } from '@/types/user'
 import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
+import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
 
 const userStore=useUserStore(),loading=ref(false),records=ref<Execution[]>([]),tasks=ref<Task[]>([]),total=ref(0)
+const users=ref<UserOption[]>([]),departments=ref<DepartmentOption[]>([]),organizations=ref<OrganizationNode[]>([]),filterScopes=ref<string[]>([])
 const route=useRoute()
 const hasGlobalAccess=computed(()=>Boolean(userStore.profile?.roles.some(role=>['super_admin','department_manager'].includes(role))))
-const query=reactive({page:1,page_size:20,project_id:Number(route.query.project_id)||undefined,task_id:Number(route.query.task_id)||undefined,mine:!hasGlobalAccess.value,start_date:'',end_date:'',personnel_keyword:'',organization_keyword:''})
+const query=reactive({page:1,page_size:20,project_id:Number(route.query.project_id)||undefined,task_id:Number(route.query.task_id)||undefined,mine:!hasGlobalAccess.value,start_date:'',end_date:''})
 const dialogVisible=ref(false),editingId=ref<number>(),formRef=ref<FormInstance>()
 const emptyForm=():ExecutionPayload=>({task_id:0,user_id:userStore.profile?.id,actual_start:beijingNow().format('YYYY-MM-DD'),actual_end:undefined,actual_hours:undefined,status:'running',description:'',exception_reason:''})
 const form=reactive<ExecutionPayload>(emptyForm())
@@ -23,8 +29,8 @@ const rules:FormRules={task_id:[{required:true,message:'请选择任务'}],actua
 const statuses=[{value:'running',label:'进行中'},{value:'completed',label:'已完成'}]
 const statusLabel=Object.fromEntries(statuses.map((item)=>[item.value,item.label])) as Record<string,string>
 const disableFutureDate=(value:Date)=>dayjs(value).format('YYYY-MM-DD')>beijingNow().format('YYYY-MM-DD')
-async function load(){if(query.start_date&&query.end_date&&query.end_date<query.start_date){ElMessage.warning('筛选结束日期不能早于开始日期');return}loading.value=true;try{const result=await getExecutions({...query,start_date:query.start_date||undefined,end_date:query.end_date||undefined});records.value=result.items;total.value=result.total}finally{loading.value=false}}
-async function loadOptions(){tasks.value=await getAllTasks()}
+async function load(){if(query.start_date&&query.end_date&&query.end_date<query.start_date){ElMessage.warning('筛选结束日期不能早于开始日期');return}loading.value=true;try{const result=await getExecutions({...query,start_date:query.start_date||undefined,end_date:query.end_date||undefined,personnel_scope:filterScopes.value.length?filterScopes.value.join(','):undefined});records.value=result.items;total.value=result.total}finally{loading.value=false}}
+async function loadOptions(){[tasks.value,users.value,departments.value,organizations.value]=await Promise.all([getAllTasks(),getUserOptions(),getDepartmentOptions(),getOrganizationTree()])}
 const canEditRecord=(row:Execution)=>hasGlobalAccess.value||row.user_id===userStore.profile?.id
 const summaryTaskIds=computed(()=>new Set(tasks.value.map(item=>item.parent_id).filter((id):id is number=>Boolean(id))))
 const myTasks=()=>tasks.value.filter(item=>!summaryTaskIds.value.has(item.id)&&(hasGlobalAccess.value||item.owner_ids.includes(userStore.profile?.id||-1))&&(Boolean(editingId.value)||item.status!=='completed'))
@@ -50,10 +56,9 @@ onMounted(async()=>{await loadOptions();await load()})
   <div class="page-shell">
     <header class="page-header"><div><h1 class="page-title">任务执行</h1><p class="page-subtitle">先在任务共享看板预约并确认工作时间，再按天填报执行；任务状态以最新执行记录为准。</p></div><el-button v-if="userStore.hasPermission('execution:edit')" type="primary" @click="openCreate">填写执行记录</el-button></header>
     <section class="surface filter-bar"><el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:190px" @change="query.task_id=undefined"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select><el-select v-model="query.task_id" clearable filterable placeholder="任务" style="width:190px"><el-option v-for="item in tasks.filter(t=>!query.project_id||t.project_id===query.project_id)" :key="item.id" :label="item.name" :value="item.id"/></el-select><el-date-picker v-model="query.start_date" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" style="width:140px"/><el-date-picker v-model="query.end_date" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" style="width:140px"/><el-button-group><el-button @click="setQuickRange('today')">今天</el-button><el-button @click="setQuickRange('week')">本周</el-button><el-button @click="setQuickRange('month')">本月</el-button></el-button-group><el-button type="primary" plain @click="query.page=1;load()">查询</el-button></section>
-    <section v-if="hasGlobalAccess" class="surface filter-bar">
-      <el-switch v-model="query.mine" active-text="只看本人" @change="query.page=1;load()"/>
-      <el-input v-model="query.personnel_keyword" clearable placeholder="执行人姓名 / 工号" style="width:190px" @keyup.enter="query.page=1;load()"/>
-      <el-input v-model="query.organization_keyword" clearable placeholder="部门 / 组织名称" style="width:190px" @keyup.enter="query.page=1;load()"/>
+    <section class="surface filter-bar">
+      <el-switch v-if="hasGlobalAccess" v-model="query.mine" active-text="只看本人" @change="query.page=1;load()"/>
+      <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 执行人（可多选）" />
       <el-button @click="query.page=1;load()">筛选执行人</el-button>
     </section>
     <section class="surface table-card"><el-table v-loading="loading" :data="records" stripe><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="task_name" label="任务" min-width="170"/><el-table-column prop="user_name" label="执行人" width="100"/><el-table-column label="计划日期" width="220"><template #default="{row}">{{formatDate(row.planned_start)}} 至 {{formatDate(row.planned_end)}}</template></el-table-column><el-table-column label="实际日期" width="220"><template #default="{row}">{{formatDate(row.actual_start)}} 至 {{formatDate(row.actual_end)}}</template></el-table-column><el-table-column label="工时" width="80"><template #default="{row}">{{row.actual_hours}}h</template></el-table-column><el-table-column label="状态" width="90"><template #default="{row}">{{statusLabel[row.status]||row.status}}</template></el-table-column><el-table-column prop="description" label="执行说明" min-width="160" show-overflow-tooltip/><el-table-column prop="exception_reason" label="异常原因" min-width="140" show-overflow-tooltip/><el-table-column v-if="userStore.hasPermission('execution:edit')" label="操作" fixed="right" width="125"><template #default="{row}"><template v-if="canEditRecord(row)"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></template></el-table-column></el-table><div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" layout="total, sizes, prev, pager, next" @change="load"/></div></section>

@@ -1,4 +1,4 @@
-from app.models.evaluation import TaskEvaluation
+from app.models.evaluation import ProjectEvaluation, TaskEvaluation
 from app.models.execution import ExecutionRecord
 from app.models.import_job import ImportJob
 from app.models.notification import Notification, NotificationPreference
@@ -24,6 +24,7 @@ __all__ = [
     "PersonalTimeBlock",
     "Permission",
     "Project",
+    "ProjectEvaluation",
     "ProjectResourceRequest",
     "ProjectMember",
     "RiskRecord",

@@ -32,15 +32,27 @@ const emit=defineEmits<{
 const localDraggingId=ref<number>()
 const gridWidth=computed(()=>props.days.length*props.slots.length*props.cellWidth)
 const endTick=computed(()=>dayjs(`2000-01-01 ${props.slots.at(-1)||'17:30'}`).add(30,'minute').format('HH:mm'))
-const visibleSchedules=computed(()=>props.schedules.filter(item=>item.user_id===props.userId).map(item=>{
+const visibleSchedules=computed(()=>{
+  const entries=props.schedules.filter(item=>item.user_id===props.userId).map(item=>{
   const date=dayjs(item.start_time).format('YYYY-MM-DD'),dayIndex=props.days.indexOf(date)
   if(dayIndex<0)return null
   const start=dayjs(item.start_time),end=dayjs(item.end_time)
   const slotIndex=props.slots.indexOf(start.format('HH:mm'))
   if(slotIndex<0)return null
   const durationSlots=Math.max(end.diff(start,'minute')/30,1)
-  return {item,left:(dayIndex*props.slots.length+slotIndex)*props.cellWidth,width:Math.max(durationSlots*props.cellWidth-4,18)}
-}).filter(Boolean) as Array<{item:Schedule;left:number;width:number}>)
+  const left=(dayIndex*props.slots.length+slotIndex)*props.cellWidth
+  return {item,left,width:Math.max(durationSlots*props.cellWidth-4,18),right:left+durationSlots*props.cellWidth,lane:0}
+  }).filter(Boolean) as Array<{item:Schedule;left:number;width:number;right:number;lane:number}>
+  const laneEnds:number[]=[]
+  entries.sort((left,right)=>left.left-right.left||left.item.id-right.item.id).forEach((entry)=>{
+    const availableLane=laneEnds.findIndex((end)=>end<=entry.left)
+    entry.lane=availableLane<0?laneEnds.length:availableLane
+    laneEnds[entry.lane]=entry.right
+  })
+  return entries
+})
+const scheduleLaneCount=computed(()=>Math.max(1,...visibleSchedules.value.map((entry)=>entry.lane+1)))
+const rowHeight=computed(()=>Math.max(62,18+scheduleLaneCount.value*48))
 const visiblePersonalBlocks=computed(()=>props.personalBlocks.filter(item=>item.user_id===props.userId&&item.status==='active').map(item=>{
   const date=dayjs(item.start_time).format('YYYY-MM-DD'),dayIndex=props.days.indexOf(date)
   if(dayIndex<0)return null
@@ -90,14 +102,14 @@ function dropBooking(event:DragEvent,date:string,time:string){
 </script>
 
 <template>
-  <div class="schedule-row">
+  <div class="schedule-row" :style="{minHeight:`${rowHeight}px`}">
     <button class="person-cell" title="查看该人员的全部项目时间安排" @click="emit('person',{userId,userName})">
       <span class="avatar">{{userName.slice(0,1)}}</span>
       <span class="person-info"><strong>{{userName}}</strong><small>查看全部安排 ›</small></span>
     </button>
-    <div class="timeline" :style="{width:`${gridWidth}px`,gridTemplateColumns:`repeat(${days.length*slots.length},${cellWidth}px)`}">
+    <div class="timeline" :style="{width:`${gridWidth}px`,minHeight:`${rowHeight}px`,gridTemplateColumns:`repeat(${days.length*slots.length},${cellWidth}px)`}">
       <template v-for="day in days" :key="day"><button v-for="(slot,index) in slots" :key="`${day}-${slot}`" class="slot" :class="[`slot-${slotKind(day,slot)}`,{'day-boundary':index===0,'drop-target':Boolean(localDraggingId)&&!isUnavailable(day,slot)}]" :title="slotTitle(day,slot,index)" :aria-disabled="isUnavailable(day,slot)" @click="selectSlot(day,slot)" @dragover="allowDrop($event,day,slot)" @drop="dropBooking($event,day,slot)"></button></template>
-      <button v-for="entry in visibleSchedules" :key="entry.item.id" class="booking" :class="[`status-${entry.item.status}`,{conflict:entry.item.has_conflict,dragging:localDraggingId===entry.item.id,'can-drag':canDrag(entry.item)}]" :style="{left:`${entry.left+2}px`,width:`${entry.width}px`,...projectStyle(entry.item)}" :title="canDrag(entry.item)?`${entry.item.project_name} / ${entry.item.task_name}；按住中间拖动改期`:`${entry.item.project_name} / ${entry.item.task_name}`" :draggable="canDrag(entry.item)" @dragstart="startDrag($event,entry.item)" @dragend="endDrag" @click.stop="emit('booking',entry.item)"><i v-if="canDrag(entry.item)" class="drag-handle" aria-hidden="true">⋮⋮</i><strong>{{entry.item.task_name}}</strong><span>{{dayjs(entry.item.start_time).format('HH:mm')}}–{{dayjs(entry.item.end_time).format('HH:mm')}}</span></button>
+      <button v-for="entry in visibleSchedules" :key="entry.item.id" class="booking" :class="[`status-${entry.item.status}`,{conflict:entry.item.has_conflict,dragging:localDraggingId===entry.item.id,'can-drag':canDrag(entry.item)}]" :style="{left:`${entry.left+2}px`,top:`${9+entry.lane*48}px`,width:`${entry.width}px`,...projectStyle(entry.item)}" :title="canDrag(entry.item)?`${entry.item.project_name} / ${entry.item.task_name}；按住中间拖动改期`:`${entry.item.project_name} / ${entry.item.task_name}`" :draggable="canDrag(entry.item)" @dragstart="startDrag($event,entry.item)" @dragend="endDrag" @click.stop="emit('booking',entry.item)"><i v-if="canDrag(entry.item)" class="drag-handle" aria-hidden="true">⋮⋮</i><strong>{{entry.item.task_name}}</strong><span>{{dayjs(entry.item.start_time).format('HH:mm')}}–{{dayjs(entry.item.end_time).format('HH:mm')}}</span></button>
       <button v-for="entry in visiblePersonalBlocks" :key="`personal-${entry.item.id}`" class="booking personal-block" :class="`personal-${entry.item.time_type}`" :style="{left:`${entry.left+2}px`,width:`${entry.width}px`}" :title="`个人安排：${personalTypeLabel[entry.item.time_type]}${entry.item.remark?` / ${entry.item.remark}`:''}`" @click.stop="emit('personalBlock',entry.item)"><strong>{{personalTypeLabel[entry.item.time_type]}}</strong><span>{{dayjs(entry.item.start_time).format('HH:mm')}}–{{dayjs(entry.item.end_time).format('HH:mm')}}</span></button>
     </div>
   </div>

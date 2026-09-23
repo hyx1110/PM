@@ -15,7 +15,7 @@ class TaskBase(ORMModel):
     name: str = Field(min_length=1, max_length=200)
     planned_start: date
     planned_end: date
-    estimated_hours: Decimal = Field(default=0, ge=0)
+    estimated_hours: Decimal = Field(default=Decimal("0.5"), gt=0, multiple_of=Decimal("0.5"))
     description: str | None = None
     remark: str | None = None
 
@@ -36,7 +36,7 @@ class TaskUpdate(ORMModel):
     owner_ids: list[int] | None = Field(default=None, min_length=1)
     planned_start: date | None = None
     planned_end: date | None = None
-    estimated_hours: Decimal | None = Field(default=None, ge=0)
+    estimated_hours: Decimal | None = Field(default=None, gt=0, multiple_of=Decimal("0.5"))
     description: str | None = None
     remark: str | None = None
 

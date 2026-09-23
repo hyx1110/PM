@@ -3,7 +3,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, get_permission_codes, get_role_codes
+from app.core.exceptions import forbidden
 from app.core.responses import success
 from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
@@ -16,7 +17,20 @@ router = APIRouter(prefix="/lookups", tags=["通用选项"])
 
 
 @router.get("/users")
-def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def user_options(
+    active_only: bool = True,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if (
+        not active_only
+        and "super_admin" not in get_role_codes(db, current_user.id)
+        and "user:view" not in get_permission_codes(db, current_user.id)
+    ):
+        raise forbidden("查看停用用户选项需要用户查看权限")
+    filters = [User.is_deleted.is_(False)]
+    if active_only:
+        filters.append(User.status == "active")
     rows = db.execute(
         select(
             User.id,
@@ -26,7 +40,7 @@ def user_options(_: User = Depends(get_current_user), db: Session = Depends(get_
             User.organization_id,
             User.supervisor_id,
         )
-        .where(User.status == "active", User.is_deleted.is_(False))
+        .where(*filters)
         .order_by(User.employee_no.asc(), User.id.asc())
     ).all()
     return success([dict(row._mapping) for row in rows])

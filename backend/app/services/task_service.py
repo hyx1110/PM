@@ -31,6 +31,7 @@ from app.services.status_sync_service import (
 )
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_today
+from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 def effective_status(task_status: str, planned_end: date, now: date | None = None) -> str:
     current = now or beijing_today()
@@ -70,7 +71,7 @@ def _assert_task_assignee(db: Session, task: Task, user: User) -> None:
         raise forbidden("只有任务项目成员可以编辑或删除该任务")
 
 
-def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False, personnel_keyword: str | None = None, organization_keyword: str | None = None):
+def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False, personnel_keyword: str | None = None, organization_keyword: str | None = None, personnel_scope: str | None = None):
     if status and status not in TASK_FILTER_STATUSES:
         raise bad_request("invalid task status filter")
     scope = manageable_project_ids(db, user) if managed_project_scope else visible_project_ids(db, user)
@@ -88,6 +89,7 @@ def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: i
         visible_project_ids=scope,
         personnel_keyword=personnel_keyword,
         organization_keyword=organization_keyword,
+        personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
     )
     global_access = has_global_project_access(db, user)
     for item in items:
@@ -166,20 +168,9 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
         raise bad_request("parent task must belong to the same project")
     if parent.status == "completed":
         raise bad_request("不能在已完成的任务下新增或移动子任务")
-    if current_task_id is None and db.scalar(
-        select(ExecutionRecord.id).where(
-            ExecutionRecord.task_id == parent.id,
-            ExecutionRecord.is_deleted.is_(False),
-        ).limit(1)
-    ):
-        raise bad_request("已有执行记录的任务不能再作为汇总任务，请先删除执行记录")
-    if current_task_id is None and db.scalar(
-        select(ScheduleBooking.id).where(
-            ScheduleBooking.task_id == parent.id,
-            ScheduleBooking.status.notin_({"rejected", "cancelled", "withdrawn"}),
-        ).limit(1)
-    ):
-        raise bad_request("已有有效预约记录的任务不能再作为汇总任务")
+    # A running task may gain child tasks. Existing parent execution and
+    # booking history remains attached to the parent for audit and reporting;
+    # subsequent progress is rolled up from the new child hierarchy.
     cursor = parent
     while cursor:
         if current_task_id and cursor.id == current_task_id:

@@ -90,7 +90,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | GET/PUT/DELETE | `/tasks/{id}` | `task:view/edit` | 任务项目成员查看和维护本人允许字段；项目经理可在本项目支持场景读取详情 |
 | GET/POST | `/executions` | `execution:view/edit` | 普通用户查询/新增本人记录；超管/部门主管可查看全部并为有效任务项目成员填报 |
 | GET/PUT/DELETE | `/executions/{id}` | `execution:view/edit` | 记录本人可更新或软删除，超级管理员/部门主管可全局维护 |
-| GET/PUT | `/tasks/{id}/evaluation` | `process_report:view` / `evaluation:edit` | 本项目负责人、部门主管或超管在项目已结束且任务已完成后一次性评价 |
+| GET/PUT | `/projects/{id}/evaluation` | `process_report:view` / `evaluation:edit` | 本项目负责人、部门主管或超管在项目完成后进行一次项目级评价 |
 
 项目创建必须传入 `department_id` 和大于 0 的 `budget_hours`；非全局角色的 `manager_id` 必须是当前创建人本人。项目编号不由客户端传入。所有项目统一由项目所属部门主管审批。追加工时、添加成员和移除成员统一使用项目资源申请，`requested_hours/add_member_ids/remove_member_ids` 至少一项有变化；成员不再包含投入比例。
 

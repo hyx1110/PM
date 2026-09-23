@@ -79,6 +79,7 @@ class ProjectResponse(ProjectBase):
     remaining_hours: Decimal = Decimal("0")
     can_manage: bool = False
     all_tasks_completed: bool = False
+    pending_resource_request_count: int = 0
     created_at: datetime
     updated_at: datetime
 

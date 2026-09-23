@@ -84,6 +84,7 @@ class TaskRepository:
         own_user_id: int | None = None,
         personnel_keyword: str | None = None,
         organization_keyword: str | None = None,
+        personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         filters = [
             Task.is_deleted.is_(False),
@@ -117,6 +118,14 @@ class TaskRepository:
                     User.organization_id.in_(select(Organization.id).where(Organization.name.like(f"%{organization_keyword}%"))),
                 ))
             filters.append(Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id.in_(people))))
+        if personnel_scope_user_ids is not None:
+            filters.append(
+                Task.id.in_(
+                    select(TaskAssignee.task_id).where(
+                        TaskAssignee.user_id.in_(personnel_scope_user_ids or {-1})
+                    )
+                )
+            )
         if visible_project_ids is not None:
             filters.append(Task.project_id.in_(visible_project_ids or {-1}))
         if own_user_id is not None:

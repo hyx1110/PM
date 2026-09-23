@@ -30,6 +30,7 @@ export interface ProcessReportQuery extends PageQuery {
   owner_id?: number
   personnel_keyword?: string
   organization_keyword?: string
+  personnel_scope?: string
   start_date?: string
   end_date?: string
 }

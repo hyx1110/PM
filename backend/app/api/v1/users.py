@@ -21,10 +21,11 @@ def list_users(
     organization_id: int | None = None,
     status: str | None = None,
     organization_keyword: str | None = None,
+    personnel_scope: str | None = None,
     _: User = Depends(require_permission("user:view")),
     db: Session = Depends(get_db),
 ):
-    return success(user_service.list_users(db, page, page_size, keyword, department_id, organization_id, status, organization_keyword))
+    return success(user_service.list_users(db, page, page_size, keyword, department_id, organization_id, status, organization_keyword, personnel_scope))
 
 
 @router.post("")

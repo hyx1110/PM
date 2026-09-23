@@ -22,6 +22,7 @@ def process_report(
     end_date: date | None = None,
     personnel_keyword: str | None = None,
     organization_keyword: str | None = None,
+    personnel_scope: str | None = None,
     current_user: User = Depends(require_permission("process_report:view")),
     db: Session = Depends(get_db),
 ):
@@ -37,6 +38,7 @@ def process_report(
             end_date=end_date,
             personnel_keyword=personnel_keyword,
             organization_keyword=organization_keyword,
+            personnel_scope=personnel_scope,
         )
     )
 

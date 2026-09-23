@@ -36,7 +36,7 @@ const resourceRequests = ref<ProjectResourceRequest[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
-const activeTab = ref('basic')
+const activeTab = ref(route.query.tab === 'resources' ? 'resources' : 'basic')
 const resourceDialog = ref(false)
 const resourceForm = reactive({
   requested_hours: 0,

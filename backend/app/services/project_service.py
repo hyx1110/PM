@@ -26,6 +26,7 @@ from app.services.schedule_lifecycle_service import synchronize_schedule_statuse
 from app.services.visibility_service import has_global_project_access, related_project_ids, related_user_ids
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_now
+from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 PROJECT_CREATOR_ROLES = {"project_manager", "functional_manager", "department_manager", "super_admin"}
 PROJECT_CLOSED_STATUSES = {"completed"}
@@ -264,6 +265,7 @@ def list_projects(
     approver_id: int | None = None,
     personnel_keyword: str | None = None,
     organization_keyword: str | None = None,
+    personnel_scope: str | None = None,
     manageable_only: bool = False,
 ):
     if status and status not in PROJECT_FILTER_STATUSES:
@@ -284,6 +286,7 @@ def list_projects(
         manageable_project_ids(db, user) if manageable_only else visible_project_ids(db, user),
         personnel_keyword=personnel_keyword,
         organization_keyword=organization_keyword,
+        personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
     )
     global_access = has_global_project_access(db, user)
     for item in items:

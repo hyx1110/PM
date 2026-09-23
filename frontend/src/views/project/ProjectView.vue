@@ -20,6 +20,7 @@ import type { Project, ProjectPayload } from '@/types/project'
 import type { UserOption } from '@/types/user'
 import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -29,15 +30,12 @@ const total = ref(0)
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
-const filterScope = ref('')
+const filterScopes = ref<string[]>([])
 const query = reactive({
   page: 1,
   page_size: 20,
   keyword: '',
   status: '',
-  manager_id: undefined as number | undefined,
-  department_id: undefined as number | undefined,
-  organization_id: undefined as number | undefined,
 })
 const dialogVisible = ref(false)
 const editingId = ref<number>()
@@ -50,6 +48,10 @@ const projectManagerOptions = computed(() => {
   const managerIds = new Set(projectOptions.value.map((item) => item.manager_id))
   return users.value.filter((item) => managerIds.has(item.id))
 })
+const pendingResourceRequestTotal = computed(() => projects.value.reduce(
+  (total, project) => total + Number(project.pending_resource_request_count || 0),
+  0,
+))
 const emptyForm = (): ProjectPayload => ({
   name: '',
   manager_id: userStore.profile?.id || 0,
@@ -95,60 +97,6 @@ interface MemberCascaderOption {
   value: string | number
   label: string
   children?: MemberCascaderOption[]
-}
-
-const filterCascaderProps = { checkStrictly: true, emitPath: false }
-
-function managerFilterOrganizationOption(node: OrganizationNode): MemberCascaderOption | undefined {
-  if (node.status !== 'active') return undefined
-  const childOrganizations = (node.children || [])
-    .map(managerFilterOrganizationOption)
-    .filter((item): item is MemberCascaderOption => Boolean(item))
-  const managerOptions = projectManagerOptions.value
-    .filter((item) => item.organization_id === node.id)
-    .map((item) => ({
-      value: `user:${item.id}`,
-      label: `${item.name}（${item.employee_no}）`,
-    }))
-  const children = [...childOrganizations, ...managerOptions]
-  return {
-    value: `organization:${node.id}`,
-    label: node.name,
-    ...(children.length ? { children } : {}),
-  }
-}
-
-const filterCascaderOptions = computed<MemberCascaderOption[]>(() =>
-  departments.value.map((department) => {
-    const organizationChildren = organizations.value
-      .filter((node) => node.department_id === department.id)
-      .map(managerFilterOrganizationOption)
-      .filter((item): item is MemberCascaderOption => Boolean(item))
-    const unassignedManagers = projectManagerOptions.value
-      .filter((item) => item.department_id === department.id && !item.organization_id)
-      .map((item) => ({
-        value: `user:${item.id}`,
-        label: `${item.name}（${item.employee_no}）`,
-      }))
-    const children = [...organizationChildren, ...unassignedManagers]
-    return {
-      value: `department:${department.id}`,
-      label: department.name,
-      ...(children.length ? { children } : {}),
-    }
-  }),
-)
-
-function syncFilterScope() {
-  query.manager_id = undefined
-  query.department_id = undefined
-  query.organization_id = undefined
-  if (!filterScope.value) return
-  const [kind, rawId] = filterScope.value.split(':')
-  const id = Number(rawId)
-  if (kind === 'department') query.department_id = id
-  if (kind === 'organization') query.organization_id = id
-  if (kind === 'user') query.manager_id = id
 }
 
 const memberCascaderProps = {
@@ -218,6 +166,7 @@ async function load() {
       ...query,
       keyword: query.keyword || undefined,
       status: query.status || undefined,
+      personnel_scope: filterScopes.value.length ? filterScopes.value.join(',') : undefined,
     })
     projects.value = result.items
     total.value = result.total
@@ -240,7 +189,6 @@ async function loadOptions() {
 }
 
 async function applyFilters() {
-  syncFilterScope()
   query.page = 1
   await load()
 }
@@ -371,6 +319,13 @@ onMounted(async () => {
       :closable="false"
       show-icon
     />
+    <el-alert
+      v-if="pendingResourceRequestTotal"
+      :title="`当前列表有 ${pendingResourceRequestTotal} 项待审批的项目资源申请；请在“资源申请”列查看状态，有处理权限的人员可直接点击进入。`"
+      type="warning"
+      :closable="false"
+      show-icon
+    />
     <section class="surface filter-bar">
       <el-select v-model="query.keyword" clearable filterable allow-create default-first-option placeholder="项目编号或名称" style="width:240px" @keyup.enter="applyFilters">
         <el-option v-for="item in projectOptions" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.code"/>
@@ -378,7 +333,7 @@ onMounted(async () => {
       <el-select v-model="query.status" clearable placeholder="项目状态" style="width:150px">
         <el-option v-for="item in statuses" :key="item" :label="statusLabel[item]" :value="item"/>
       </el-select>
-      <el-cascader v-model="filterScope" :options="filterCascaderOptions" :props="filterCascaderProps" clearable filterable placeholder="部门 / 组织 / 项目经理" style="width:280px" @change="syncFilterScope"/>
+      <PersonnelScopeCascader v-model="filterScopes" :users="projectManagerOptions" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 项目经理（可多选）" />
       <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
@@ -400,6 +355,15 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="项目工时" width="150">
           <template #default="{row}">{{ row.booked_hours }} / {{ row.budget_hours }}h</template>
+        </el-table-column>
+        <el-table-column label="资源申请" width="115">
+          <template #default="{row}">
+            <el-button v-if="row.pending_resource_request_count && row.can_manage" link type="warning" @click="$router.push(`/projects/${row.id}?tab=resources`)">
+              待审批 {{ row.pending_resource_request_count }} 项
+            </el-button>
+            <el-tag v-else-if="row.pending_resource_request_count" type="warning" effect="plain">处理中 {{ row.pending_resource_request_count }} 项</el-tag>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{row}">

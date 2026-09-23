@@ -22,9 +22,9 @@ const roleNames: Record<string, string> = {
   project_manager: '项目经理',
   project_member: '项目成员',
 }
-const primaryRoleName = computed(() => {
-  const role = userStore.profile?.roles?.[0]
-  return role ? roleNames[role] || role : '用户'
+const allRoleNames = computed(() => {
+  const roles = userStore.profile?.roles || []
+  return roles.length ? roles.map((role) => roleNames[role] || role).join(' / ') : '用户'
 })
 
 async function handleCommand(command: string) {
@@ -85,7 +85,7 @@ onMounted(async () => {
         <span class="avatar">{{ userStore.profile?.name?.slice(0, 1) || '用' }}</span>
         <span class="identity">
           <strong>{{ userStore.profile?.name }}</strong>
-          <small>{{ primaryRoleName }}</small>
+          <small :title="allRoleNames">{{ allRoleNames }}</small>
         </span>
         <el-icon><ArrowDown /></el-icon>
       </button>
@@ -112,7 +112,7 @@ onMounted(async () => {
 .notice-button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #e0e5ea; border-radius: 10px; background: #fff; color: #6f7d8f; cursor: pointer; }
 .user-button { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; color: #526071; cursor: pointer; }
 .avatar { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; background: #dde7f1; color: #315f8e; font-weight: 700; }
-.identity { display: flex; min-width: 80px; flex-direction: column; align-items: flex-start; }
+.identity { display: flex; min-width: 80px; max-width: 300px; flex-direction: column; align-items: flex-start; }
 .identity strong { color: #293548; font-size: 13px; font-weight: 600; }
-.identity small { color: #a0a8b5; font-size: 10px; }
+.identity small { max-width: 300px; overflow:hidden; color: #a0a8b5; font-size: 10px; text-overflow:ellipsis; white-space:nowrap; }
 </style>

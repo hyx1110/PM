@@ -33,6 +33,7 @@ export interface UserQuery extends PageQuery {
   department_id?: number
   organization_id?: number
   status?: string
+  personnel_scope?: string
 }
 
 export interface UserPayload {

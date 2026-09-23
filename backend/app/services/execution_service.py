@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import bad_request, forbidden, not_found
-from app.models.evaluation import TaskEvaluation
+from app.models.evaluation import ProjectEvaluation
 from app.models.execution import ExecutionRecord
 from app.models.project import Project
 from app.models.schedule import ScheduleBooking
@@ -19,6 +19,7 @@ from app.services.visibility_service import has_global_project_access
 from app.services.work_calendar_service import calculate_workday_hours
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_today
+from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 
 def _has_global_execution_access(db: Session, user: User) -> bool:
@@ -57,12 +58,8 @@ def _lock_executable_task(db: Session, task_id: int) -> Task:
 
 def _assert_project_not_evaluated(db: Session, project_id: int) -> None:
     if db.scalar(
-        select(TaskEvaluation.id)
-        .join(Task, Task.id == TaskEvaluation.task_id)
-        .where(
-            Task.project_id == project_id,
-            Task.is_deleted.is_(False),
-        )
+        select(ProjectEvaluation.id)
+        .where(ProjectEvaluation.project_id == project_id)
         .limit(1)
     ):
         raise bad_request("项目已进入评价阶段，不能再新增、修改或删除执行记录")
@@ -120,12 +117,14 @@ def list_executions(db: Session, user: User, page: int, page_size: int, mine: bo
         raise bad_request("结束日期不能早于开始日期")
     if mine:
         filters["user_id"] = user.id
+    personnel_scope = filters.pop("personnel_scope", None)
     items, total = execution_repository.list(
         db,
         page,
         page_size,
         visible_project_ids=None,
         own_user_id=None if _has_global_execution_access(db, user) else user.id,
+        personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
         **filters,
     )
     return {"items": items, "total": total, "page": page, "page_size": page_size}

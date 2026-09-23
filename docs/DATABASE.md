@@ -15,7 +15,8 @@ projects 1 ── n project_resource_requests
 users/projects/tasks 1 ── n schedule_bookings
 users 1 ── n personal_time_blocks
 tasks/users 1 ── n execution_records
-tasks 1 ── 1 task_evaluations
+projects 1 ── 1 project_evaluations
+tasks 1 ── 1 task_evaluations（只读历史）
 
 projects/tasks/users 1 ── n risk_records
 users 1 ── n notifications
@@ -128,6 +129,7 @@ work_calendar_days             法定节假日/调休日期覆盖
 20260921_0014  多级任务状态规范、统一项目资源申请并删除成员投入比例
       ↓
 20260922_0015  物理删除历史已取消项目并统一项目进度状态
+20260923_0016  新增项目级一次性评价表，保留历史任务评价
 ```
 
 维护者执行：

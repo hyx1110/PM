@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
-from app.models.evaluation import TaskEvaluation
+from app.models.evaluation import ProjectEvaluation
 from app.models.organization import Department, Organization
 from app.models.execution import ExecutionRecord
 from app.models.project import Project
@@ -25,6 +25,7 @@ class ReportRepository:
         visible_project_ids: set[int] | None = None,
         personnel_keyword: str | None = None,
         organization_keyword: str | None = None,
+        personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         parent = aliased(Task)
         filters = [
@@ -56,6 +57,14 @@ class ReportRepository:
         if people_filters:
             matching_people = select(User.id).where(*people_filters)
             filters.append(Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id.in_(matching_people))))
+        if personnel_scope_user_ids is not None:
+            filters.append(
+                Task.id.in_(
+                    select(TaskAssignee.task_id).where(
+                        TaskAssignee.user_id.in_(personnel_scope_user_ids or {-1})
+                    )
+                )
+            )
         if start_date:
             filters.append(Task.planned_end >= start_date)
         if end_date:
@@ -84,10 +93,10 @@ class ReportRepository:
                 actual_start.label("actual_start"),
                 actual_end.label("actual_end"),
                 actual_hours.label("actual_hours"),
-                TaskEvaluation.achievement_rate,
-                TaskEvaluation.achievement_quality,
-                TaskEvaluation.id.label("evaluation_id"),
-                TaskEvaluation.evaluated_at,
+                ProjectEvaluation.achievement_rate,
+                ProjectEvaluation.achievement_quality,
+                ProjectEvaluation.id.label("evaluation_id"),
+                ProjectEvaluation.evaluated_at,
             )
             .join(Project, Project.id == Task.project_id)
             .join(User, User.id == Task.owner_id)
@@ -97,7 +106,7 @@ class ReportRepository:
                 (ExecutionRecord.task_id == Task.id)
                 & (ExecutionRecord.is_deleted.is_(False)),
             )
-            .outerjoin(TaskEvaluation, TaskEvaluation.task_id == Task.id)
+            .outerjoin(ProjectEvaluation, ProjectEvaluation.project_id == Project.id)
             .where(*filters)
             .group_by(
                 Project.id,
@@ -114,10 +123,10 @@ class ReportRepository:
                 Task.planned_end,
                 Task.estimated_hours,
                 Task.status,
-                TaskEvaluation.achievement_rate,
-                TaskEvaluation.achievement_quality,
-                TaskEvaluation.id,
-                TaskEvaluation.evaluated_at,
+                ProjectEvaluation.achievement_rate,
+                ProjectEvaluation.achievement_quality,
+                ProjectEvaluation.id,
+                ProjectEvaluation.evaluated_at,
             )
             .order_by(Project.id, Task.parent_id, Task.id)
             .offset((page - 1) * page_size)

@@ -73,6 +73,7 @@ class ExecutionRepository:
         end_date: date | None = None,
         visible_project_ids: set[int] | None = None,
         own_user_id: int | None = None,
+        personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         filters = [
             ExecutionRecord.is_deleted.is_(False),
@@ -94,6 +95,10 @@ class ExecutionRepository:
                 User.department_id.in_(select(Department.id).where(Department.name.like(pattern))),
                 User.organization_id.in_(select(Organization.id).where(Organization.name.like(pattern))),
             ))
+        if personnel_scope_user_ids is not None:
+            filters.append(
+                ExecutionRecord.user_id.in_(personnel_scope_user_ids or {-1})
+            )
         if start_date:
             filters.append(
                 func.coalesce(

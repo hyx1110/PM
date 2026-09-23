@@ -60,6 +60,7 @@ OBJECT_LABELS = {
     "schedule": "人力预约",
     "personal_time_block": "个人时间安排",
     "task_evaluation": "任务评价",
+    "project_evaluation": "项目评价",
     "work_calendar_day": "工作日历",
     "project_member": "项目成员",
     "project_resource_request": "项目资源申请",

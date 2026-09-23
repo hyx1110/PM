@@ -4,7 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.organization import Department, Organization
-from app.models.project import Project, ProjectMember
+from app.models.project import Project, ProjectMember, ProjectResourceRequest
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
@@ -48,6 +48,7 @@ class ProjectRepository:
         visible_project_ids: set[int] | None = None,
         personnel_keyword: str | None = None,
         organization_keyword: str | None = None,
+        personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         manager = aliased(User)
         creator = aliased(User)
@@ -55,6 +56,15 @@ class ProjectRepository:
         approval_required_user = aliased(User)
         manager_organization = aliased(Organization)
         booked_hours = booked_hours_expression()
+        pending_resource_requests = (
+            select(func.count(ProjectResourceRequest.id))
+            .where(
+                ProjectResourceRequest.project_id == Project.id,
+                ProjectResourceRequest.status == "pending",
+            )
+            .correlate(Project)
+            .scalar_subquery()
+        )
         filters = [Project.is_deleted.is_(False)]
         if keyword:
             filters.append(or_(Project.name.like(f"%{keyword}%"), Project.code.like(f"%{keyword}%")))
@@ -110,6 +120,8 @@ class ProjectRepository:
                     )
                 ))
             )
+        if personnel_scope_user_ids is not None:
+            filters.append(Project.manager_id.in_(personnel_scope_user_ids or {-1}))
         if approval_status:
             filters.append(Project.approval_status == approval_status)
         if approver_id:
@@ -130,6 +142,7 @@ class ProjectRepository:
                 approver.name.label("approver_name"),
                 approval_required_user.name.label("approval_required_name"),
                 booked_hours.label("booked_hours"),
+                pending_resource_requests.label("pending_resource_request_count"),
             )
             .join(manager, manager.id == Project.manager_id)
             .outerjoin(manager_organization, manager_organization.id == manager.organization_id)
@@ -168,6 +181,7 @@ class ProjectRepository:
             approver_name,
             approval_required_name,
             booked,
+            pending_resource_request_count,
         ) in rows:
             data = {col.name: getattr(project, col.name) for col in Project.__table__.columns}
             used = booked or 0
@@ -189,6 +203,7 @@ class ProjectRepository:
                 approval_required_name=approval_required_name,
                 booked_hours=used,
                 remaining_hours=max(project.budget_hours - used, 0),
+                pending_resource_request_count=pending_resource_request_count or 0,
             )
             items.append(data)
         return items, total

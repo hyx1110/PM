@@ -3,6 +3,7 @@ import type { PageQuery } from './common'
 export interface OperationLog {
   id: number
   operator_id?: number
+  personnel_scope?: string
   operator_name?: string
   change_summary: string
   module: string

@@ -13,6 +13,7 @@ import type { Task, TaskPayload } from '@/types/task'
 import type { UserOption } from '@/types/user'
 import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -24,13 +25,10 @@ const projects = ref<Project[]>([])
 const users = ref<UserOption[]>([])
 const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
-const filterScope = ref('')
+const filterScopes = ref<string[]>([])
 const projectMemberOptions = ref<UserOption[]>([])
 const query = reactive({
   page: 1, page_size: 100, project_id: undefined as number | undefined,
-  owner_id: undefined as number | undefined,
-  department_id: undefined as number | undefined,
-  organization_id: undefined as number | undefined,
   status: '',
 })
 const dialogVisible = ref(false)
@@ -39,7 +37,7 @@ const editingProjectName = ref('')
 const formRef = ref<FormInstance>()
 const emptyForm = (): TaskPayload => ({
   project_id: 0, parent_id: undefined, name: '', owner_ids: [],
-  planned_start: '', planned_end: '', estimated_hours: 0,
+  planned_start: '', planned_end: '', estimated_hours: 0.5,
   description: '', remark: '',
 })
 const form = reactive<TaskPayload>(emptyForm())
@@ -49,6 +47,7 @@ const rules: FormRules = {
   owner_ids: [{ required: true, type: 'array', min: 1, message: '请至少选择一名项目成员' }],
   planned_start: [{ required: true, message: '请选择计划开始日期' }],
   planned_end: [{ required: true, message: '请选择计划结束日期' }],
+  estimated_hours: [{ required: true, message: '请输入任务计划工时' }],
 }
 const filterStatuses = ['not_started', 'running', 'completed', 'delayed']
 const statusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', delayed: '已逾期' }
@@ -58,6 +57,9 @@ const canExecuteTask = (task: Task) => task.owner_ids.includes(userStore.profile
 const manageableProjects = computed(() => projects.value.filter(canManageProject))
 const approvedProjects = computed(() => manageableProjects.value.filter((item) => item.approval_status === 'approved' && item.status !== 'completed'))
 const selectedProject = computed(() => projects.value.find((item) => item.id === form.project_id))
+const allocatedProjectHours = computed(() => projectTasks.value
+  .filter((item) => item.project_id === form.project_id && !item.parent_id && item.id !== editingId.value)
+  .reduce((total, item) => total + Number(item.estimated_hours), 0))
 const selectedParent = computed(() => projectTasks.value.find((item) => item.id === form.parent_id))
 const descendantIds = computed(() => {
   const ids = new Set<number>()
@@ -72,8 +74,7 @@ const parentOptions = computed(() => projectTasks.value.filter(
   (item) =>
     item.id !== editingId.value
     && !descendantIds.value.has(item.id)
-    && item.status === 'not_started'
-    && Number(item.booked_hours) === 0,
+    && item.status !== 'completed',
 ))
 const ownerOptions = computed(() => {
   if (!selectedParent.value) return projectMemberOptions.value
@@ -91,71 +92,13 @@ const treeTasks = computed(() => {
   })
   return roots
 })
-interface FilterCascaderOption {
-  value: string
-  label: string
-  children?: FilterCascaderOption[]
-}
-const filterCascaderProps = { checkStrictly: true, emitPath: false }
-
-function userFilterOrganizationOption(node: OrganizationNode): FilterCascaderOption | undefined {
-  if (node.status !== 'active') return undefined
-  const childOrganizations = (node.children || [])
-    .map(userFilterOrganizationOption)
-    .filter((item): item is FilterCascaderOption => Boolean(item))
-  const userOptions = users.value
-    .filter((item) => item.organization_id === node.id)
-    .map((item) => ({
-      value: `user:${item.id}`,
-      label: `${item.name}（${item.employee_no}）`,
-    }))
-  const children = [...childOrganizations, ...userOptions]
-  return {
-    value: `organization:${node.id}`,
-    label: node.name,
-    ...(children.length ? { children } : {}),
-  }
-}
-
-const filterCascaderOptions = computed<FilterCascaderOption[]>(() =>
-  departments.value.map((department) => {
-    const organizationChildren = organizations.value
-      .filter((node) => node.department_id === department.id)
-      .map(userFilterOrganizationOption)
-      .filter((item): item is FilterCascaderOption => Boolean(item))
-    const unassignedUsers = users.value
-      .filter((item) => item.department_id === department.id && !item.organization_id)
-      .map((item) => ({
-        value: `user:${item.id}`,
-        label: `${item.name}（${item.employee_no}）`,
-      }))
-    const children = [...organizationChildren, ...unassignedUsers]
-    return {
-      value: `department:${department.id}`,
-      label: department.name,
-      ...(children.length ? { children } : {}),
-    }
-  }),
-)
-
-function syncFilterScope() {
-  query.owner_id = undefined
-  query.department_id = undefined
-  query.organization_id = undefined
-  if (!filterScope.value) return
-  const [kind, rawId] = filterScope.value.split(':')
-  const id = Number(rawId)
-  if (kind === 'department') query.department_id = id
-  if (kind === 'organization') query.organization_id = id
-  if (kind === 'user') query.owner_id = id
-}
-
 async function load() {
   loading.value = true
   try {
     const result = await getTasks({
       ...query,
       status: query.status || undefined,
+      personnel_scope: filterScopes.value.length ? filterScopes.value.join(',') : undefined,
     })
     tasks.value = result.items
     total.value = result.total
@@ -169,7 +112,6 @@ async function loadOptions() {
 }
 
 async function applyFilters() {
-  syncFilterScope()
   query.page = 1
   await load()
 }
@@ -267,7 +209,7 @@ onMounted(async () => { await loadOptions(); await load() })
     </header>
     <section class="surface filter-bar">
       <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:210px"><el-option v-for="item in projects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-      <el-cascader v-model="filterScope" :options="filterCascaderOptions" :props="filterCascaderProps" clearable filterable placeholder="部门 / 组织 / 项目成员" style="width:280px" @change="syncFilterScope"/>
+      <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 项目成员（可多选）" />
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:130px"><el-option v-for="item in filterStatuses" :key="item" :label="statusLabel[item]" :value="item"/></el-select>
       <el-button @click="applyFilters">查询</el-button>
     </section>
@@ -279,7 +221,7 @@ onMounted(async () => { await loadOptions(); await load() })
         <el-table-column label="计划日期" width="220"><template #default="{row}">{{formatDate(row.planned_start)}} 至 {{formatDate(row.planned_end)}}</template></el-table-column>
         <el-table-column label="预计工时" width="95"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
         <el-table-column label="状态" width="95"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></template></el-table-column>
-        <el-table-column label="操作" fixed="right" width="265"><template #default="{row}"><el-button v-if="row.status==='not_started'&&Number(row.booked_hours)===0&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.children?.length" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
+        <el-table-column label="操作" fixed="right" width="265"><template #default="{row}"><el-button v-if="row.status!=='completed'&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.children?.length" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[50,100,200]" layout="total, sizes, prev, pager, next" @change="load"/></div>
     </section>
@@ -288,12 +230,12 @@ onMounted(async () => { await loadOptions(); await load() })
         <div class="form-grid">
           <el-form-item label="所属项目" prop="project_id"><el-input v-if="editingId" :model-value="editingProjectName" disabled/><el-select v-else v-model="form.project_id" filterable style="width:100%" @change="changeProject"><el-option v-for="item in approvedProjects" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="父任务"><el-select v-model="form.parent_id" clearable style="width:100%" @change="changeParent"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
-          <el-alert v-if="selectedProject" class="project-window" type="info" :closable="false" show-icon :title="`项目计划周期：${formatDate(selectedProject.planned_start)} 至 ${formatDate(selectedProject.planned_end)}`"/>
+          <el-alert v-if="selectedProject" class="project-window" type="info" :closable="false" show-icon :title="`项目周期：${formatDate(selectedProject.planned_start)} 至 ${formatDate(selectedProject.planned_end)}；项目总工时：${selectedProject.budget_hours}h；顶级任务已分配：${allocatedProjectHours}h`"/>
           <el-form-item label="任务名称" prop="name"><el-input v-model="form.name"/></el-form-item>
           <el-form-item label="项目成员" prop="owner_ids"><el-select v-model="form.owner_ids" multiple filterable collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in ownerOptions" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
           <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
-          <el-form-item label="预计工时"><el-input-number v-model="form.estimated_hours" :min="0" :precision="1" style="width:100%"/></el-form-item>
+          <el-form-item label="任务计划工时（0.5h 递增）" prop="estimated_hours"><el-input-number v-model="form.estimated_hours" :min="0.5" :step="0.5" step-strictly :precision="1" style="width:100%"/></el-form-item>
         </div>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2"/></el-form-item>

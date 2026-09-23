@@ -37,6 +37,7 @@ export interface Project {
   approval_note?: string | null
   can_manage: boolean
   all_tasks_completed: boolean
+  pending_resource_request_count: number
 }
 
 export interface ProjectPayload {
@@ -61,6 +62,7 @@ export interface ProjectQuery extends PageQuery {
   name?: string
   personnel_keyword?: string
   organization_keyword?: string
+  personnel_scope?: string
   manageable_only?: boolean
   approval_status?: ProjectApprovalStatus
   approver_id?: number
