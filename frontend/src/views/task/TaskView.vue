@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, ArrowRight } from '@element-plus/icons-vue'
 import { createTask, deleteTask, getAllTasks, getTasks, updateTask } from '@/api/task'
 import { getAllProjects, getProjectMembers } from '@/api/project'
 import { getUserOptions } from '@/api/user'
@@ -81,17 +82,65 @@ const ownerOptions = computed(() => {
   const allowed = new Set(selectedParent.value.owner_ids)
   return projectMemberOptions.value.filter((item) => allowed.has(item.id))
 })
-const treeTasks = computed(() => {
-  const nodes = new Map<number, Task>()
-  tasks.value.forEach((item) => nodes.set(item.id, { ...item, children: [] }))
-  const roots: Task[] = []
-  nodes.forEach((item) => {
+interface TaskNode { row: Task; children: TaskNode[] }
+type TaskTreeRow = Task & { treeLevel: number; hasChildren: boolean }
+const expandedTaskIds = ref<Set<number>>(new Set())
+const taskForest = computed<TaskNode[]>(() => {
+  const nodes = new Map<number, TaskNode>()
+  const rootsByProject = new Map<number, TaskNode[]>()
+  const projectOrder: number[] = []
+  tasks.value.forEach((item) => nodes.set(item.id, { row: item, children: [] }))
+  tasks.value.forEach((item) => {
+    const node = nodes.get(item.id)!
     const parent = item.parent_id ? nodes.get(item.parent_id) : undefined
-    if (parent) parent.children?.push(item)
-    else roots.push(item)
+    if (parent && parent.row.project_id === item.project_id) {
+      parent.children.push(node)
+      return
+    }
+    if (!rootsByProject.has(item.project_id)) {
+      rootsByProject.set(item.project_id, [])
+      projectOrder.push(item.project_id)
+    }
+    rootsByProject.get(item.project_id)!.push(node)
   })
-  return roots
+  return projectOrder.flatMap((projectId) => rootsByProject.get(projectId) || [])
 })
+const visibleTaskRows = computed<TaskTreeRow[]>(() => {
+  const rows: TaskTreeRow[] = []
+  const visit = (node: TaskNode, level: number) => {
+    rows.push({ ...node.row, treeLevel: level, hasChildren: node.children.length > 0 })
+    if (node.children.length && expandedTaskIds.value.has(node.row.id)) {
+      node.children.forEach((child) => visit(child, level + 1))
+    }
+  }
+  taskForest.value.forEach((node) => visit(node, 0))
+  return rows
+})
+const projectRowSpans = computed(() => {
+  const spans = new Map<number, number>()
+  for (let index = 0; index < visibleTaskRows.value.length;) {
+    let count = 1
+    while (visibleTaskRows.value[index + count]?.project_id === visibleTaskRows.value[index].project_id) count += 1
+    spans.set(index, count)
+    for (let offset = 1; offset < count; offset += 1) spans.set(index + offset, 0)
+    index += count
+  }
+  return spans
+})
+function resetExpandedTasks() {
+  expandedTaskIds.value = new Set(tasks.value.map((item) => item.parent_id).filter((id): id is number => Boolean(id)))
+}
+function toggleTask(row: TaskTreeRow) {
+  const next = new Set(expandedTaskIds.value)
+  if (next.has(row.id)) next.delete(row.id)
+  else next.add(row.id)
+  expandedTaskIds.value = next
+}
+function taskSpanMethod({ rowIndex, column }: { rowIndex: number; column: { property?: string } }) {
+  if (column.property !== 'project_name') return [1, 1]
+  const span = projectRowSpans.value.get(rowIndex) ?? 1
+  return span ? [span, 1] : [0, 0]
+}
 async function load() {
   loading.value = true
   try {
@@ -102,6 +151,7 @@ async function load() {
     })
     tasks.value = result.items
     total.value = result.total
+    resetExpandedTasks()
   } finally { loading.value = false }
 }
 
@@ -214,14 +264,22 @@ onMounted(async () => { await loadOptions(); await load() })
       <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
-      <el-table v-loading="loading" :data="treeTasks" row-key="id" default-expand-all>
-        <el-table-column prop="name" label="任务名称" min-width="220"><template #default="{row}"><span class="task-name" :class="{child:row.parent_id}">{{row.name}}</span></template></el-table-column>
-        <el-table-column prop="project_name" label="项目" min-width="160" show-overflow-tooltip/>
-        <el-table-column prop="owner_name" label="项目成员" min-width="130"/>
-        <el-table-column label="计划日期" width="220"><template #default="{row}">{{formatDate(row.planned_start)}} 至 {{formatDate(row.planned_end)}}</template></el-table-column>
-        <el-table-column label="预计工时" width="95"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
-        <el-table-column label="状态" width="95"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></template></el-table-column>
-        <el-table-column label="操作" fixed="right" width="265"><template #default="{row}"><el-button v-if="row.status!=='completed'&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.children?.length" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
+      <el-table v-loading="loading" :data="visibleTaskRows" row-key="id" :span-method="taskSpanMethod" table-layout="fixed">
+        <el-table-column prop="project_name" label="项目名称" min-width="145" align="center" show-overflow-tooltip><template #default="{row}"><strong class="project-name">{{row.project_name}}</strong></template></el-table-column>
+        <el-table-column prop="name" label="任务名称" min-width="185">
+          <template #default="{row}">
+            <div class="task-cell" :style="{paddingLeft:`${row.treeLevel*22}px`}">
+              <button v-if="row.hasChildren" class="tree-toggle" :title="expandedTaskIds.has(row.id)?'折叠子任务':'展开子任务'" @click="toggleTask(row)"><el-icon><ArrowDown v-if="expandedTaskIds.has(row.id)"/><ArrowRight v-else/></el-icon></button>
+              <span v-else class="tree-spacer"></span>
+              <span>{{row.name}}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="owner_name" label="项目成员" min-width="135" show-overflow-tooltip/>
+        <el-table-column label="计划日期" min-width="175" align="center"><template #default="{row}"><span class="period-cell">{{formatDate(row.planned_start)}}<i>至</i>{{formatDate(row.planned_end)}}</span></template></el-table-column>
+        <el-table-column label="预计工时" min-width="100" align="center"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
+        <el-table-column label="状态" min-width="100" align="center"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></template></el-table-column>
+        <el-table-column label="操作" fixed="right" min-width="230" align="center"><template #default="{row}"><el-button v-if="row.status!=='completed'&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.hasChildren" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[50,100,200]" layout="total, sizes, prev, pager, next" @change="load"/></div>
     </section>
@@ -247,5 +305,6 @@ onMounted(async () => { await loadOptions(); await load() })
 </template>
 
 <style scoped>
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.project-window{grid-column:1/-1;margin-bottom:18px}.task-name{font-weight:600;color:#39465a}.task-name.child{font-weight:400;color:#5f6b7c}.form-hint{margin-top:-4px;color:#9aa3b1;font-size:11px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.project-window{grid-column:1/-1;margin-bottom:18px}.form-hint{margin-top:-4px;color:#9aa3b1;font-size:11px}
+.project-name{display:block;overflow:hidden;color:#334155;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.task-cell{display:flex;min-width:0;align-items:center;gap:7px;color:#465468}.task-cell>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-toggle{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;border:0;border-radius:7px;background:transparent;color:#718096;cursor:pointer}.tree-toggle:hover{background:#edf3f8;color:#315f8e}.tree-spacer{width:24px;flex:0 0 24px}.period-cell{display:inline-grid;grid-template-columns:auto auto auto;gap:5px;align-items:center;white-space:nowrap}.period-cell i{color:#a0a9b6;font-size:11px;font-style:normal}
 </style>

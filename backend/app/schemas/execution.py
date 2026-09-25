@@ -16,7 +16,6 @@ class ExecutionCreate(ORMModel):
     actual_hours: Decimal | None = Field(default=None, gt=0)
     status: str = "running"
     description: str | None = None
-    exception_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_time(self):
@@ -35,7 +34,6 @@ class ExecutionUpdate(ORMModel):
     actual_hours: Decimal | None = Field(default=None, gt=0)
     status: str | None = None
     description: str | None = None
-    exception_reason: str | None = None
 
 
 class ExecutionResponse(ORMModel):
@@ -48,11 +46,12 @@ class ExecutionResponse(ORMModel):
     user_name: str | None = None
     planned_start: date | None = None
     planned_end: date | None = None
+    estimated_hours: Decimal = Decimal("0")
+    task_actual_hours: Decimal = Decimal("0")
     actual_start: date
     actual_end: date | None
     actual_hours: Decimal
     status: str
     description: str | None
-    exception_reason: str | None
     created_at: datetime
     updated_at: datetime

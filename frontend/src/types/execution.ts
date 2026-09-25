@@ -10,12 +10,13 @@ export interface Execution {
   user_name?: string
   planned_start?: string
   planned_end?: string
+  estimated_hours: number
+  task_actual_hours: number
   actual_start: string
   actual_end?: string
   actual_hours: number
   status: string
   description?: string
-  exception_reason?: string
 }
 
 export interface ExecutionPayload {
@@ -26,7 +27,6 @@ export interface ExecutionPayload {
   actual_hours?: number
   status: string
   description?: string
-  exception_reason?: string
 }
 
 export interface ExecutionQuery extends PageQuery {

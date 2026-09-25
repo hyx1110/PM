@@ -285,7 +285,7 @@ async function submit() {
         </el-form-item>
         <el-form-item label="任务" prop="task_id">
           <el-select v-model="form.task_id" filterable style="width:100%" @change="changeTask">
-            <el-option v-for="item in projectTasks" :key="item.id" :label="item.name" :value="item.id"/>
+            <el-option v-for="item in projectTasks" :key="item.id" :label="`${item.name}（计划工时 ${item.estimated_hours}h）`" :value="item.id"/>
           </el-select>
         </el-form-item>
         <el-form-item label="自动计算工时"><el-input :model-value="`${plannedHours} 小时`" disabled/></el-form-item>

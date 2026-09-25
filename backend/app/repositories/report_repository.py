@@ -84,6 +84,8 @@ class ReportRepository:
                 case((Task.parent_id.is_(None), Task.name), else_=parent.name).label("level1_task"),
                 case((Task.parent_id.is_not(None), Task.name), else_=None).label("level2_task"),
                 Task.id.label("task_id"),
+                Task.parent_id,
+                Task.name.label("task_name"),
                 Task.owner_id,
                 User.name.label("owner_name"),
                 Task.planned_start,

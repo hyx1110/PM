@@ -1,13 +1,27 @@
 from datetime import date
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.execution import ExecutionRecord
 from app.models.organization import Department, Organization
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
+
+
+def task_actual_hours_expression():
+    """Return cumulative active execution hours for the outer task row."""
+    execution_total = aliased(ExecutionRecord)
+    return (
+        select(func.coalesce(func.sum(execution_total.actual_hours), 0))
+        .where(
+            execution_total.task_id == Task.id,
+            execution_total.is_deleted.is_(False),
+        )
+        .correlate(Task)
+        .scalar_subquery()
+    )
 
 
 class ExecutionRepository:
@@ -32,6 +46,8 @@ class ExecutionRepository:
                 Task.project_id,
                 Task.planned_start,
                 Task.planned_end,
+                Task.estimated_hours,
+                task_actual_hours_expression().label("task_actual_hours"),
                 Project.name.label("project_name"),
                 User.name.label("user_name"),
             )
@@ -47,13 +63,19 @@ class ExecutionRepository:
         ).first()
         if not row:
             return None
-        record, project_task_name, project_id, planned_start, planned_end, project_name, user_name = row
-        data = {col.name: getattr(record, col.name) for col in ExecutionRecord.__table__.columns}
+        record, project_task_name, project_id, planned_start, planned_end, estimated_hours, task_actual_hours, project_name, user_name = row
+        data = {
+            col.name: getattr(record, col.name)
+            for col in ExecutionRecord.__table__.columns
+            if col.name != "exception_reason"
+        }
         data.update(
             task_name=project_task_name,
             project_id=project_id,
             planned_start=planned_start,
             planned_end=planned_end,
+            estimated_hours=estimated_hours,
+            task_actual_hours=task_actual_hours,
             project_name=project_name,
             user_name=user_name,
         )
@@ -129,6 +151,8 @@ class ExecutionRepository:
                 Task.project_id,
                 Task.planned_start,
                 Task.planned_end,
+                Task.estimated_hours,
+                task_actual_hours_expression().label("task_actual_hours"),
                 Project.name.label("project_name"),
                 User.name.label("user_name"),
             )
@@ -141,8 +165,12 @@ class ExecutionRepository:
             .limit(page_size)
         ).all()
         items = []
-        for record, task_name, project_id_value, planned_start, planned_end, project_name, user_name in rows:
-            data = {col.name: getattr(record, col.name) for col in ExecutionRecord.__table__.columns}
+        for record, task_name, project_id_value, planned_start, planned_end, estimated_hours, task_actual_hours, project_name, user_name in rows:
+            data = {
+                col.name: getattr(record, col.name)
+                for col in ExecutionRecord.__table__.columns
+                if col.name != "exception_reason"
+            }
             data.update(
                 task_name=task_name,
                 project_id=project_id_value,
@@ -150,6 +178,8 @@ class ExecutionRepository:
                 user_name=user_name,
                 planned_start=planned_start,
                 planned_end=planned_end,
+                estimated_hours=estimated_hours,
+                task_actual_hours=task_actual_hours,
             )
             items.append(data)
         return items, total

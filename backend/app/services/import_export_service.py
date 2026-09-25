@@ -750,10 +750,10 @@ def export_executions(db: Session, user: User, start_date: date, end_date: date,
         .order_by(ExecutionRecord.actual_start)
     ).all()
     values = [
-        [item.id, user_name, code, project_name, task_name, item.actual_start, item.actual_end, float(item.actual_hours), item.status, item.description, item.exception_reason]
+        [item.id, user_name, code, project_name, task_name, item.actual_start, item.actual_end, float(item.actual_hours), item.status, item.description]
         for item, user_name, code, project_name, task_name in rows
     ]
-    return _export_book("执行明细", ["执行ID", "人员", "项目编号", "项目", "任务", "实际开始", "实际结束", "实际工时", "状态", "执行说明", "异常原因"], values, {6, 7})
+    return _export_book("执行明细", ["执行ID", "人员", "项目编号", "项目", "任务", "实际开始", "实际结束", "实际工时", "状态", "执行说明"], values, {6, 7})
 
 
 def export_process_report(db: Session, user: User, start_date: date, end_date: date, **query) -> bytes:
@@ -763,10 +763,17 @@ def export_process_report(db: Session, user: User, start_date: date, end_date: d
     report = process_report(
         db, user, 1, 100000, start_date=start_date, end_date=end_date, **query
     )
+
+    def period_text(start, end, *, open_ended: bool = False) -> str:
+        if not start:
+            return "—"
+        return f"{start} 至 {end if end else ('进行中' if open_ended else '—')}"
+
     values = [
         [
             item["project_name"], item.get("task_path"), item["owner_name"],
-            item["planned_start"], item["planned_end"], item.get("actual_start"), item.get("actual_end"),
+            period_text(item["planned_start"], item["planned_end"]),
+            period_text(item.get("actual_start"), item.get("actual_end"), open_ended=True),
             float(item["estimated_hours"] or 0), float(item["actual_hours"] or 0),
             float(item["achievement_rate"]) if item.get("achievement_rate") is not None else None,
             float(item["achievement_quality"]) if item.get("achievement_quality") is not None else None,
@@ -774,4 +781,4 @@ def export_process_report(db: Session, user: User, start_date: date, end_date: d
         ]
         for item in report["items"]
     ]
-    return _export_book("项目过程报表", ["项目", "任务层级", "负责人", "计划开始", "计划结束", "实际开始", "实际结束", "预计工时", "实际工时", "达成率", "达成质量", "状态"], values, {4, 5, 6, 7})
+    return _export_book("项目过程报表", ["项目", "任务层级", "负责人", "计划工期", "实际工期", "预计工时", "实际工时", "达成率", "达成质量", "状态"], values, set())

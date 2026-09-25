@@ -1062,7 +1062,7 @@ onMounted(async () => {
         <el-form-item label="预约人员" required><el-select v-model="batchForm.user_ids" multiple filterable collapse-tags placeholder="可选择多位项目成员" style="width:100%"><el-option v-for="item in batchUsers" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
         <div class="form-grid">
           <el-form-item label="项目" required><el-select v-model="batchForm.project_id" filterable style="width:100%" @change="changeBatchProject"><el-option v-for="item in bookableProjects" :key="item.id" :label="`${item.name}（剩余 ${item.remaining_hours}h）`" :value="item.id"/></el-select></el-form-item>
-          <el-form-item label="任务" required><el-select v-model="batchForm.task_id" filterable style="width:100%"><el-option v-for="item in batchTasks" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="任务" required><el-select v-model="batchForm.task_id" filterable style="width:100%"><el-option v-for="item in batchTasks" :key="item.id" :label="`${item.name}（计划工时 ${item.estimated_hours}h）`" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="工作日期"><el-date-picker v-model="batchForm.work_date" type="date" value-format="YYYY-MM-DD" :disabled-date="disabledBatchDate" style="width:100%"/></el-form-item>
           <el-form-item label="工作时段"><el-radio-group v-model="batchForm.session"><el-radio-button value="morning">上午</el-radio-button><el-radio-button value="afternoon">下午</el-radio-button></el-radio-group></el-form-item>
           <el-form-item label="开始时间"><el-select v-model="batchForm.start_clock" style="width:100%"><el-option v-for="item in batchStartOptions" :key="item" :label="item" :value="item"/></el-select></el-form-item>

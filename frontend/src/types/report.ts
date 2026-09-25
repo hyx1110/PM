@@ -8,6 +8,8 @@ export interface ProcessReportItem {
   level2_task?: string
   task_path: string
   task_id: number
+  parent_id?: number | null
+  task_name: string
   owner_id: number
   owner_name: string
   planned_start: string
