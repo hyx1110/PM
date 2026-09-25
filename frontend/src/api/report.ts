@@ -2,6 +2,7 @@ import { api } from './request'
 import type { PageData } from '@/types/common'
 import type {
   DashboardSummary,
+  DashboardWorkbench,
   EvaluationPayload,
   ProcessReportItem,
   ProcessReportQuery,
@@ -17,5 +18,6 @@ export const getEvaluation = (projectId: number) => api.get<EvaluationPayload | 
 export const updateEvaluation = (projectId: number, payload: EvaluationPayload) =>
   api.put<EvaluationPayload>(`/projects/${projectId}/evaluation`, payload)
 export const getDashboardSummary = () => api.get<DashboardSummary>('/dashboard/summary')
+export const getDashboardWorkbench = () => api.get<DashboardWorkbench>('/dashboard/workbench')
 export const getWorkloadSummary = (params: { start_date: string; end_date: string; granularity: string }) =>
   api.get<WorkloadSummary>('/reports/workload-summary', { params })

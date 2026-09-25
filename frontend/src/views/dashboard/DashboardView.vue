@@ -1,148 +1,124 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Calendar, Collection, Timer, TrendCharts } from '@element-plus/icons-vue'
-import dayjs from 'dayjs'
+import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getDashboardSummary } from '@/api/report'
-import { approveProject, approveProjectResourceRequest, getPendingProjectApprovals, getPendingProjectResourceRequests, rejectProject, rejectProjectResourceRequest } from '@/api/project'
-import { getMyTasks } from '@/api/task'
-import { confirmSchedule, getMyPendingSchedules, rejectSchedule } from '@/api/schedule'
-import type { DashboardSummary } from '@/types/report'
-import type { Schedule } from '@/types/schedule'
-import type { Project } from '@/types/project'
-import type { ProjectResourceRequest } from '@/types/project'
-import type { Task } from '@/types/task'
-import { formatDate, formatDateTime } from '@/utils/format'
+import { approveProject, approveProjectResourceRequest, rejectProject, rejectProjectResourceRequest } from '@/api/project'
+import { confirmSchedule, rejectSchedule } from '@/api/schedule'
+import { getDashboardWorkbench } from '@/api/report'
+import DashboardOverviewStats from '@/components/dashboard/DashboardOverviewStats.vue'
+import DashboardProjectTimeline from '@/components/dashboard/DashboardProjectTimeline.vue'
+import DashboardTaskExecutionCompare from '@/components/dashboard/DashboardTaskExecutionCompare.vue'
+import DashboardRiskAlerts from '@/components/dashboard/DashboardRiskAlerts.vue'
+import DashboardWorkhourTrend from '@/components/dashboard/DashboardWorkhourTrend.vue'
+import DashboardProjectHealth from '@/components/dashboard/DashboardProjectHealth.vue'
+import TaskDetailDrawer from '@/components/dashboard/TaskDetailDrawer.vue'
+import PendingDetailDrawer from '@/components/dashboard/PendingDetailDrawer.vue'
+import RiskDetailDrawer from '@/components/dashboard/RiskDetailDrawer.vue'
+import type { DashboardPendingItem, DashboardRiskAlert, DashboardTaskItem, DashboardWorkbench } from '@/types/report'
+import { formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 
+const router = useRouter()
 const userStore = useUserStore()
-const memberOnly = computed(() => {
-  const roles = userStore.profile?.roles || []
-  return roles.length === 1 && roles[0] === 'project_member'
-})
 const loading = ref(false)
-const decisionState = ref<{ id: number; action: 'approve' | 'reject' }>()
-const pendingBookings = ref<Schedule[]>([])
-const pendingProjectApprovals = ref<Project[]>([])
-const pendingResourceRequests = ref<ProjectResourceRequest[]>([])
-const myTasks = ref<Task[]>([])
-const data = ref<DashboardSummary>({
-  projects_total: 0, projects_running: 0, projects_completed: 0, projects_delayed: 0,
-  delayed_tasks: 0, pending_schedules: 0, pending_project_approvals: 0,
-  my_today_tasks: 0, my_upcoming_tasks: 0, today_schedules: 0, open_risks: 0,
-  critical_risks: 0, today_risks: 0, weekly_planned_hours: 0, monthly_planned_hours: 0,
-  recent_14_day_planned_hours: 0, weekly_utilization_rate: 0,
-  recent_14_day_utilization_rate: 0, task_completion_rate: 0, schedule_trend: [],
-  planned_hours_scope: '', planned_hours_description: '',
-})
-const cards = computed(() => {
-  if (data.value.pending_project_approvals) return [
-    { value: data.value.pending_project_approvals, label: '待审批项目', note: '进入下方审批待办处理', icon: Calendar, color: '#92713c' },
-    { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
-    { value: data.value.my_today_tasks, label: '今日任务', note: '首页直接查看我的任务', icon: Collection, color: '#a75858' },
-    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#4b7b6b' },
-  ]
-  if (memberOnly.value) return [
-    { value: data.value.my_today_tasks, label: '今日任务', note: '查看今日需要处理的任务', icon: Collection, color: '#315f8e' },
-    { value: data.value.my_upcoming_tasks, label: '7 天内到期', note: '关注即将到期的任务', icon: TrendCharts, color: '#4b7b6b' },
-    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
-    { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#6f7790' },
-  ]
-  return [
-    { value: data.value.projects_running, label: '进行中项目', note: `共 ${data.value.projects_total} 个可见项目`, icon: Collection, color: '#315f8e' },
-    { value: `${data.value.task_completion_rate}%`, label: '任务完成率', note: `${data.value.delayed_tasks} 个延期任务`, icon: TrendCharts, color: '#4b7b6b' },
-    { value: data.value.pending_schedules, label: '待我确认预约', note: `今日 ${data.value.today_schedules} 条安排`, icon: Calendar, color: '#92713c' },
-    { value: data.value.my_today_tasks, label: '今日任务', note: `${data.value.my_upcoming_tasks} 个任务将在 7 天内到期`, icon: Collection, color: '#a75858' },
-  ]
-})
-const maxHours = computed(() => Math.max(...data.value.schedule_trend.map(item => item.planned_hours), 1))
+const actionLoading = ref(false)
+const loadError = ref(false)
+const dashboard = ref<DashboardWorkbench>()
+const selectedTask = ref<DashboardTaskItem>()
+const selectedPending = ref<DashboardPendingItem>()
+const selectedRisk = ref<DashboardRiskAlert>()
+const taskDrawerVisible = ref(false)
+const pendingDrawerVisible = ref(false)
+const riskDrawerVisible = ref(false)
 
 async function loadDashboard() {
   loading.value = true
+  loadError.value = false
   try {
-    const canViewTasks = userStore.hasPermission('task:view')
-    const canViewSchedules = userStore.hasPermission('schedule:view')
-    const isGlobalManager = Boolean(userStore.profile?.roles.some(
-      (role) => ['super_admin', 'department_manager'].includes(role),
-    ))
-    const [summary, pending, projects, hours, tasks] = await Promise.allSettled([
-      getDashboardSummary(),
-      canViewSchedules ? getMyPendingSchedules(8) : Promise.resolve([]),
-      getPendingProjectApprovals(),
-      isGlobalManager ? getPendingProjectResourceRequests() : Promise.resolve([]),
-      canViewTasks ? getMyTasks({ page: 1, page_size: 10 }) : Promise.resolve({ items: [], total: 0, page: 1, page_size: 10 }),
-    ])
-    if (summary.status === 'fulfilled') data.value = summary.value
-    if (pending.status === 'fulfilled') pendingBookings.value = pending.value
-    if (projects.status === 'fulfilled') pendingProjectApprovals.value = projects.value
-    if (hours.status === 'fulfilled') pendingResourceRequests.value = hours.value
-    if (tasks.status === 'fulfilled') myTasks.value = tasks.value.items
+    dashboard.value = await getDashboardWorkbench()
+  } catch {
+    loadError.value = true
   } finally {
     loading.value = false
   }
 }
 
-const resourceSummary = (item: ProjectResourceRequest) => [
-  item.requested_hours > 0 ? `追加 ${item.requested_hours}h` : '',
-  item.add_member_ids.length ? `新增 ${item.add_member_ids.length} 人` : '',
-  item.remove_member_ids.length ? `移除 ${item.remove_member_ids.length} 人` : '',
-].filter(Boolean).join('、')
-
-async function approveResources(item: ProjectResourceRequest) {
-  await ElMessageBox.confirm(`确认批准项目“${item.project_name}”的资源申请（${resourceSummary(item)}）吗？`, '部门主管资源审批', { type: 'warning' })
-  await approveProjectResourceRequest(item.project_id, item.id)
-  ElMessage.success('项目资源申请已批准')
-  await loadDashboard()
+function openOverview(target: 'projects' | 'tasks' | 'pending' | 'risks') {
+  if (target === 'pending' || target === 'risks') {
+    document.getElementById(`dashboard-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
+  router.push(target === 'projects' ? '/projects' : '/tasks')
 }
 
-async function rejectResources(item: ProjectResourceRequest) {
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', '部门主管资源审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
-  await rejectProjectResourceRequest(item.project_id, item.id, value)
-  ElMessage.success('项目资源申请已驳回')
-  await loadDashboard()
+function openTask(item: DashboardTaskItem) {
+  selectedTask.value = item
+  taskDrawerVisible.value = true
 }
 
-async function approvePendingProject(item: Project) {
-  await ElMessageBox.confirm(`确认批准项目“${item.name}”吗？`, '项目审批', { type: 'warning' })
-  await approveProject(item.id)
-  ElMessage.success('项目已批准')
-  await loadDashboard()
+function openPending(item: DashboardPendingItem) {
+  selectedPending.value = item
+  pendingDrawerVisible.value = true
 }
 
-async function rejectPendingProject(item: Project) {
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', '项目审批', { inputType: 'textarea', inputValidator: (text) => Boolean(text?.trim()) || '请填写驳回原因' })
-  await rejectProject(item.id, value)
-  ElMessage.success('项目已驳回')
-  await loadDashboard()
+function openRisk(item: DashboardRiskAlert) {
+  selectedRisk.value = item
+  riskDrawerVisible.value = true
 }
 
-async function approveBooking(item: Schedule) {
+function openProject(id: number) {
+  router.push(`/projects/${id}`)
+}
+
+function openExecutions(item: DashboardTaskItem) {
+  if (!userStore.hasPermission('execution:view')) {
+    ElMessage.info('当前账号没有查看任务执行记录的权限')
+    return
+  }
+  router.push({ path: '/executions', query: { project_id: item.project_id, task_id: item.id } })
+}
+
+function openRiskTask(taskId: number) {
+  const candidates = [
+    ...(dashboard.value?.my_tasks || []),
+    ...(dashboard.value?.execution_comparison || []),
+    ...(dashboard.value?.timeline.flatMap(project => project.tasks) || []),
+  ]
+  const task = candidates.find(item => item.id === taskId)
+  if (task) openTask(task)
+  else router.push('/tasks')
+}
+
+async function approvePending(item: DashboardPendingItem) {
+  const confirmation = item.type === 'booking'
+    ? `确认接受“${item.title}”的时间预约吗？`
+    : `确认批准“${item.title}”吗？`
   try {
-    await ElMessageBox.confirm(
-      `确认接受 ${dayjs(item.start_time).format('MM月DD日 HH:mm')} 至 ${dayjs(item.end_time).format('HH:mm')} 的预约吗？`,
-      '确认人力预约',
-      { type: 'success', confirmButtonText: '确认接受' },
-    )
+    await ElMessageBox.confirm(confirmation, item.type_label, { type: 'warning', confirmButtonText: '确认' })
   } catch {
     return
   }
-  decisionState.value = { id: item.id, action: 'approve' }
+  actionLoading.value = true
   try {
-    await confirmSchedule(item.id)
-    ElMessage.success('预约已确认')
+    if (item.type === 'project_approval') await approveProject(item.source_id)
+    else if (item.type === 'resource_approval') await approveProjectResourceRequest(item.project_id, item.source_id)
+    else await confirmSchedule(item.source_id)
+    ElMessage.success(item.type === 'booking' ? '预约已确认' : '审批已通过')
+    pendingDrawerVisible.value = false
     await loadDashboard()
   } finally {
-    decisionState.value = undefined
+    actionLoading.value = false
   }
 }
 
-async function declineBooking(item: Schedule) {
+async function rejectPendingItem(item: DashboardPendingItem) {
   let reason = ''
   try {
-    const result = await ElMessageBox.prompt('请填写拒绝原因，项目经理将收到通知。', '拒绝人力预约', {
+    const result = await ElMessageBox.prompt('请填写驳回原因，相关人员将收到通知。', `驳回${item.type_label}`, {
+      inputType: 'textarea',
       inputPattern: /\S+/,
-      inputErrorMessage: '拒绝原因不能为空',
-      confirmButtonText: '确认拒绝',
+      inputErrorMessage: '驳回原因不能为空',
+      confirmButtonText: '确认驳回',
       cancelButtonText: '取消',
       type: 'warning',
     })
@@ -150,108 +126,53 @@ async function declineBooking(item: Schedule) {
   } catch {
     return
   }
-  decisionState.value = { id: item.id, action: 'reject' }
+  actionLoading.value = true
   try {
-    await rejectSchedule(item.id, reason)
-    ElMessage.success('预约已拒绝')
+    if (item.type === 'project_approval') await rejectProject(item.source_id, reason)
+    else if (item.type === 'resource_approval') await rejectProjectResourceRequest(item.project_id, item.source_id, reason)
+    else await rejectSchedule(item.source_id, reason)
+    ElMessage.success(item.type === 'booking' ? '预约已拒绝' : '申请已驳回')
+    pendingDrawerVisible.value = false
     await loadDashboard()
   } finally {
-    decisionState.value = undefined
+    actionLoading.value = false
   }
 }
 
-onMounted(loadDashboard)
+onMounted(() => { void loadDashboard() })
 </script>
 
 <template>
-  <div class="page-shell" v-loading="loading">
-    <header class="page-header">
-      <div><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{ userStore.profile?.name }}，这里汇总我的任务、项目进度和人力排期。</p></div>
-      <div class="header-actions"><el-button type="primary" @click="$router.push('/schedules')">共享看板</el-button></div>
+  <div class="page-shell dashboard-page">
+    <header class="page-header dashboard-header">
+      <div class="dashboard-heading"><span class="page-kicker">WORKSPACE OVERVIEW</span><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{userStore.profile?.name}}，这里汇总你权限范围内的项目进度、任务执行和待处理事项。</p></div>
+      <div v-if="dashboard" class="scope-meta"><i></i><div><span>{{dashboard.scope_label}}</span><small>数据更新于 {{formatDateTime(dashboard.generated_at)}}</small></div></div>
     </header>
-    <section class="metrics">
-      <article v-for="card in cards" :key="card.label" class="surface metric">
-        <div class="metric-icon" :style="{ color: card.color, backgroundColor: `${card.color}14` }"><el-icon><component :is="card.icon" /></el-icon></div>
-        <div><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></div>
-      </article>
-    </section>
-    <section class="surface decision-card">
-      <div class="decision-header"><div><span class="overline">MY TASKS</span><h2>我的任务</h2><p>首页直接展示由你负责的任务。</p></div><el-button text type="primary" @click="$router.push('/tasks')">查看全部任务</el-button></div>
-      <el-empty v-if="!myTasks.length" :image-size="54" description="当前没有由你负责的任务" />
-      <el-table v-else :data="myTasks" size="small" class="dashboard-table"><el-table-column prop="name" label="任务" min-width="180"/><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column prop="owner_name" label="项目成员" min-width="120"/><el-table-column label="计划结束" width="130"><template #default="{row}">{{ formatDate(row.planned_end) }}</template></el-table-column><el-table-column prop="effective_status" label="状态" width="100"/></el-table>
-    </section>
-    <section v-if="pendingResourceRequests.length" class="surface decision-card">
-      <div class="decision-header"><div><span class="overline">RESOURCE APPROVALS</span><h2>部门主管待审批项目资源</h2><p>工时和项目成员变更统一在这里审批。</p></div></div>
-      <div class="decision-list"><article v-for="item in pendingResourceRequests" :key="item.id" class="decision-item"><div class="decision-info"><strong>{{ item.project_code }} · {{ item.project_name }}</strong><span>{{ item.requester_name }} 申请{{ resourceSummary(item) }} · {{ item.reason }}</span></div><div class="decision-actions"><el-button @click="rejectResources(item)">驳回</el-button><el-button type="success" @click="approveResources(item)">批准</el-button></div></article></div>
-    </section>
-    <section v-if="pendingProjectApprovals.length" class="surface decision-card">
-      <div class="decision-header">
-        <div><span class="overline">PROJECT APPROVALS</span><h2>待我审批的项目</h2><p>这里只显示分配给当前部门主管的项目审批。</p></div>
-      </div>
-      <div class="decision-list">
-        <article v-for="item in pendingProjectApprovals.slice(0,8)" :key="item.id" class="decision-item">
-          <div class="decision-info"><strong>{{ item.name }}</strong><span>{{ item.code }} · 申请人 {{ item.creator_name || item.manager_name }}</span></div>
-          <el-tag type="warning" effect="plain">待审批</el-tag><div class="decision-actions"><el-button @click="rejectPendingProject(item)">驳回</el-button><el-button type="success" @click="approvePendingProject(item)">批准</el-button></div>
-        </article>
-      </div>
-    </section>
-    <section class="surface decision-card">
-      <div class="decision-header">
-        <div>
-          <span class="overline">MY APPROVALS</span>
-          <h2>待我确认的人力预约</h2>
-          <p>这里只展示预约到你本人的待办，可以直接接受或拒绝。</p>
-        </div>
-        <el-button text type="primary" @click="$router.push('/schedules')">进入共享看板</el-button>
-      </div>
-      <el-empty v-if="!pendingBookings.length" :image-size="54" description="当前没有需要你确认的预约" />
-      <div v-else class="decision-list">
-        <article v-for="item in pendingBookings" :key="item.id" class="decision-item">
-          <div class="decision-date">
-            <strong>{{ dayjs(item.start_time).format('MM/DD') }}</strong>
-            <span>{{ dayjs(item.start_time).format('HH:mm') }}–{{ dayjs(item.end_time).format('HH:mm') }}</span>
-          </div>
-          <div class="decision-info">
-            <strong>{{ item.project_name }}</strong>
-            <span>{{ item.task_name }} · {{ item.planned_hours }}h{{ item.created_by_name ? ` · 来自 ${item.created_by_name}` : '' }}</span>
-          </div>
-          <el-tag v-if="item.status==='changed'" type="warning" effect="plain">时间有变更</el-tag>
-          <el-tag v-else type="info" effect="plain">新预约</el-tag>
-          <div class="decision-actions">
-            <el-button :disabled="decisionState!==undefined" :loading="decisionState?.id===item.id&&decisionState?.action==='reject'" @click="declineBooking(item)">拒绝</el-button>
-            <el-button type="success" :disabled="decisionState!==undefined" :loading="decisionState?.id===item.id&&decisionState?.action==='approve'" @click="approveBooking(item)">确认预约</el-button>
-          </div>
-        </article>
-      </div>
-    </section>
-    <section v-if="!memberOnly" class="dashboard-grid">
-      <article class="surface trend-card">
-        <div class="section-title"><div><span class="overline">WORKFORCE TREND</span><h2>近 14 天计划工时</h2><p class="scope-note">{{ data.planned_hours_scope }}</p></div><div class="week-total" :title="data.planned_hours_description"><el-icon><Timer /></el-icon> 近 14 天 {{ data.recent_14_day_planned_hours }}h · 利用率 {{ data.recent_14_day_utilization_rate }}%</div></div>
-        <div class="trend-chart">
-          <div v-for="item in data.schedule_trend" :key="item.date" class="trend-column" :title="`${item.date}：${item.planned_hours}h`">
-            <span class="bar-value">{{ item.planned_hours || '' }}</span>
-            <div class="bar" :style="{ height: `${Math.max(item.planned_hours / maxHours * 120, item.planned_hours ? 5 : 1)}px` }"></div>
-            <small>{{ dayjs(item.date).format('MM/DD') }}</small>
-          </div>
-        </div>
-        <p class="metric-help">{{ data.planned_hours_description }}</p>
-      </article>
-      <article class="surface health-card">
-        <span class="overline">PROJECT HEALTH</span><h2>项目健康概览</h2>
-        <div class="health-row"><span>已完成项目</span><strong>{{ data.projects_completed }}</strong></div>
-        <div class="health-row danger"><span>延期项目</span><strong>{{ data.projects_delayed }}</strong></div>
-        <div class="health-row"><span>进行中项目</span><strong>{{ data.projects_running }}</strong></div>
-        <div class="health-row"><span>本月计划工时</span><strong>{{ data.monthly_planned_hours }}h</strong></div>
-        <el-progress :percentage="data.task_completion_rate" :stroke-width="8" color="#4b7b6b" />
-        <p>任务完成率按当前账号的数据范围计算。</p>
-      </article>
-    </section>
+
+    <template v-if="dashboard">
+      <DashboardOverviewStats :overview="dashboard.overview" :pending-items="dashboard.pending_items" :tasks="dashboard.my_tasks" @open="openOverview" @pending="openPending" @task="openTask" />
+
+      <section class="progress-grid">
+        <DashboardProjectTimeline :projects="dashboard.timeline" @task="openTask" @project="openProject" />
+        <DashboardTaskExecutionCompare :items="dashboard.execution_comparison" @task="openTask" />
+      </section>
+
+      <section class="analysis-grid">
+        <DashboardWorkhourTrend :items="dashboard.workhour_trend" />
+        <DashboardProjectHealth :items="dashboard.project_health" @project="openProject" />
+        <div id="dashboard-risks"><DashboardRiskAlerts :items="dashboard.risk_alerts" @select="openRisk" /></div>
+      </section>
+    </template>
+
+    <section v-else-if="loadError" class="surface dashboard-state"><h2>首页数据暂时无法加载</h2><p>请求已安全结束，不会影响其他页面使用。</p><el-button type="primary" plain @click="loadDashboard">重新加载</el-button></section>
+    <section v-else class="dashboard-skeleton" v-loading="loading"><div v-for="index in 8" :key="index" class="surface skeleton-card"></div></section>
+
+    <TaskDetailDrawer v-model="taskDrawerVisible" :task="selectedTask" @open-executions="openExecutions" />
+    <PendingDetailDrawer v-model="pendingDrawerVisible" :item="selectedPending" :loading="actionLoading" @approve="approvePending" @reject="rejectPendingItem" @open-project="openProject" />
+    <RiskDetailDrawer v-model="riskDrawerVisible" :item="selectedRisk" @open-project="openProject" @open-task="openRiskTask" />
   </div>
 </template>
 
 <style scoped>
-.header-actions{display:flex;gap:10px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.metric{display:flex;align-items:center;gap:15px;padding:20px}.metric-icon{display:grid;width:44px;height:44px;place-items:center;border-radius:13px;font-size:20px}.metric span,.metric small{display:block;color:#8993a1;font-size:11px}.metric strong{display:block;margin:3px 0;color:#202b3d;font-size:26px;font-weight:650}.dashboard-grid{display:grid;grid-template-columns:1.7fr 1fr;gap:16px}.trend-card,.health-card{padding:24px}.section-title{display:flex;align-items:start;justify-content:space-between}.overline{color:#7890aa;font-size:10px;font-weight:700;letter-spacing:.16em}.section-title h2,.health-card h2{margin:8px 0 0;color:#26364a;font-size:17px}.week-total{display:flex;align-items:center;gap:6px;border-radius:9px;background:#f3f6f9;padding:8px 11px;color:#64758a;font-size:12px}.trend-chart{display:flex;height:178px;align-items:end;gap:9px;margin-top:18px;border-bottom:1px solid #e9edf1}.trend-column{display:flex;min-width:0;flex:1;flex-direction:column;align-items:center}.bar-value{height:17px;color:#8792a2;font-size:9px}.bar{width:70%;max-width:28px;border-radius:5px 5px 0 0;background:linear-gradient(#6e91b5,#b7cadb)}.trend-column small{padding:8px 0;color:#9aa3af;font-size:9px;white-space:nowrap}.health-card h2{margin-bottom:18px}.health-row{display:flex;justify-content:space-between;border-bottom:1px solid #f0f2f4;padding:12px 0;color:#667386;font-size:13px}.health-row strong{color:#26364a}.health-row.danger strong{color:#b45252}.health-card .el-progress{margin-top:20px}.health-card p{margin:9px 0 0;color:#98a1ad;font-size:11px;line-height:1.6}
-.decision-card{padding:20px 22px}.decision-header{display:flex;align-items:flex-start;justify-content:space-between}.decision-header h2{margin:7px 0 0;color:#26364a;font-size:17px}.decision-header p{margin:6px 0 0;color:#929baa;font-size:11px}.decision-card :deep(.el-empty){padding:15px 0 4px}.decision-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:17px}.decision-item{display:flex;min-width:0;align-items:center;gap:12px;border:1px solid #e8edf1;border-radius:11px;background:#fbfcfd;padding:12px}.decision-date{display:flex;width:78px;flex:0 0 78px;flex-direction:column;border-right:1px solid #e7eaee}.decision-date strong{color:#334a61;font-size:14px}.decision-date span,.decision-info span{margin-top:3px;color:#8994a3;font-size:10px}.decision-info{display:flex;min-width:0;flex:1;flex-direction:column}.decision-info strong,.decision-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.decision-info strong{color:#3d4c5f;font-size:12px}.decision-actions{display:flex;flex:0 0 auto;gap:6px}.decision-actions .el-button+.el-button{margin-left:0}
-.scope-note{margin:5px 0 0;color:#929baa;font-size:10px}
-.metric-help{margin:12px 0 0;color:#8d98a6;font-size:10px;line-height:1.6}
+.dashboard-page{gap:16px}.dashboard-page :deep(.surface){border-color:#e1e7ed;border-radius:15px;box-shadow:0 10px 30px rgba(38,53,70,.055)}.dashboard-header{align-items:flex-end;padding:2px 1px 0}.dashboard-header .page-title{color:#172235;font-size:25px;font-weight:680;letter-spacing:-.025em}.dashboard-header .page-subtitle{margin-top:7px;color:#728094;font-size:12px}.dashboard-heading{min-width:0}.page-kicker{display:block;margin-bottom:6px;color:#6c88a4;font-size:9px;font-weight:750;letter-spacing:.16em}.scope-meta{display:flex;align-items:center;gap:10px;border:1px solid #e1e7ed;border-radius:12px;background:rgba(255,255,255,.76);padding:9px 12px;box-shadow:0 5px 18px rgba(45,61,80,.035)}.scope-meta>i{width:7px;height:7px;border-radius:50%;background:#4f846f;box-shadow:0 0 0 4px #edf6f2}.scope-meta>div{display:flex;flex-direction:column;align-items:flex-end}.scope-meta span{color:#4d5d70;font-size:11px;font-weight:650}.scope-meta small{margin-top:3px;color:#939eab;font-size:9px}.progress-grid{display:grid;grid-template-columns:minmax(0,1.72fr) minmax(315px,.7fr);gap:16px;align-items:stretch}.progress-grid>*{height:100%}.analysis-grid{display:grid;grid-template-columns:minmax(0,1.36fr) minmax(280px,.72fr) minmax(280px,.72fr);gap:16px;align-items:stretch}.analysis-grid>div,.analysis-grid>*{min-width:0;height:100%}.dashboard-state{display:flex;min-height:280px;flex-direction:column;align-items:center;justify-content:center}.dashboard-state h2{margin:0;color:#344256;font-size:17px}.dashboard-state p{margin:8px 0 18px;color:#8b96a4;font-size:11px}.dashboard-skeleton{display:grid;min-height:520px;grid-template-columns:repeat(4,1fr);gap:16px}.skeleton-card{min-height:110px;background:linear-gradient(100deg,#fff 20%,#f7f9fb 50%,#fff 80%);background-size:240% 100%;animation:skeleton 1.6s ease infinite}.skeleton-card:nth-child(n+5){grid-column:span 2;min-height:180px}@keyframes skeleton{to{background-position:-240% 0}}@media(max-width:1500px){.progress-grid{grid-template-columns:minmax(0,1.45fr) minmax(300px,.7fr)}.analysis-grid{grid-template-columns:1fr 1fr}.analysis-grid>:first-child{grid-column:1/-1}}@media(max-width:1180px){.progress-grid,.analysis-grid{grid-template-columns:1fr}.analysis-grid>:first-child{grid-column:auto}.dashboard-skeleton{grid-template-columns:repeat(2,1fr)}}
 </style>

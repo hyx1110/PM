@@ -29,4 +29,3 @@ button, input, textarea, select { font: inherit; }
 .el-input__wrapper, .el-select__wrapper, .el-textarea__inner { border-radius: 9px; box-shadow: 0 0 0 1px #e1e5ea inset; }
 .el-table { --el-table-border-color: #eef0f3; --el-table-header-bg-color: #fafbfc; --el-table-row-hover-bg-color: #f7f9fc; }
 .el-dialog { border-radius: 18px; overflow: hidden; }
-
