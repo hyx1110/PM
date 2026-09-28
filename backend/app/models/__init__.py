@@ -3,6 +3,7 @@ from app.models.execution import ExecutionRecord
 from app.models.import_job import ImportJob
 from app.models.notification import Notification, NotificationPreference
 from app.models.operation_log import OperationLog
+from app.models.overtime import OvertimeRequest
 from app.models.organization import Department, Organization
 from app.models.personal_time import PersonalTimeBlock
 from app.models.project import Project, ProjectMember, ProjectResourceRequest
@@ -20,6 +21,7 @@ __all__ = [
     "Notification",
     "NotificationPreference",
     "OperationLog",
+    "OvertimeRequest",
     "Organization",
     "PersonalTimeBlock",
     "Permission",

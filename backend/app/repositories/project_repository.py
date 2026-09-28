@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.organization import Department, Organization
@@ -8,11 +8,23 @@ from app.models.project import Project, ProjectMember, ProjectResourceRequest
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task
 from app.models.user import User
-from app.utils.time import beijing_today
+from app.utils.time import beijing_now, beijing_today
+
 
 def booked_schedule_predicate():
-    """Only accepted work consumes project capacity; proposals do not."""
-    return ScheduleBooking.status.in_({"confirmed", "running", "completed"})
+    """Project/task quota is reserved on submission, independently of availability.
+
+    Pending proposals remain private and do not block a person's time, but do
+    reserve their own task/project budget. Expired proposals release that quota
+    even before the lifecycle worker has marked them cancelled.
+    """
+    return or_(
+        ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
+        and_(
+            ScheduleBooking.status.in_({"pending", "changed"}),
+            ScheduleBooking.end_time > beijing_now(),
+        ),
+    )
 
 
 def booked_hours_expression():

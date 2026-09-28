@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, conflict, forbidden, not_found
+from app.models.execution import ExecutionRecord
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
@@ -65,7 +66,10 @@ def _validate_relations(
         raise bad_request("项目尚未通过审批，不能预约人力")
     if project.status == "completed":
         raise bad_request("已完成项目不能预约人力")
-    task = db.get(Task, task_id)
+    task = db.scalar(
+        select(Task).where(Task.id == task_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
     if not task or task.is_deleted:
         raise not_found("task not found")
     if task.project_id != project_id:
@@ -164,9 +168,12 @@ def _used_project_hours(
     ]
     if exclude_id:
         filters.append(ScheduleBooking.id != exclude_id)
-    return db.scalar(
-        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(*filters)
-    ) or Decimal("0")
+    # A locking read sees the latest committed reservations after acquiring the
+    # project lock, including when MySQL uses REPEATABLE READ isolation.
+    hours = db.scalars(
+        select(ScheduleBooking.planned_hours).where(*filters).with_for_update()
+    ).all()
+    return sum(hours, Decimal("0"))
 
 
 def _assert_project_capacity(
@@ -180,7 +187,7 @@ def _assert_project_capacity(
     if requested_hours > remaining:
         raise bad_request(
             f"项目剩余工时不足：剩余 {max(remaining, Decimal('0'))} 小时，"
-            f"本次需要 {requested_hours} 小时。请先发起项目资源申请并等待部门主管审批"
+            f"本次需要 {requested_hours} 小时（待确认预约也占用额度）。请先发起项目资源申请并等待部门主管审批"
         )
 
 
@@ -199,14 +206,15 @@ def _assert_task_capacity(
     ]
     if exclude_id:
         filters.append(ScheduleBooking.id != exclude_id)
-    used = db.scalar(
-        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(*filters)
-    ) or Decimal("0")
+    hours = db.scalars(
+        select(ScheduleBooking.planned_hours).where(*filters).with_for_update()
+    ).all()
+    used = sum(hours, Decimal("0"))
     remaining = task.estimated_hours - used
     if requested_hours > remaining:
         raise bad_request(
             f"任务剩余预计工时不足：剩余 {max(remaining, Decimal('0'))} 小时，"
-            f"本次需要 {requested_hours} 小时。请先调整任务预计工时"
+            f"本次需要 {requested_hours} 小时（待确认预约也占用额度）。请先撤回多余预约或调整任务预计工时"
         )
 
 
@@ -230,6 +238,7 @@ def _get_schedule_for_update(db: Session, schedule_id: int) -> ScheduleBooking |
         select(ScheduleBooking)
         .where(ScheduleBooking.id == schedule_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
 
 
@@ -245,6 +254,7 @@ def _get_schedule_for_ordered_update(
         select(Project)
         .where(Project.id == preview.project_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     _lock_users(db, [preview.user_id])
     return _get_schedule_for_update(db, schedule_id)
@@ -540,6 +550,8 @@ def confirm_schedule(
     _assert_decision_access(db, item, user)
     if item.status not in {"pending", "changed"}:
         raise bad_request("only pending or changed schedules can be confirmed")
+    if item.end_time <= beijing_now():
+        raise bad_request("预约时段已经结束，不能再确认；请刷新日程后重新预约有效时间")
     _validate_relations(
         db,
         item.user_id,
@@ -635,22 +647,40 @@ def withdraw_schedule(db: Session, schedule_id: int, user: User) -> ScheduleBook
     item = _get_schedule_for_ordered_update(db, schedule_id)
     if not item:
         raise not_found("schedule not found")
-    if item.created_by != user.id and not _can_manage_all_schedules(db, user):
-        raise forbidden("只有该预约的提交人可以撤回")
-    if item.status not in {"pending", "changed"}:
-        raise bad_request("只有对方尚未确认的预约可以撤回")
+    confirmed_withdrawal = item.status == "confirmed"
+    if confirmed_withdrawal:
+        if item.user_id != user.id:
+            raise forbidden("只有被预约人本人可以撤回自己已确认的预约")
+        if item.start_time <= beijing_now():
+            raise bad_request("已经开始的预约不能撤回，请保留历史执行记录")
+        project = db.get(Project, item.project_id)
+        if not project or project.is_deleted or project.status == "completed":
+            raise bad_request("已结束或已删除项目的已确认预约不能撤回")
+        if db.scalar(select(ExecutionRecord.id).where(
+            ExecutionRecord.task_id == item.task_id,
+            ExecutionRecord.user_id == item.user_id,
+            ExecutionRecord.is_deleted.is_(False),
+            ExecutionRecord.overtime_request_id.is_(None),
+            ExecutionRecord.actual_start <= item.end_time.date(),
+            func.coalesce(ExecutionRecord.actual_end, ExecutionRecord.actual_start) >= item.start_time.date(),
+        ).limit(1).with_for_update()):
+            raise bad_request("该任务在预约日期已有本人执行记录，请先核对并处理相关执行记录后再撤回")
+    elif item.status in {"pending", "changed"}:
+        if item.created_by != user.id and not _can_manage_all_schedules(db, user):
+            raise forbidden("未确认预约只能由提交人撤回；被预约人可使用拒绝操作")
+    else:
+        raise bad_request("当前预约不可撤回；仅支持待确认预约或本人已确认但尚未开始的预约")
     before = model_to_dict(item)
     item.status = "withdrawn"
     item.version += 1
-    create_notification(
-        db,
-        item.user_id,
-        "schedule_withdrawn",
-        "人力预约已撤回",
-        f"预约 #{item.id} 已由提交人撤回，无需再审批。",
-        related_type="schedule",
-        related_id=item.id,
-    )
+    item.rejection_reason = "被预约人撤回已确认预约" if confirmed_withdrawal else "提交人撤回待确认预约"
+    for recipient_id in {item.user_id, item.created_by} - {user.id}:
+        create_notification(
+            db, recipient_id, "schedule_withdrawn", "人力预约已撤回",
+            f"{user.name} 已撤回预约 #{item.id}（{item.start_time:%Y-%m-%d %H:%M} 至 {item.end_time:%H:%M}），"
+            f"{item.planned_hours}h 任务和项目额度已释放，该时段可重新安排。",
+            related_type="schedule", related_id=item.id,
+        )
     log_operation(
         db,
         operator_id=user.id,
@@ -787,10 +817,11 @@ def batch_create_schedules(
         )
     if all_conflicts:
         raise conflict("schedule conflict", 40901, {"conflicts": all_conflicts})
-    # Pending proposals do not reserve capacity. Each proposal must be
-    # individually feasible; confirmation performs the serialized final check.
-    _assert_project_capacity(db, project, hours)
-    _assert_task_capacity(db, payload.task_id, hours)
+    # Each person consumes the task's shared quota, including pending bookings.
+    # Validate the whole batch before inserting any row (all-or-nothing).
+    total_hours = hours * len(payload.user_ids)
+    _assert_project_capacity(db, project, total_hours)
+    _assert_task_capacity(db, payload.task_id, total_hours)
     items = []
     for user_id in payload.user_ids:
         item = ScheduleBooking(

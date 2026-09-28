@@ -10,6 +10,7 @@ EXECUTION_STATUSES = {"running", "completed"}
 
 class ExecutionCreate(ORMModel):
     task_id: int
+    overtime_request_id: int | None = Field(default=None, gt=0)
     user_id: int | None = None
     actual_start: date
     actual_end: date | None = None
@@ -38,6 +39,7 @@ class ExecutionUpdate(ORMModel):
 
 class ExecutionResponse(ORMModel):
     id: int
+    overtime_request_id: int | None = None
     task_id: int
     task_name: str | None = None
     project_id: int | None = None

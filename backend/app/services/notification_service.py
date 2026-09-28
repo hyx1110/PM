@@ -1,5 +1,4 @@
 import smtplib
-from email.message import EmailMessage
 
 import httpx
 from sqlalchemy import func, select, update
@@ -9,6 +8,7 @@ from app.core.config import settings
 from app.core.exceptions import not_found
 from app.models.notification import Notification
 from app.models.user import User
+from app.services.email_service import dispatch_email_pending
 from app.utils.time import beijing_now
 
 
@@ -26,6 +26,7 @@ def create_notification(
     # Notification preferences are no longer user-facing. Every business
     # notification is therefore persisted to the in-app notification center.
     delivered = ["in_app"]
+    recipient = db.get(User, recipient_id) if settings.smtp_enabled else None
     item = Notification(
         recipient_id=recipient_id,
         event_type=event_type,
@@ -35,6 +36,8 @@ def create_notification(
         related_type=related_type,
         related_id=str(related_id) if related_id is not None else None,
         delivered_channels=delivered,
+        email_status=("pending" if recipient and recipient.email else "skipped") if settings.smtp_enabled else "disabled",
+        email_attempts=0,
     )
     db.add(item)
     db.flush()
@@ -134,23 +137,6 @@ def delete_read_notifications(db: Session, user_id: int) -> int:
     return result.rowcount or 0
 
 
-def _send_email(user: User, item: Notification) -> bool:
-    if not settings.smtp_host or not settings.smtp_from or not user.email:
-        return False
-    message = EmailMessage()
-    message["Subject"] = item.title
-    message["From"] = settings.smtp_from
-    message["To"] = user.email
-    message.set_content(item.content)
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as client:
-        if settings.smtp_use_tls:
-            client.starttls()
-        if settings.smtp_username:
-            client.login(settings.smtp_username, settings.smtp_password or "")
-        client.send_message(message)
-    return True
-
-
 def _send_webhook(url: str | None, item: Notification, channel: str) -> bool:
     if not url:
         return False
@@ -164,16 +150,16 @@ def _send_webhook(url: str | None, item: Notification, channel: str) -> bool:
 
 
 def dispatch_pending(db: Session, limit: int = 100) -> dict:
+    email_result = dispatch_email_pending(db, limit)
     external_channels_configured = bool(
-        (settings.smtp_host and settings.smtp_from)
-        or settings.wecom_webhook_url
+        settings.wecom_webhook_url
         or settings.dingtalk_webhook_url
     )
     if not external_channels_configured:
-        return {"attempted": 0, "delivered": 0, "failed": 0}
-    delivered_count = 0
-    failed_count = 0
-    attempted_notifications = 0
+        return email_result
+    delivered_count = email_result["delivered"]
+    failed_count = email_result["failed"]
+    attempted_notifications = email_result["attempted"]
     page = 0
     scan_size = max(limit, 100)
     while attempted_notifications < limit:
@@ -195,11 +181,6 @@ def dispatch_pending(db: Session, limit: int = 100) -> dict:
         for item, user in rows:
             delivered = list(item.delivered_channels or [])
             channels = [
-                (
-                    "email",
-                    bool(settings.smtp_host and settings.smtp_from and user.email),
-                    lambda: _send_email(user, item),
-                ),
                 (
                     "wecom",
                     bool(settings.wecom_webhook_url),

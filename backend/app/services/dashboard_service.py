@@ -14,9 +14,9 @@ from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.schedule_repository import schedule_repository
-from app.services import project_service
+from app.services import project_service, overtime_service
 from app.services.visibility_service import dashboard_visibility_scopes
-from app.utils.time import beijing_now
+from app.utils.time import BEIJING_TIMEZONE, beijing_now
 
 
 COUNTED_SCHEDULE_STATUSES = {"confirmed", "running", "completed"}
@@ -114,8 +114,34 @@ def _task_item(row, assignees: dict[int, list[dict]], today: date) -> dict:
     }
 
 
+def _pending_datetime(value: datetime | str | None) -> datetime | None:
+    """Normalize serialized and ORM timestamps to naive Beijing time."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip())
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(BEIJING_TIMEZONE).replace(tzinfo=None)
+    # MySQL DATETIME values without an offset already represent Beijing time.
+    return value
+
+
 def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
     items: list[dict] = []
+    for request in overtime_service.list_requests(db, user, page_size=200, scope="approvals", status="pending")["items"]:
+        items.append({
+            "id": f"overtime-{request['id']}", "source_id": request["id"],
+            "type": "overtime_approval", "type_label": "加班审批",
+            "title": request["task_name"], "project_id": request["project_id"],
+            "project_name": request["project_name"], "task_id": request["task_id"],
+            "applicant_name": request["user_name"],
+            "content": f"申请加班 {request['hours']}h；{request['reason']}",
+            "start_time": request["start_time"], "end_time": request["end_time"],
+            "created_at": request["created_at"], "status": "pending", "actionable": request["can_review"],
+        })
     for project in project_service.list_pending_project_approvals(db, user):
         items.append({
             "id": f"project-{project['id']}",
@@ -175,7 +201,12 @@ def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
             "status": booking["status"],
             "actionable": True,
         })
-    return sorted(items, key=lambda item: item.get("created_at") or now)
+    # Resource requests use model_to_dict (ISO strings); project and booking
+    # repositories retain datetime objects. Normalize the field itself so both
+    # sorting and the overdue-reminder calculation use the same time basis.
+    for item in items:
+        item["created_at"] = _pending_datetime(item.get("created_at"))
+    return sorted(items, key=lambda item: item["created_at"] or now)
 
 
 def dashboard_workbench(db: Session, user: User) -> dict:

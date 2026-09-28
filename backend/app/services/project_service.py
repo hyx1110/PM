@@ -10,6 +10,8 @@ from app.models.execution import ExecutionRecord
 from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember, ProjectResourceRequest
 from app.models.schedule import ScheduleBooking
+from app.models.overtime import OvertimeRequest
+from app.services.overtime_service import assert_no_unrecorded_overtime, unrecorded_overtime_filters
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.project_repository import booked_schedule_predicate, project_repository
@@ -115,6 +117,7 @@ def assert_project_booking_access(
         select(Project)
         .where(Project.id == project_id, Project.is_deleted.is_(False))
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not project:
         raise not_found("project not found")
@@ -599,6 +602,7 @@ def complete_project(db: Session, project_id: int, user: User) -> Project:
     ).with_for_update()).all())
     if not tasks or any(task.status != "completed" for task in tasks):
         raise bad_request("项目至少需要一项任务，且所有任务均已完成才能确认完成")
+    assert_no_unrecorded_overtime(db, project_id=project_id)
     if db.scalar(select(ProjectResourceRequest.id).where(
         ProjectResourceRequest.project_id == project_id,
         ProjectResourceRequest.status == "pending",
@@ -674,6 +678,11 @@ def _assert_member_can_be_removed(
         raise not_found("active project member not found")
     synchronize_schedule_statuses(db)
     dependencies: list[str] = []
+    if db.scalar(select(OvertimeRequest.id).where(
+        OvertimeRequest.project_id == project.id, OvertimeRequest.user_id == member_user_id,
+        *unrecorded_overtime_filters(),
+    ).limit(1)):
+        dependencies.append("待审批或尚未填报的加班申请")
     if db.scalar(
         select(TaskAssignee.id)
         .join(Task, Task.id == TaskAssignee.task_id)

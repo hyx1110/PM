@@ -55,6 +55,7 @@ OBJECT_LABELS = {
     "project": "项目",
     "task": "任务",
     "execution_record": "执行记录",
+    "overtime_request": "加班申请",
     "organization": "组织",
     "department": "部门",
     "schedule": "人力预约",
@@ -97,6 +98,13 @@ FIELD_LABELS = {
     "add_member_ids": "新增成员",
     "remove_member_ids": "移除成员",
     "reason": "申请原因",
+    "overtime_request_id": "关联加班申请",
+    "hours": "申请工时",
+    "approver_id": "审批人",
+    "review_note": "审批说明",
+    "reviewed_by": "实际审批人",
+    "reviewed_at": "审批时间",
+    "withdrawn_at": "撤回时间",
 }
 
 

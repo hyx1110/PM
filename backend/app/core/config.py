@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,12 +20,19 @@ class Settings(BaseSettings):
     import_max_mb: int = Field(default=10, ge=1, le=100)
     import_default_password: str = Field(default="ChangeMe123!", min_length=8)
     redis_url: str = "redis://127.0.0.1:6379/0"
+    smtp_enabled: bool = False
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_from: str | None = None
     smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    smtp_ca_file: str | None = None
+    smtp_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    smtp_max_attempts: int = Field(default=5, ge=1, le=10)
+    smtp_subject_prefix: str = "[项目协同] "
+    public_app_url: str | None = None
     wecom_webhook_url: str | None = None
     dingtalk_webhook_url: str | None = None
     notification_upcoming_hours: int = Field(default=24, ge=1, le=168)
@@ -33,7 +40,18 @@ class Settings(BaseSettings):
     initial_admin_password: str = "ChangeMe123!"
     initial_admin_name: str = "系统管理员"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True)
+
+    @model_validator(mode="after")
+    def validate_mail(self):
+        if self.smtp_enabled:
+            if not self.smtp_host or not self.smtp_from:
+                raise ValueError("启用邮件须配置 SMTP_HOST 和 SMTP_FROM")
+            if self.smtp_use_tls and self.smtp_use_ssl:
+                raise ValueError("SMTP_USE_TLS 与 SMTP_USE_SSL 不能同时开启")
+        if self.public_app_url and not self.public_app_url.startswith(("https://", "http://")):
+            raise ValueError("PUBLIC_APP_URL 必须为 http(s) 地址")
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

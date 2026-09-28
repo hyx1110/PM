@@ -17,6 +17,9 @@ class ExecutionRecord(TimestampMixin, Base):
     actual_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     actual_end: Mapped[date | None] = mapped_column(Date)
     actual_hours: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
+    overtime_request_id: Mapped[int | None] = mapped_column(
+        ForeignKey("overtime_requests.id", ondelete="RESTRICT"), index=True
+    )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="running", index=True)
     description: Mapped[str | None] = mapped_column(Text)
     exception_reason: Mapped[str | None] = mapped_column(Text)

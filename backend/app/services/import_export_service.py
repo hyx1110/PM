@@ -31,6 +31,7 @@ from app.schemas.task import TaskCreate
 from app.schemas.user import UserCreate
 from app.services.operation_log_service import log_operation
 from app.services.notification_service import create_notification
+from app.services.overtime_service import assert_no_unrecorded_overtime
 from app.services.project_service import (
     PROJECT_CREATOR_ROLES,
     _add_initial_project_members,
@@ -368,6 +369,7 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
 
 def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
     project = _required_lookup(db, Project, Project.code, row.get("project_code"), "项目编号不能为空且必须存在")
+    project = db.scalar(select(Project).where(Project.id == project.id).with_for_update().execution_options(populate_existing=True))
     operator_roles = get_role_codes(db, operator.id)
     if not has_global_project_access(db, operator) and project.manager_id != operator.id:
         raise ValueError("任务只能由该项目的项目经理本人导入")
@@ -434,6 +436,7 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         parent = parent_matches[0]
         if parent.status == "completed":
             raise ValueError("不能在已完成的任务下导入子任务")
+        assert_no_unrecorded_overtime(db, task_id=parent.id)
         if db.scalar(
             select(ExecutionRecord.id).where(
                 ExecutionRecord.task_id == parent.id,
@@ -750,10 +753,10 @@ def export_executions(db: Session, user: User, start_date: date, end_date: date,
         .order_by(ExecutionRecord.actual_start)
     ).all()
     values = [
-        [item.id, user_name, code, project_name, task_name, item.actual_start, item.actual_end, float(item.actual_hours), item.status, item.description]
+        [item.id, user_name, code, project_name, task_name, item.actual_start, item.actual_end, float(item.actual_hours), item.status, item.description, "加班" if item.overtime_request_id else "正常工作", item.overtime_request_id]
         for item, user_name, code, project_name, task_name in rows
     ]
-    return _export_book("执行明细", ["执行ID", "人员", "项目编号", "项目", "任务", "实际开始", "实际结束", "实际工时", "状态", "执行说明"], values, {6, 7})
+    return _export_book("执行明细", ["执行ID", "人员", "项目编号", "项目", "任务", "实际开始", "实际结束", "实际工时", "状态", "执行说明", "工时来源", "加班申请ID"], values, {6, 7})
 
 
 def export_process_report(db: Session, user: User, start_date: date, end_date: date, **query) -> bytes:

@@ -9,6 +9,7 @@ from app.api.v1 import (
     lookups,
     notifications,
     operation_logs,
+    overtime,
     organizations,
     personal_time,
     projects,
@@ -40,3 +41,4 @@ api_router.include_router(reports.router)
 api_router.include_router(risks.router)
 api_router.include_router(data_exchange.router)
 api_router.include_router(operation_logs.router)
+api_router.include_router(overtime.router)

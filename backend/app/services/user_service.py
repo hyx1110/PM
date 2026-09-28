@@ -7,6 +7,8 @@ from app.models.organization import Department, Organization
 from app.models.project import Project, ProjectMember
 from app.models.rbac import Role, UserRole
 from app.models.schedule import ScheduleBooking
+from app.models.overtime import OvertimeRequest
+from app.services.overtime_service import unrecorded_overtime_filters
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.rbac_repository import rbac_repository
@@ -124,6 +126,11 @@ def _collect_active_dependencies(
     include_management_relations: bool = False,
 ) -> list[str]:
     dependencies: list[str] = []
+    if db.scalar(select(OvertimeRequest.id).where(
+        (OvertimeRequest.user_id == user_id) | (OvertimeRequest.approver_id == user_id),
+        *unrecorded_overtime_filters(),
+    ).limit(1)):
+        dependencies.append("待审批或尚未填报的加班申请")
     now = beijing_now()
     if db.scalar(
         select(Project.id)

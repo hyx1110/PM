@@ -14,6 +14,7 @@ from app.models.user import User
 from app.repositories.execution_repository import execution_repository
 from app.schemas.execution import EXECUTION_STATUSES, ExecutionCreate, ExecutionUpdate
 from app.services.operation_log_service import log_operation
+from app.services.overtime_service import assert_no_unrecorded_overtime, resolve_execution_hours
 from app.services.status_sync_service import synchronize_task_status
 from app.services.visibility_service import has_global_project_access
 from app.services.work_calendar_service import calculate_workday_hours
@@ -105,7 +106,7 @@ def _assert_scheduled_before_execution(
             ScheduleBooking.status.in_({"confirmed", "running", "completed"}),
             ScheduleBooking.start_time < range_end,
             ScheduleBooking.end_time > range_start,
-        ).limit(1)
+        ).limit(1).with_for_update()
     ):
         raise bad_request("填写执行记录前，执行人必须先在任务共享看板中预约并确认该任务的工作时间")
 
@@ -160,19 +161,17 @@ def create_execution(db: Session, payload: ExecutionCreate, user: User) -> Execu
         raise forbidden("只能填写自己的执行记录")
     if not db.scalar(select(TaskAssignee.id).where(TaskAssignee.task_id == task.id, TaskAssignee.user_id == target_user_id)):
         raise forbidden("执行人员必须是该任务的负责人")
-    _assert_scheduled_before_execution(
-        db,
-        task.id,
-        target_user_id,
-        payload.actual_start,
-        payload.actual_end,
-    )
+    if payload.status == "completed":
+        assert_no_unrecorded_overtime(db, task_id=task.id, exclude_id=payload.overtime_request_id)
+    if payload.overtime_request_id:
+        actual_hours = resolve_execution_hours(db, payload.overtime_request_id, task.id,
+            target_user_id, payload.actual_start, payload.actual_end, payload.actual_hours)
+    else:
+        _assert_scheduled_before_execution(db, task.id, target_user_id, payload.actual_start, payload.actual_end)
+        actual_hours = _resolve_actual_hours(db, payload.actual_start, payload.actual_end, payload.actual_hours)
     # user_id and actual_hours are resolved below. Excluding both prevents
     # passing actual_hours twice when constructing ExecutionRecord.
     values = payload.model_dump(exclude={"user_id", "actual_hours"})
-    actual_hours = _resolve_actual_hours(
-        db, payload.actual_start, payload.actual_end, payload.actual_hours
-    )
     record = ExecutionRecord(**values, user_id=target_user_id, actual_hours=actual_hours)
     db.add(record)
     db.flush()
@@ -209,21 +208,20 @@ def update_execution(db: Session, execution_id: int, payload: ExecutionUpdate, u
         raise bad_request("invalid execution status")
     if status == "completed" and actual_end is None:
         raise bad_request("completed execution must have actual_end")
-    _assert_scheduled_before_execution(
-        db,
-        task.id,
-        record.user_id,
-        actual_start,
-        actual_end,
-    )
     supplied_hours = values.pop("actual_hours", record.actual_hours)
+    if record.overtime_request_id:
+        actual_hours = resolve_execution_hours(db, record.overtime_request_id, task.id,
+            record.user_id, actual_start, actual_end, supplied_hours, exclude_execution_id=record.id)
+    else:
+        _assert_scheduled_before_execution(db, task.id, record.user_id, actual_start, actual_end)
+        actual_hours = _resolve_actual_hours(db, actual_start, actual_end, supplied_hours)
     for key, value in values.items():
         setattr(record, key, value)
-    record.actual_hours = _resolve_actual_hours(
-        db, actual_start, actual_end, supplied_hours
-    )
+    record.actual_hours = actual_hours
     db.flush()
     synchronize_task_status(db, task.id)
+    if task.status == "completed":
+        assert_no_unrecorded_overtime(db, task_id=task.id, exclude_id=record.overtime_request_id)
     log_operation(db, operator_id=user.id, module="execution", action="update", object_type="execution_record", object_id=record.id, before_data=before, after_data=model_to_dict(record))
     db.commit()
     db.refresh(record)
@@ -245,6 +243,8 @@ def delete_execution(db: Session, execution_id: int, user: User) -> None:
     record.is_deleted = True
     db.flush()
     synchronize_task_status(db, task.id)
+    if record.overtime_request_id and task.status == "completed":
+        raise bad_request("删除该加班记录后任务仍为已完成，无法重新填报；请先将最新执行记录调整为进行中")
     log_operation(
         db,
         operator_id=user.id,

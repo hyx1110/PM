@@ -23,6 +23,10 @@ class Notification(TimestampMixin, Base):
     delivered_channels: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="unread", index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime)
+    email_status: Mapped[str] = mapped_column(String(20), nullable=False, default="skipped", index=True)
+    email_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    email_last_error: Mapped[str | None] = mapped_column(String(255))
+    email_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, index=True
     )

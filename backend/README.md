@@ -4,6 +4,11 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 
 ## 主要模块
 
+- `app/services/overtime_service.py` 与 `app/api/v1/overtime.py`：非工作时间加班申请、项目经理/部门主管审批、撤回和实际工时凭证；普通成员由项目经理审批，项目经理为自己负责项目申请时由项目所属部门主管审批。
+- `app/services/email_service.py`：SMTP 总开关、STARTTLS/隐式 TLS、可信公司 CA、异步投递和有限次数重试；默认关闭，无邮箱/未启用不影响站内业务。
+- `alembic/versions/20260928_0017_overtime_and_email.py`：新增加班表、执行记录的加班关联及通知邮件投递状态；升级前先备份，由维护者执行迁移。
+- 新功能使用说明：[加班流程](../docs/OVERTIME.md)、[公司邮箱接入](../docs/EMAIL_SETUP.md)。加班入口使用已有执行权限，无须重新初始化角色。新测试源码仅供维护者自行运行，此次未运行任何测试或服务。
+
 - `app/api/v1`：认证、基础主数据、项目/任务/排期/执行，以及 V2 风险、通知、数据交换和分析接口。
 - `app/services/risk_service.py`：风险发现、指纹去重、数据范围和处理闭环。
 - `app/services/notification_service.py`：站内信与邮件/机器人投递；通知偏好接口已移除。
@@ -73,7 +78,8 @@ python -m scripts.init_data
 - 项目经理、L4、L3 或超级管理员可创建项目，项目编号自动生成；普通创建人提交时由 `users.supervisor_id` 对应的有效直属主管审批，L3/超级管理员创建时自动通过。
 - 创建项目必须指定至少一名普通成员；项目经理自动作为 `manager` 固定成员写入 `project_members` 且不能移除。项目获批后才能继续添加成员、创建任务和预约人力。
 - 额度不足由项目经理创建 `project_hour_requests`，仍由项目所属部门当前 L3 审批。
-- 新预约直接为 `pending`，仅 `user_id` 对应本人可确认或拒绝；原提交人可在确认前撤回为 `withdrawn`。
+- 预约他人直接为 `pending`，预约本人自动 `confirmed`；被预约人本人（或超级管理员）可确认/拒绝。待确认预约由提交人撤回；本人已确认、尚未开始且无相关普通执行记录的预约也可撤回为 `withdrawn`，同时通知申请人。
+- 待确认与已确认预约均计入项目/任务额度。批量预约按单人工时乘人数整体校验，额度不足不创建任何记录；更新、拖动和确认均排除自身原记录后重新校验。人员时段冲突依旧只计算已确认/进行中预约和个人安排，不能混用两种统计口径。
 - 已确认预约到达开始时间后自动变为 `running`，到达结束时间后自动变为 `completed`；超过结束时间仍未确认的预约自动变为 `cancelled`。Celery 每 5 分钟推进一次，共享看板和预约待办读取时也会即时校正。
 - 每个登录用户可创建自己的 `training/meeting/leave/out_of_office/business_trip/other` 个人时间安排，且只有本人可撤回；生效中的个人安排与项目预约互斥。
 - 日程可见范围为：超级管理员/L3 全量，L4 为本人及全部层级下属，项目经理为本人和自己负责项目的有效成员，普通成员为本人；多角色按范围并集处理。
@@ -91,3 +97,11 @@ python -m scripts.init_data
 ## 测试说明
 
 本次 V2.0 文件交付没有安装依赖、执行迁移或运行测试。维护者配置独立测试数据库后，可自行运行 `pytest`，并按照根目录 `docs/V2_SCOPE.md` 增补/执行 V2 验收。
+
+## 2026-09-28：首页待办时间类型修复
+
+- 现象：部门主管同时拥有项目审批、项目资源审批或预约确认待办时，首页可能返回 500，报错 `TypeError: '<' not supported between instances of 'str' and 'datetime.datetime'`。
+- 原因：项目资源申请通过 `model_to_dict` 将 `created_at` 序列化为 ISO 字符串，项目和预约查询则保留 `datetime`，首页直接混合排序导致异常。
+- 修复：首页待办聚合时统一转换为北京时间的无时区 `datetime`，兼容 ISO 字符串、UTC/带偏移的时间及已有数据库时间；缺失或无效时间保持为空，仅在排序时使用当前时间兜底。超过 24 小时的提醒也使用同一规范化字段，避免资源审批漏判。
+- 交付：仅修改后端代码及文档，无数据库结构变更，无需执行迁移或初始化脚本。部署更新后由维护者重启后端，再使用同时有多类待办的部门主管账号检查首页。
+- 新增 `tests/test_dashboard_pending_items.py`，覆盖混合来源排序、时区转换、缺失/异常时间、过期预约过滤及空列表。测试使用替身数据源，不连接数据库；本次未执行测试，维护者可在后端目录自行运行 `python -m pytest tests/test_dashboard_pending_items.py`。

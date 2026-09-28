@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import bad_request, conflict, forbidden, not_found
 from app.models.execution import ExecutionRecord
+from app.models.overtime import OvertimeRequest
+from app.services.overtime_service import assert_no_unrecorded_overtime, unrecorded_overtime_filters
 from app.models.project import Project, ProjectMember
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
@@ -123,12 +125,12 @@ def list_my_tasks(
 
 
 def _active_booking_hours(db: Session, task_id: int) -> Decimal:
-    return db.scalar(
-        select(func.coalesce(func.sum(ScheduleBooking.planned_hours), 0)).where(
+    return sum(db.scalars(
+        select(ScheduleBooking.planned_hours).where(
             ScheduleBooking.task_id == task_id,
             booked_schedule_predicate(),
-        )
-    ) or Decimal("0")
+        ).with_for_update()
+    ).all(), Decimal("0"))
 
 
 def task_detail(db: Session, task_id: int, user: User) -> dict:
@@ -168,6 +170,8 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
         raise bad_request("parent task must belong to the same project")
     if parent.status == "completed":
         raise bad_request("不能在已完成的任务下新增或移动子任务")
+    if parent_id != (task_repository.get(db, current_task_id).parent_id if current_task_id else None):
+        assert_no_unrecorded_overtime(db, task_id=parent.id)
     # A running task may gain child tasks. Existing parent execution and
     # booking history remains attached to the parent for audit and reporting;
     # subsequent progress is rolled up from the new child hierarchy.
@@ -271,6 +275,7 @@ def _validate_task_window(
 
 
 def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
+    db.scalar(select(Project).where(Project.id == payload.project_id).with_for_update().execution_options(populate_existing=True))
     assert_project_manageable(db, payload.project_id, user)
     assert_project_approved(db, payload.project_id)
     owner_ids = _validate_owners(db, payload.project_id, payload.owner_ids)
@@ -317,7 +322,10 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
     task = task_repository.get(db, task_id)
     if not task:
         raise not_found("task not found")
-    project = db.get(Project, task.project_id)
+    project = db.scalar(select(Project).where(Project.id == task.project_id).with_for_update().execution_options(populate_existing=True))
+    db.refresh(task)
+    if task.is_deleted:
+        raise not_found("task not found")
     can_manage = bool(project and (project.manager_id == user.id or has_global_project_access(db, user)))
     values = payload.model_dump(exclude_unset=True)
     if not can_manage:
@@ -360,6 +368,13 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
         raise bad_request("已有有效预约记录的任务不能再作为汇总任务")
     planned_start = values.get("planned_start", task.planned_start)
     planned_end = values.get("planned_end", task.planned_end)
+    if db.scalar(select(OvertimeRequest.id).where(
+        OvertimeRequest.task_id == task.id, *unrecorded_overtime_filters(),
+        or_(OvertimeRequest.user_id.notin_(normalized_owner_ids),
+            OvertimeRequest.start_time < datetime.combine(planned_start, time.min),
+            OvertimeRequest.end_time > datetime.combine(planned_end + timedelta(days=1), time.min)),
+    ).limit(1).with_for_update()):
+        raise bad_request("任务成员或计划日期的修改会影响未处理的加班申请，请先填报、驳回或撤回申请")
     if planned_end < planned_start:
         raise bad_request("planned_end must be on or after planned_start")
     _validate_task_window(
@@ -445,10 +460,15 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
     task = task_repository.get(db, task_id)
     if not task:
         raise not_found("task not found")
+    db.scalar(select(Project).where(Project.id == task.project_id).with_for_update().execution_options(populate_existing=True))
+    db.refresh(task)
+    if task.is_deleted:
+        raise not_found("task not found")
     assert_project_manageable(db, task.project_id, user)
     assert_project_approved(db, task.project_id)
     if task.status != "not_started":
         raise bad_request("only not-started tasks can be deleted")
+    assert_no_unrecorded_overtime(db, task_id=task.id)
     if db.scalar(
         select(Task.id)
         .where(Task.parent_id == task_id, Task.is_deleted.is_(False))
