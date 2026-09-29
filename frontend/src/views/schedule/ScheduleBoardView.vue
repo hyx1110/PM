@@ -43,6 +43,8 @@ import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
 import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
 import { resolvePersonnelScopeUserIds } from '@/utils/personnel-scope'
+import TaskBookingSummary from '@/components/schedule/TaskBookingSummary.vue'
+import { remainingTaskHours, withinTaskDates } from '@/utils/schedule-quota'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -66,6 +68,8 @@ const filter = reactive({
   project_id: undefined as number | undefined,
 })
 const bookingDialog = ref(false)
+const bookingSaving = ref(false)
+const withdrawingId = ref<number>()
 const detailDialog = ref(false)
 const personalDialog = ref(false)
 const personalDetailDialog = ref(false)
@@ -75,6 +79,8 @@ const conflictDialog = ref(false)
 const batchDialog = ref(false)
 const batchSaving = ref(false)
 const batchUsers = ref<UserOption[]>([])
+const batchUsersLoading = ref(false)
+let batchMemberRequest = 0
 const selected = ref<Schedule>()
 const selectedPersonalBlock = ref<PersonalTimeBlock>()
 const personalInitialSlot = ref<{ date: string; time: string }>()
@@ -251,6 +257,8 @@ const batchTasks = computed(() =>
       || item.owner_ids.includes(userStore.profile?.id || -1)
   }),
 )
+const batchSelectedTask = computed(() => batchTasks.value.find((item) => item.id === batchForm.task_id))
+const batchTaskRemaining = computed(() => remainingTaskHours(batchSelectedTask.value))
 
 function canBookUserForProject(item: UserOption, project?: Project) {
   if (!project) return false
@@ -265,17 +273,34 @@ function canBookUserForProject(item: UserOption, project?: Project) {
 }
 
 async function loadBatchUsers(projectId: number) {
-  const members = await getProjectMembers(projectId)
-  const ids = new Set(members.map((item) => item.user_id))
-  const project = bookableProjects.value.find((item) => item.id === projectId)
-  batchUsers.value = users.value.filter(
-    (item) => ids.has(item.id) && canBookUserForProject(item, project),
-  )
-  batchForm.user_ids = batchForm.user_ids.filter((id) => ids.has(id))
+  const request = ++batchMemberRequest
+  const taskId = batchForm.task_id
+  batchUsers.value = []
+  batchForm.user_ids = []
+  batchUsersLoading.value = false
+  if (!projectId || !batchSelectedTask.value) return
+  batchUsersLoading.value = true
+  try {
+    const members = await getProjectMembers(projectId)
+    if (request !== batchMemberRequest || projectId !== batchForm.project_id || taskId !== batchForm.task_id) return
+    const ids = new Set(members.map((item) => item.user_id))
+    const ownerIds = new Set(batchSelectedTask.value?.owner_ids || [])
+    const project = bookableProjects.value.find((item) => item.id === projectId)
+    batchUsers.value = users.value.filter((item) => ids.has(item.id)
+      && ownerIds.has(item.id) && canBookUserForProject(item, project))
+  } catch {
+    // Do not retain selections from the previous task when loading fails.
+  } finally {
+    if (request === batchMemberRequest) batchUsersLoading.value = false
+  }
 }
 async function changeBatchProject(projectId: number) {
-  batchForm.task_id = batchTasks.value[0]?.id || 0
+  batchForm.task_id = 0
   await loadBatchUsers(projectId)
+}
+async function changeBatchTask() {
+  if (batchSelectedTask.value && !withinTaskDates(batchForm.work_date, batchSelectedTask.value)) batchForm.work_date = ''
+  await loadBatchUsers(batchForm.project_id)
 }
 const batchStartOptions = computed(() =>
   batchForm.session === 'morning'
@@ -312,13 +337,15 @@ const canEdit = computed(
     && canMoveSchedule(selected.value)
     && bookableProjects.value.some((item) => item.id === selected.value?.project_id),
 )
-const canWithdraw = computed(
-  () =>
-    userStore.hasPermission('schedule:edit')
-    && selected.value
-    && ['pending', 'changed'].includes(selected.value.status)
-    && selected.value.created_by === userStore.profile?.id,
-)
+function canWithdrawBooking(item: Schedule) {
+  if (!userStore.hasPermission('schedule:edit')) return false
+  if (['pending', 'changed'].includes(item.status)) {
+    return item.created_by === userStore.profile?.id || canManageAllSchedules.value
+  }
+  return item.status === 'confirmed' && item.user_id === userStore.profile?.id
+    && dayjs(item.start_time).format('YYYY-MM-DD HH:mm:ss') > beijingNow().format('YYYY-MM-DD HH:mm:ss')
+}
+const canWithdraw = computed(() => selected.value && canWithdrawBooking(selected.value))
 const canDelete = computed(
   () =>
     selected.value
@@ -370,6 +397,7 @@ async function loadVisibleCalendars() {
 function disabledBatchDate(value: Date) {
   const date = dayjs(value).format('YYYY-MM-DD')
   if (date < beijingNow().format('YYYY-MM-DD')) return true
+  if (batchSelectedTask.value && !withinTaskDates(date, batchSelectedTask.value)) return true
   const override = calendarDays.value.find((item) => item.work_date === date)
   if (override) return override.day_type === 'holiday'
   return [0, 6].includes(dayjs(value).day())
@@ -694,6 +722,8 @@ function showConflict(error: unknown) {
 }
 
 async function save(payload: SchedulePayload) {
+  if (bookingSaving.value) return
+  bookingSaving.value = true
   try {
     let result: Schedule
     if (selected.value) {
@@ -709,6 +739,8 @@ async function save(payload: SchedulePayload) {
     await load()
   } catch (error) {
     showConflict(error)
+  } finally {
+    bookingSaving.value = false
   }
 }
 
@@ -717,6 +749,7 @@ async function confirm() {
   await confirmSchedule(selected.value.id)
   ElMessage.success('预约已确认')
   detailDialog.value = false
+  await loadOptions()
   await load()
 }
 
@@ -733,16 +766,28 @@ async function reject() {
   await load()
 }
 
-async function withdraw() {
-  if (!selected.value) return
-  await ElMessageBox.confirm('对方尚未确认，确定撤回这条预约吗？', '撤回预约', {
-    type: 'warning',
-  })
-  await withdrawSchedule(selected.value.id)
-  ElMessage.success('预约已撤回，项目工时额度已释放')
-  detailDialog.value = false
-  await loadOptions()
-  await load()
+async function withdraw(item?: Schedule) {
+  const target = item || selected.value
+  if (!target || !canWithdrawBooking(target) || withdrawingId.value) return
+  withdrawingId.value = target.id
+  try {
+    await ElMessageBox.confirm(target.status === 'confirmed'
+      ? '撤回这条本人已确认的预约吗？将释放该时段及任务、项目工时额度，并通知预约发起人。已开始或已有相关执行记录的预约不能撤回。'
+      : '确定撤回这条待确认预约吗？撤回后将释放任务和项目工时额度。', '撤回预约', {
+      type: 'warning', confirmButtonText: '确认撤回', cancelButtonText: '暂不撤回',
+    })
+    await withdrawSchedule(target.id)
+    ElMessage.success('预约已撤回，任务和项目工时额度已释放')
+    detailDialog.value = false
+    selected.value = undefined
+    await loadOptions()
+    await load()
+    if (personDrawer.value) await loadPersonSchedules()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') showConflict(error)
+  } finally {
+    withdrawingId.value = undefined
+  }
 }
 
 async function remove() {
@@ -842,7 +887,7 @@ async function openBatch() {
   if (!slot) return ElMessage.warning('未找到可预约的工作时段，请检查工作日历配置')
   Object.assign(batchForm, {
     user_ids: [],
-    project_id: bookableProjects.value[0].id,
+    project_id: 0,
     task_id: 0,
     work_date: slot.date,
     session: slot.time < '12:00' ? 'morning' : 'afternoon',
@@ -850,20 +895,31 @@ async function openBatch() {
     end_clock: dayjs(`2000-01-01 ${slot.time}`).add(60, 'minute').format('HH:mm'),
     remark: '',
   })
-  batchForm.task_id = batchTasks.value[0]?.id || 0
   await loadBatchUsers(batchForm.project_id)
   await loadCalendar(dayjs(batchForm.work_date).year())
   batchDialog.value = true
 }
 
 async function saveBatch() {
+  if (batchSaving.value || batchUsersLoading.value) return
   if (!batchForm.user_ids.length || !batchForm.project_id || !batchForm.task_id) {
-    return ElMessage.warning('请选择人员、项目和任务')
+    return ElMessage.warning('请依次选择项目、任务和任务成员')
   }
-  await loadCalendar(dayjs(batchForm.work_date).year())
+  if (!batchForm.user_ids.every((id) => batchUsers.value.some((item) => item.id === id))) {
+    return ElMessage.warning('只能选择当前任务已指定的有效项目成员，请重新选择')
+  }
+  if (!withinTaskDates(batchForm.work_date, batchSelectedTask.value)) {
+    return ElMessage.warning('预约日期必须位于任务计划起止日期内')
+  }
+  try { await loadCalendar(dayjs(batchForm.work_date).year()) } catch { return }
+  if (batchSaving.value) return
   if (!batchDateIsWorkday()) return ElMessage.warning('只能预约工作日，法定节假日不能预约')
   if (`${batchForm.work_date} ${batchForm.start_clock}` <= beijingNow().format('YYYY-MM-DD HH:mm')) {
     return ElMessage.warning('不能预约已经开始或已经过去的时间段，请选择当前北京时间之后的时间')
+  }
+  if (batchHours.value <= 0 || !batchEndOptions.value.includes(batchForm.end_clock)) return ElMessage.warning('请选择有效的预约时段')
+  if (batchHours.value * batchForm.user_ids.length > batchTaskRemaining.value) {
+    return ElMessage.warning(`本次共需 ${batchHours.value * batchForm.user_ids.length}h，任务剩余可预约 ${batchTaskRemaining.value}h；待确认预约也占用额度`)
   }
   const remaining = bookableProjects.value.find((item) => item.id === batchForm.project_id)?.remaining_hours
   if (remaining !== undefined && batchHours.value * batchForm.user_ids.length > remaining) {
@@ -900,11 +956,12 @@ watch(
     batchForm.start_clock = session === 'morning' ? '08:30' : '13:00'
     batchForm.end_clock = session === 'morning' ? '09:30' : '14:00'
   },
+  { flush: 'sync' },
 )
 watch(
   () => batchForm.work_date,
   (value) => {
-    if (value) loadCalendar(dayjs(value).year())
+    if (value) void loadCalendar(dayjs(value).year()).catch(() => {})
   },
 )
 watch(
@@ -930,6 +987,7 @@ onMounted(async () => {
         <p class="page-subtitle">每个人都可安排自己的培训、会议、休假、外出或其他时间；个人占用时段不可预约。项目负责人预约本人项目工时自动确认，预约他人仍由被预约人审批。</p>
       </div>
       <div class="header-actions">
+        <el-button v-if="userStore.profile" @click="openPersonSchedules({userId:userStore.profile.id,userName:'我'})">我的项目预约</el-button>
         <el-button @click="openMyTimeDrawer">我的时间安排</el-button>
         <template v-if="canBook"><el-button @click="openBatch">批量预约</el-button><el-button type="primary" @click="openBookingButton">预约人力</el-button></template>
       </div>
@@ -1001,7 +1059,7 @@ onMounted(async () => {
         </div>
       </div>
     </section>
-    <ScheduleBookingDialog v-model="bookingDialog" :initial="selected" :slot="initialSlot" :projects="bookableProjects" :tasks="tasks" :users="users" @save="save"/>
+    <ScheduleBookingDialog v-model="bookingDialog" :initial="selected" :slot="initialSlot" :projects="bookableProjects" :tasks="tasks" :users="users" :saving="bookingSaving" @save="save"/>
     <ScheduleConflictDialog v-model="conflictDialog" :conflicts="conflicts"/>
     <PersonalTimeDialog v-model="personalDialog" :slot="personalInitialSlot" @save="savePersonalTime"/>
 
@@ -1037,7 +1095,7 @@ onMounted(async () => {
         <el-table-column prop="task_name" label="任务" min-width="140" show-overflow-tooltip/>
         <el-table-column label="工时" width="70"><template #default="{row}">{{ row.planned_hours }}h</template></el-table-column>
         <el-table-column label="状态及原因" min-width="170"><template #default="{row}"><div class="status-with-reason"><el-tag :type="statusTagType[row.status] || 'info'" effect="plain">{{ statusLabel[row.status] || row.status }}</el-tag><small v-if="row.rejection_reason">{{ row.rejection_reason }}</small></div></template></el-table-column>
-        <el-table-column label="操作" width="70"><template #default="{row}"><el-button link type="primary" @click="openPersonScheduleDetail(row)">详情</el-button></template></el-table-column>
+        <el-table-column label="操作" width="120" fixed="right"><template #default="{row}"><el-button link type="primary" @click="openPersonScheduleDetail(row)">详情</el-button><el-button v-if="canWithdrawBooking(row)" link type="warning" :loading="withdrawingId===row.id" :disabled="Boolean(withdrawingId)" @click="withdraw(row)">撤回</el-button></template></el-table-column>
       </el-table>
       <el-empty v-if="!personLoading&&!personSchedules.length" description="该人员暂无符合条件的项目时间安排"/>
       <div v-if="personTotal" class="person-pagination"><el-pagination v-model:current-page="personQuery.page" :page-size="personQuery.page_size" layout="total, prev, pager, next" :total="personTotal" @current-change="loadPersonSchedules"/></div>
@@ -1057,12 +1115,15 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog v-model="batchDialog" title="批量提交人力预约" width="640px">
-      <el-alert title="项目负责人预约本人时自动确认，其余人员分别审批；总占用工时 = 单人工时 × 人数。" type="info" :closable="false" show-icon/>
+      <el-alert title="先选项目与任务，再选任务成员。总占用工时 = 单人工时 × 人数；待确认预约也预占任务及项目额度。本人预约自动确认，其他人员各自确认。" type="info" :closable="false" show-icon/>
       <el-form label-position="top">
-        <el-form-item label="预约人员" required><el-select v-model="batchForm.user_ids" multiple filterable collapse-tags placeholder="可选择多位项目成员" style="width:100%"><el-option v-for="item in batchUsers" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
         <div class="form-grid">
-          <el-form-item label="项目" required><el-select v-model="batchForm.project_id" filterable style="width:100%" @change="changeBatchProject"><el-option v-for="item in bookableProjects" :key="item.id" :label="`${item.name}（剩余 ${item.remaining_hours}h）`" :value="item.id"/></el-select></el-form-item>
-          <el-form-item label="任务" required><el-select v-model="batchForm.task_id" filterable style="width:100%"><el-option v-for="item in batchTasks" :key="item.id" :label="`${item.name}（计划工时 ${item.estimated_hours}h）`" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="项目" required><el-select :model-value="batchForm.project_id || undefined" placeholder="先选择项目" filterable style="width:100%" @update:model-value="batchForm.project_id=$event" @change="changeBatchProject"><el-option v-for="item in bookableProjects" :key="item.id" :label="`${item.name}（剩余 ${item.remaining_hours}h）`" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="任务" required><el-select :model-value="batchForm.task_id || undefined" placeholder="再选择任务" :disabled="!batchForm.project_id" filterable style="width:100%" @update:model-value="batchForm.task_id=$event" @change="changeBatchTask"><el-option v-for="item in batchTasks" :key="item.id" :label="`${item.name}（计划工时 ${item.estimated_hours}h）`" :value="item.id"/></el-select></el-form-item>
+        </div>
+        <TaskBookingSummary v-if="batchSelectedTask" :task="batchSelectedTask" :remaining-hours="batchTaskRemaining"/>
+        <el-form-item label="预约人员" required><el-select v-model="batchForm.user_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="仅可选择所选任务的指定成员" :disabled="!batchForm.task_id || batchUsersLoading" :loading="batchUsersLoading" style="width:100%"><el-option v-for="item in batchUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
+        <div class="form-grid">
           <el-form-item label="工作日期"><el-date-picker v-model="batchForm.work_date" type="date" value-format="YYYY-MM-DD" :disabled-date="disabledBatchDate" style="width:100%"/></el-form-item>
           <el-form-item label="工作时段"><el-radio-group v-model="batchForm.session"><el-radio-button value="morning">上午</el-radio-button><el-radio-button value="afternoon">下午</el-radio-button></el-radio-group></el-form-item>
           <el-form-item label="开始时间"><el-select v-model="batchForm.start_clock" style="width:100%"><el-option v-for="item in batchStartOptions" :key="item" :label="item" :value="item"/></el-select></el-form-item>
@@ -1071,7 +1132,7 @@ onMounted(async () => {
         <el-form-item label="自动计算"><el-input :model-value="`单人 ${batchHours}h，共 ${batchHours*batchForm.user_ids.length}h`" disabled/></el-form-item>
         <el-form-item label="备注"><el-input v-model="batchForm.remark" type="textarea" :rows="2"/></el-form-item>
       </el-form>
-      <template #footer><el-button @click="batchDialog=false">取消</el-button><el-button type="primary" :loading="batchSaving" @click="saveBatch">预约</el-button></template>
+      <template #footer><el-button @click="batchDialog=false">取消</el-button><el-button type="primary" :loading="batchSaving" :disabled="batchUsersLoading" @click="saveBatch">预约</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="detailDialog" title="预约详情" width="600px">
@@ -1086,12 +1147,12 @@ onMounted(async () => {
         <el-descriptions-item label="版本">v{{ selected.version }}</el-descriptions-item>
         <el-descriptions-item label="审批规则" :span="2">{{ selected.created_by===selected.user_id && selected.status==='confirmed' ? '项目负责人预约本人项目工时，系统已自动确认' : `仅 ${selected.user_name} 本人可以同意或拒绝` }}</el-descriptions-item>
         <el-descriptions-item label="备注" :span="2">{{ selected.remark || '—' }}</el-descriptions-item>
-        <el-descriptions-item v-if="selected.rejection_reason" label="拒绝/取消原因" :span="2">{{ selected.rejection_reason }}</el-descriptions-item>
+        <el-descriptions-item v-if="selected.rejection_reason" label="处理说明" :span="2">{{ selected.rejection_reason }}</el-descriptions-item>
       </el-descriptions>
       <template #footer>
         <el-button v-if="canEdit" @click="openEdit">编辑</el-button>
         <el-button v-if="canDelete" type="danger" plain @click="remove">删除</el-button>
-        <el-button v-if="canWithdraw" type="warning" plain @click="withdraw">撤回预约</el-button>
+        <el-button v-if="canWithdraw" type="warning" plain :loading="Boolean(withdrawingId)" @click="withdraw()">{{ selected?.status==='confirmed' ? '撤回本人已确认预约' : '撤回预约' }}</el-button>
         <el-button v-if="canDecide" type="danger" plain @click="reject">本人拒绝</el-button>
         <el-button v-if="canDecide" type="success" @click="confirm">本人同意</el-button>
       </template>

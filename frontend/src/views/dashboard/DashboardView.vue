@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { approveProject, approveProjectResourceRequest, rejectProject, rejectProjectResourceRequest } from '@/api/project'
 import { confirmSchedule, rejectSchedule } from '@/api/schedule'
+import { approveOvertime, rejectOvertime } from '@/api/overtime'
 import { getDashboardWorkbench } from '@/api/report'
 import DashboardOverviewStats from '@/components/dashboard/DashboardOverviewStats.vue'
 import DashboardProjectTimeline from '@/components/dashboard/DashboardProjectTimeline.vue'
@@ -102,6 +103,7 @@ async function approvePending(item: DashboardPendingItem) {
   try {
     if (item.type === 'project_approval') await approveProject(item.source_id)
     else if (item.type === 'resource_approval') await approveProjectResourceRequest(item.project_id, item.source_id)
+    else if (item.type === 'overtime_approval') await approveOvertime(item.source_id)
     else await confirmSchedule(item.source_id)
     ElMessage.success(item.type === 'booking' ? '预约已确认' : '审批已通过')
     pendingDrawerVisible.value = false
@@ -130,6 +132,7 @@ async function rejectPendingItem(item: DashboardPendingItem) {
   try {
     if (item.type === 'project_approval') await rejectProject(item.source_id, reason)
     else if (item.type === 'resource_approval') await rejectProjectResourceRequest(item.project_id, item.source_id, reason)
+    else if (item.type === 'overtime_approval') await rejectOvertime(item.source_id, reason)
     else await rejectSchedule(item.source_id, reason)
     ElMessage.success(item.type === 'booking' ? '预约已拒绝' : '申请已驳回')
     pendingDrawerVisible.value = false
@@ -145,22 +148,23 @@ onMounted(() => { void loadDashboard() })
 <template>
   <div class="page-shell dashboard-page">
     <header class="page-header dashboard-header">
-      <div class="dashboard-heading"><span class="page-kicker">WORKSPACE OVERVIEW</span><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{userStore.profile?.name}}，这里汇总你权限范围内的项目进度、任务执行和待处理事项。</p></div>
+      <div class="dashboard-heading"><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{userStore.profile?.name}}，先看待办与项目进展，再查看执行情况。</p></div>
       <div v-if="dashboard" class="scope-meta"><i></i><div><span>{{dashboard.scope_label}}</span><small>数据更新于 {{formatDateTime(dashboard.generated_at)}}</small></div></div>
     </header>
 
     <template v-if="dashboard">
       <DashboardOverviewStats :overview="dashboard.overview" :pending-items="dashboard.pending_items" :tasks="dashboard.my_tasks" @open="openOverview" @pending="openPending" @task="openTask" />
 
-      <section class="progress-grid">
-        <DashboardProjectTimeline :projects="dashboard.timeline" @task="openTask" @project="openProject" />
+      <DashboardProjectTimeline :projects="dashboard.timeline" @task="openTask" @project="openProject" />
+
+      <section class="detail-grid" aria-label="执行对比与关注事项">
         <DashboardTaskExecutionCompare :items="dashboard.execution_comparison" @task="openTask" />
+        <div id="dashboard-risks"><DashboardRiskAlerts :items="dashboard.risk_alerts" @select="openRisk" /></div>
       </section>
 
-      <section class="analysis-grid">
+      <section class="detail-grid" aria-label="工时趋势与项目健康度">
         <DashboardWorkhourTrend :items="dashboard.workhour_trend" />
         <DashboardProjectHealth :items="dashboard.project_health" @project="openProject" />
-        <div id="dashboard-risks"><DashboardRiskAlerts :items="dashboard.risk_alerts" @select="openRisk" /></div>
       </section>
     </template>
 
@@ -174,5 +178,33 @@ onMounted(() => { void loadDashboard() })
 </template>
 
 <style scoped>
-.dashboard-page{gap:16px}.dashboard-page :deep(.surface){border-color:#e1e7ed;border-radius:15px;box-shadow:0 10px 30px rgba(38,53,70,.055)}.dashboard-header{align-items:flex-end;padding:2px 1px 0}.dashboard-header .page-title{color:#172235;font-size:25px;font-weight:680;letter-spacing:-.025em}.dashboard-header .page-subtitle{margin-top:7px;color:#728094;font-size:12px}.dashboard-heading{min-width:0}.page-kicker{display:block;margin-bottom:6px;color:#6c88a4;font-size:9px;font-weight:750;letter-spacing:.16em}.scope-meta{display:flex;align-items:center;gap:10px;border:1px solid #e1e7ed;border-radius:12px;background:rgba(255,255,255,.76);padding:9px 12px;box-shadow:0 5px 18px rgba(45,61,80,.035)}.scope-meta>i{width:7px;height:7px;border-radius:50%;background:#4f846f;box-shadow:0 0 0 4px #edf6f2}.scope-meta>div{display:flex;flex-direction:column;align-items:flex-end}.scope-meta span{color:#4d5d70;font-size:11px;font-weight:650}.scope-meta small{margin-top:3px;color:#939eab;font-size:9px}.progress-grid{display:grid;grid-template-columns:minmax(0,1.72fr) minmax(315px,.7fr);gap:16px;align-items:stretch}.progress-grid>*{height:100%}.analysis-grid{display:grid;grid-template-columns:minmax(0,1.36fr) minmax(280px,.72fr) minmax(280px,.72fr);gap:16px;align-items:stretch}.analysis-grid>div,.analysis-grid>*{min-width:0;height:100%}.dashboard-state{display:flex;min-height:280px;flex-direction:column;align-items:center;justify-content:center}.dashboard-state h2{margin:0;color:#344256;font-size:17px}.dashboard-state p{margin:8px 0 18px;color:#8b96a4;font-size:11px}.dashboard-skeleton{display:grid;min-height:520px;grid-template-columns:repeat(4,1fr);gap:16px}.skeleton-card{min-height:110px;background:linear-gradient(100deg,#fff 20%,#f7f9fb 50%,#fff 80%);background-size:240% 100%;animation:skeleton 1.6s ease infinite}.skeleton-card:nth-child(n+5){grid-column:span 2;min-height:180px}@keyframes skeleton{to{background-position:-240% 0}}@media(max-width:1500px){.progress-grid{grid-template-columns:minmax(0,1.45fr) minmax(300px,.7fr)}.analysis-grid{grid-template-columns:1fr 1fr}.analysis-grid>:first-child{grid-column:1/-1}}@media(max-width:1180px){.progress-grid,.analysis-grid{grid-template-columns:1fr}.analysis-grid>:first-child{grid-column:auto}.dashboard-skeleton{grid-template-columns:repeat(2,1fr)}}
+.dashboard-page { min-width: 0; gap: 24px; font-size: 14px; line-height: 1.6; }
+.dashboard-page :deep(.surface) { border-color: #e1e7ed; border-radius: 16px; box-shadow: 0 4px 18px rgba(38,53,70,.035); }
+.dashboard-header { align-items: center; padding: 4px 0 2px; }
+.dashboard-header .page-title { color: #172235; font-size: 28px; font-weight: 680; letter-spacing: -.025em; }
+.dashboard-header .page-subtitle { margin-top: 8px; color: #65758a; font-size: 14px; line-height: 1.6; }
+.dashboard-heading { min-width: 0; }
+.scope-meta { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid #e1e7ed; border-radius: 12px; background: rgba(255,255,255,.8); }
+.scope-meta > i { width: 8px; height: 8px; border-radius: 50%; background: #4f846f; }
+.scope-meta > div { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.scope-meta span { color: #4d5d70; font-size: 14px; font-weight: 600; }
+.scope-meta small { color: #758397; font-size: 12px; }
+.detail-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; align-items: start; }
+.detail-grid > * { min-width: 0; }
+#dashboard-risks { scroll-margin-top: 90px; }
+.dashboard-state { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; }
+.dashboard-state h2 { margin: 0; color: #344256; font-size: 20px; }
+.dashboard-state p { margin: 12px 0 20px; color: #718095; font-size: 14px; }
+.dashboard-skeleton { display: grid; min-height: 640px; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 24px; }
+.skeleton-card { min-height: 116px; background: #f8fafc; }
+.skeleton-card:nth-child(5) { grid-column: 1/-1; min-height: 280px; }
+.skeleton-card:nth-child(n+6) { grid-column: span 2; min-height: 200px; }
+@media(max-width:1440px) {
+  .dashboard-page { gap: 20px; }
+  .detail-grid { grid-template-columns: minmax(0,1fr); gap: 20px; }
+  .dashboard-header { flex-wrap: wrap; }
+}
+@media(max-width:1280px) {
+  .dashboard-skeleton { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+}
 </style>

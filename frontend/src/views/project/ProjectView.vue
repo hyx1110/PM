@@ -354,7 +354,7 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column label="项目工时" width="150">
-          <template #default="{row}">{{ row.booked_hours }} / {{ row.budget_hours }}h</template>
+          <template #default="{row}"><el-tooltip content="已占用工时 / 项目总工时；已占用包含待确认预约"><span>{{ row.booked_hours }} / {{ row.budget_hours }}h</span></el-tooltip></template>
         </el-table-column>
         <el-table-column label="资源申请" width="115">
           <template #default="{row}">

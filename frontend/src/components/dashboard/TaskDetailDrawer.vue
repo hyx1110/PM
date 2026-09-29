@@ -15,7 +15,7 @@ const varianceText = computed(() => {
 </script>
 
 <template>
-  <el-drawer v-model="visible" title="任务详情" size="430px" destroy-on-close>
+  <el-drawer v-model="visible" title="任务详情" size="min(560px, 100vw)" destroy-on-close>
     <div v-if="task" class="drawer-content">
       <header><span>{{task.project_name}}</span><h2>{{task.name}}</h2><div><el-tag size="small" effect="plain">{{statusLabel[task.status] || task.status}}</el-tag><small>{{task.owner_name}}</small></div></header>
       <section class="progress-panel"><div><span>当前进度</span><strong>{{task.progress}}%</strong></div><el-progress :percentage="task.progress" :stroke-width="7" :show-text="false" color="#6488a9"/></section>
@@ -27,5 +27,22 @@ const varianceText = computed(() => {
 </template>
 
 <style scoped>
-.drawer-content{display:flex;flex-direction:column;gap:16px}.drawer-content header{border-bottom:1px solid #edf0f3;padding-bottom:16px}.drawer-content header>span{color:#8493a3;font-size:11px}.drawer-content h2{margin:6px 0 10px;color:#273548;font-size:20px}.drawer-content header div{display:flex;align-items:center;gap:9px}.drawer-content header small{color:#8d98a6}.progress-panel{border-radius:13px;background:#f7f9fb;padding:14px}.progress-panel>div{display:flex;justify-content:space-between;margin-bottom:9px;color:#728092;font-size:11px}.progress-panel strong{color:#315f8e;font-size:15px}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.detail-grid article{display:flex;min-height:69px;flex-direction:column;justify-content:center;border:1px solid #edf0f3;border-radius:11px;padding:11px}.detail-grid span,.text-panel span{color:#939daa;font-size:10px}.detail-grid strong{margin-top:6px;color:#39475a;font-size:11px}.variance-good{color:#4f806c!important}.variance-warning{color:#9a7138!important}.variance-severe{color:#b25752!important}.text-panel{display:flex;flex-direction:column;gap:13px;border-top:1px solid #edf0f3;padding-top:15px}.text-panel p{margin:5px 0 0;color:#59687a;font-size:12px;line-height:1.7}
+.drawer-content { display: flex; flex-direction: column; gap: 24px; }
+.drawer-content header { border-bottom: 1px solid #e6ecf2; padding-bottom: 20px; }
+.drawer-content header > span { color: #687c92; font-size: 14px; }
+.drawer-content h2 { margin: 10px 0 14px; color: #273548; font-size: 22px; line-height: 1.5; overflow-wrap: anywhere; }
+.drawer-content header div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.drawer-content header small { color: #66798e; font-size: 14px; }
+.progress-panel { border-radius: 12px; background: #f5f8fb; padding: 18px; }
+.progress-panel > div { display: flex; justify-content: space-between; margin-bottom: 12px; color: #5d728b; font-size: 14px; }
+.progress-panel strong { color: #315f8e; font-size: 18px; }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.detail-grid article { display: flex; min-height: 90px; flex-direction: column; justify-content: center; gap: 9px; border: 1px solid #e6ecf2; border-radius: 10px; padding: 16px; }
+.detail-grid span,.text-panel span { color: #697e95; font-size: 13px; }
+.detail-grid strong { color: #394f67; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.variance-good { color: #4f806c!important; }
+.variance-warning { color: #9a7138!important; }
+.variance-severe { color: #b25752!important; }
+.text-panel { display: flex; flex-direction: column; gap: 18px; border-top: 1px solid #e6ecf2; padding-top: 20px; }
+.text-panel p { margin: 8px 0 0; color: #536980; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
 </style>

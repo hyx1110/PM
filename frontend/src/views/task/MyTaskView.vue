@@ -53,7 +53,7 @@ onMounted(load)
         <el-table-column label="计划开始" width="130"><template #default="{row}">{{ formatDate(row.planned_start) }}</template></el-table-column>
         <el-table-column label="计划结束" width="130"><template #default="{row}">{{ formatDate(row.planned_end) }}</template></el-table-column>
         <el-table-column label="预计工时" width="95"><template #default="{row}">{{ row.estimated_hours }}h</template></el-table-column>
-        <el-table-column label="预约工时" width="95"><template #default="{row}">{{ row.booked_hours }}h</template></el-table-column>
+        <el-table-column label="预约工时" width="95"><template #default="{row}"><el-tooltip content="任务已占用工时，包含待确认预约"><span>{{ row.booked_hours }}h</span></el-tooltip></template></el-table-column>
         <el-table-column label="任务状态" width="105"><template #default="{row}"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{ statusLabel[row.effective_status] }}</el-tag></template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" layout="total, sizes, prev, pager, next" @change="load" /></div>

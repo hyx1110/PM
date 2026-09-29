@@ -13,6 +13,7 @@ import { formatDateTime } from '@/utils/format'
 import { useNotificationStore } from '@/stores/notification'
 
 const notificationStore = useNotificationStore()
+const emailLabels: Record<string,string> = { disabled:'未启用', pending:'等待发送 / 重试', sent:'已交邮件服务器', failed:'发送失败，请联系管理员', skipped:'未发送（历史通知或无可用邮箱）' }
 const loading = ref(false)
 const rows = ref<AppNotification[]>([]), total = ref(0)
 const query = reactive({ page: 1, page_size: 20, status: '' })
@@ -54,7 +55,7 @@ onMounted(async () => {
     <section class="surface filter-bar"><el-radio-group v-model="query.status" @change="query.page=1;load()"><el-radio-button value="">全部</el-radio-button><el-radio-button value="unread">未读</el-radio-button><el-radio-button value="read">已读</el-radio-button></el-radio-group></section>
     <section class="surface notifications" v-loading="loading">
       <article v-for="item in rows" :key="item.id" class="notification" :class="[{ unread: item.status==='unread' }, levelClass(item.level)]" role="button" tabindex="0" @click="read(item)" @keydown.enter="read(item)">
-        <span class="indicator"></span><span class="message"><strong>{{ item.title }}</strong><span>{{ item.content }}</span><small>{{ formatDateTime(item.created_at) }} · {{ (item.delivered_channels || []).join(' / ') || '待投递' }}</small></span><span class="notification-actions"><el-tag v-if="item.status==='unread'" size="small">未读</el-tag><el-button link type="danger" @click.stop="remove(item)">删除</el-button></span>
+        <span class="indicator"></span><span class="message"><strong>{{ item.title }}</strong><span>{{ item.content }}</span><small>{{ formatDateTime(item.created_at) }} · {{ (item.delivered_channels || []).join(' / ') || '站内通知' }} · 邮件：{{emailLabels[item.email_status] || '未启用'}}<template v-if="item.email_attempts">（已尝试 {{item.email_attempts}} 次）</template><span v-if="item.email_last_error"> · {{item.email_last_error}}</span></small></span><span class="notification-actions"><el-tag v-if="item.status==='unread'" size="small">未读</el-tag><el-button link type="danger" @click.stop="remove(item)">删除</el-button></span>
       </article>
       <el-empty v-if="!rows.length" description="暂无通知"/>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" :page-size="query.page_size" layout="total, prev, pager, next" :total="total" @change="load"/></div>

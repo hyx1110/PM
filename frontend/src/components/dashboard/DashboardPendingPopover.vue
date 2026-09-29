@@ -30,7 +30,7 @@ const rows = computed<PopoverRow[]>(() => {
     kind: 'action', id: item.id, title: item.title,
     meta: `${item.type_label} · ${item.project_name || '未关联项目'} · ${item.applicant_name}`,
     time: dayjs(item.start_time || item.created_at).format('MM/DD HH:mm'),
-    status: '待确认', sortTime: dayjs(item.created_at || item.start_time).valueOf(), pendingItem: item,
+    status: item.type === 'booking' ? '待确认' : '待审批', sortTime: dayjs(item.created_at || item.start_time).valueOf(), pendingItem: item,
   }))
   const tasks: PopoverRow[] = openTasks.value.map(item => ({
     kind: 'task', id: `task-${item.id}`, title: item.name,
@@ -50,7 +50,7 @@ function selectRow(row: PopoverRow) {
 </script>
 
 <template>
-  <el-popover trigger="hover" placement="bottom" :width="500" :show-after="140" :hide-after="220" popper-class="dashboard-pending-popper">
+  <el-popover trigger="hover" placement="bottom" :width="620" :popper-style="{maxWidth:'calc(100vw - 32px)'}" :show-after="140" :hide-after="220" popper-class="dashboard-pending-popper">
     <template #reference><slot /></template>
     <section class="pending-popover">
       <header><div><strong>待处理事项</strong><span>审批、预约和我的未完成任务</span></div><nav><button :class="{active:tab==='all'}" @click="tab='all'">全部 {{overview.pending_count}}</button><button :class="{active:tab==='action'}" @click="tab='action'">审批/预约 {{overview.pending_action_count}}</button><button :class="{active:tab==='task'}" @click="tab='task'">任务 {{overview.pending_task_count}}</button></nav></header>
@@ -62,11 +62,34 @@ function selectRow(row: PopoverRow) {
         </button>
       </div>
       <div v-else class="popover-empty">当前没有需要处理的内容</div>
-      <footer><span>悬停快速查看，点击条目可打开详情</span></footer>
+      <footer><span>最多预览 7 项 · 点击条目可查看详情并处理</span></footer>
     </section>
   </el-popover>
 </template>
 
 <style scoped>
-.pending-popover{margin:-3px -2px -6px}.pending-popover header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid #e6ebf0;padding:3px 3px 13px}.pending-popover header>div{display:flex;flex-direction:column}.pending-popover header strong{color:#24364b;font-size:14px;font-weight:680}.pending-popover header span{margin-top:4px;color:#7f8d9e;font-size:9px}.pending-popover nav{display:flex;border:1px solid #e7ecf1;border-radius:9px;background:#f4f6f8;padding:3px}.pending-popover nav button{border:0;border-radius:6px;background:transparent;padding:6px 8px;color:#718095;font-size:8px;white-space:nowrap;cursor:pointer}.pending-popover nav button.active{background:#fff;color:#2f628f;font-weight:650;box-shadow:0 2px 8px rgba(49,76,103,.1)}.popover-list{display:flex;flex-direction:column}.popover-row{display:grid;width:100%;grid-template-columns:31px minmax(0,1fr) 72px;align-items:center;gap:10px;border:0;border-bottom:1px solid #e9edf2;background:transparent;padding:10px 4px;text-align:left;cursor:pointer;transition:background .15s}.popover-row:hover{border-radius:8px;background:#f5f8fb}.row-icon{display:grid;width:30px;height:30px;place-items:center;border-radius:9px;background:#faf2e5;color:#936a32}.row-icon.task{background:#eaf2f8;color:#47749c}.row-main,.row-side{display:flex;min-width:0;flex-direction:column}.row-main strong,.row-main small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row-main strong{color:#2d3e52;font-size:10px;font-weight:650}.row-main small{margin-top:4px;color:#8491a0;font-size:8px}.row-side{align-items:flex-end}.row-side strong{color:#536479;font-size:9px;font-weight:600}.row-side small{margin-top:4px;color:#8e99a7;font-size:8px}.row-side small.delayed{color:#ad5651}.row-side small.running{color:#47749c}.popover-empty{display:grid;height:132px;place-items:center;color:#8d99a7;font-size:10px}.pending-popover footer{padding:10px 3px 1px;color:#929ca8;font-size:8px;text-align:right}
+.pending-popover { padding: 8px; }
+.pending-popover header { display: flex; flex-direction: column; gap: 16px; border-bottom: 1px solid #e6ebf0; padding-bottom: 16px; }
+.pending-popover header > div { display: flex; flex-direction: column; gap: 6px; }
+.pending-popover header strong { color: #24364b; font-size: 18px; font-weight: 650; }
+.pending-popover header span { color: #6d7e91; font-size: 13px; }
+.pending-popover nav { display: flex; flex-wrap: wrap; gap: 4px; border: 1px solid #e7ecf1; border-radius: 9px; background: #f4f6f8; padding: 4px; }
+.pending-popover nav button { flex: 1; min-height: 36px; border: 0; border-radius: 6px; background: transparent; padding: 7px 10px; color: #5d7088; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.pending-popover nav button.active { background: #fff; color: #2f628f; font-weight: 600; box-shadow: 0 1px 5px rgba(49,76,103,.08); }
+.popover-list { display: flex; max-height: min(400px,45vh); overflow-y: auto; flex-direction: column; overscroll-behavior: contain; }
+.popover-row { display: grid; width: 100%; grid-template-columns: 36px minmax(0,1fr) 94px; align-items: center; gap: 14px; border: 0; border-bottom: 1px solid #e9edf2; background: transparent; padding: 16px 4px; text-align: left; cursor: pointer; }
+.popover-row:hover { border-radius: 8px; background: #f5f8fb; }
+.row-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: #faf2e5; color: #936a32; font-size: 18px; }
+.row-icon.task { background: #eaf2f8; color: #47749c; }
+.row-main,.row-side { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.row-main strong { color: #2d3e52; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.row-main small { color: #6d7e91; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.row-side { align-items: flex-end; }
+.row-side strong { color: #4d637c; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.row-side small { color: #697c91; font-size: 12px; }
+.row-side small.delayed { color: #ad5651; }
+.row-side small.running { color: #47749c; }
+.popover-empty { display: grid; min-height: 110px; place-items: center; color: #708095; font-size: 14px; }
+.pending-popover footer { padding-top: 14px; color: #708095; font-size: 12px; text-align: right; line-height: 1.5; }
+button:focus-visible { outline: 2px solid #527fa6; outline-offset: -2px; }
 </style>

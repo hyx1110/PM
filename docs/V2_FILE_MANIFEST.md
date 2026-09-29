@@ -105,4 +105,24 @@ docs/V2_FILE_MANIFEST.md
 
 ## 交付约束记录
 
+### 2026-09-28 新增文件
+
+```text
+backend/alembic/versions/20260928_0017_overtime_and_email.py
+backend/app/models/overtime.py
+backend/app/schemas/overtime.py
+backend/app/services/overtime_service.py
+backend/app/services/email_service.py
+backend/app/api/v1/overtime.py
+backend/tests/test_overtime_rules.py
+backend/tests/test_email_delivery.py
+frontend/src/api/overtime.ts
+frontend/src/types/overtime.ts
+frontend/src/components/execution/OvertimePanel.vue
+docs/EMAIL_SETUP.md
+docs/OVERTIME.md
+```
+
+同时更新执行记录、首页待办、通知中心、任务/项目/用户关联保护、环境示例、迁移与接口说明。未引入新依赖；回归测试只提供源码，未执行。
+
 本次只做文件创建、编辑与归档核对。没有安装依赖，没有执行数据库迁移或初始化脚本，没有生成运行时 Excel 文件，没有运行测试或构建，也没有启动任何服务。

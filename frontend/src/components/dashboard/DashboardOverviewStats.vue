@@ -78,5 +78,22 @@ const cards = computed(() => [
 </template>
 
 <style scoped>
-.overview-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.overview-card{position:relative;display:flex;min-width:0;min-height:88px;align-items:center;gap:14px;overflow:hidden;padding:17px 18px 17px 20px;cursor:pointer;transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease}.overview-card::before{position:absolute;top:16px;bottom:16px;left:0;width:3px;border-radius:0 4px 4px 0;background:#6f96bb;content:""}.overview-card:hover,.overview-card:focus-visible{border-color:#ccd8e3;box-shadow:0 13px 34px rgba(36,53,72,.09);outline:0;transform:translateY(-2px)}.pending-card{height:100%;cursor:default}.overview-icon{display:grid;width:42px;height:42px;flex:0 0 42px;place-items:center;border-radius:12px;font-size:19px}.tone-blue .overview-icon{background:#eaf2f9;color:#3d6e99}.tone-green::before{background:#6c9b88}.tone-green .overview-icon{background:#eaf5f0;color:#3f7761}.tone-amber::before{background:#c59a5a}.tone-amber .overview-icon{background:#faf2e5;color:#926a32}.tone-red::before{background:#c97670}.tone-red .overview-icon{background:#fbecea;color:#a94f4b}.overview-copy{display:grid;min-width:0;flex:1;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;column-gap:12px}.overview-copy span{color:#68778a;font-size:12px;font-weight:570}.overview-copy strong{grid-row:1/3;grid-column:2;justify-self:end;color:#17263a;font-size:28px;font-weight:720;letter-spacing:-.04em}.overview-copy small{overflow:hidden;margin-top:6px;color:#8e99a7;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.overview-link{position:absolute;right:18px;bottom:11px;color:#6f8499;font-size:9px;font-weight:600;opacity:0;transition:opacity .18s}.overview-link.always{opacity:.9}.overview-card:hover .overview-link{opacity:1}.attention-badge{position:absolute;z-index:2;top:7px;right:7px;display:grid;min-width:22px;height:22px;place-items:center;border:2px solid #fff;border-radius:11px;background:#c85852;padding:0 5px;color:#fff;font-size:9px;font-weight:750;box-shadow:0 5px 14px rgba(174,78,72,.28)}@media(max-width:1280px){.overview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.overview-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 20px; }
+.overview-card { position: relative; display: flex; min-width: 0; min-height: 132px; align-items: center; gap: 16px; padding: 22px 22px 30px; cursor: pointer; transition: border-color .15s,box-shadow .15s; }
+.overview-card:hover { border-color: #bacddd; box-shadow: 0 6px 22px rgba(36,53,72,.07); }
+.overview-card:focus-visible { outline: 2px solid #527fa6; outline-offset: 3px; }
+.pending-card { height: 100%; }
+.overview-icon { display: grid; width: 46px; height: 46px; flex: 0 0 46px; place-items: center; border-radius: 13px; font-size: 22px; }
+.tone-blue .overview-icon { background: #eaf2f9; color: #3d6e99; }
+.tone-green .overview-icon { background: #eaf5f0; color: #3f7761; }
+.tone-amber .overview-icon { background: #faf2e5; color: #926a32; }
+.tone-red .overview-icon { background: #fbecea; color: #a94f4b; }
+.overview-copy { display: grid; min-width: 0; flex: 1; grid-template-columns: minmax(0,1fr) auto; align-items: center; column-gap: 12px; row-gap: 7px; }
+.overview-copy > span { color: #546479; font-size: 15px; font-weight: 600; }
+.overview-copy strong { color: #17263a; font-size: 32px; font-weight: 700; letter-spacing: -.035em; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.overview-copy small { grid-column: 1/-1; color: #748196; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.overview-link { position: absolute; right: 20px; bottom: 9px; color: #5f7891; font-size: 12px; opacity: 0; }
+.overview-link.always,.overview-card:hover .overview-link,.overview-card:focus-visible .overview-link { opacity: 1; }
+.attention-badge { position: absolute; z-index: 2; top: 9px; right: 9px; display: grid; min-width: 25px; height: 25px; place-items: center; padding: 0 6px; border: 2px solid #fff; border-radius: 14px; background: #b94e48; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; }
+@media(max-width:1500px) { .overview-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 </style>

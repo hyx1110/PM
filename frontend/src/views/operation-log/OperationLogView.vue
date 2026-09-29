@@ -12,7 +12,7 @@ import { formatDateTime } from '@/utils/format'
 const loading=ref(false),logs=ref<OperationLog[]>([]),users=ref<UserOption[]>([]),total=ref(0),detailVisible=ref(false),selected=ref<OperationLog>()
 const departments=ref<DepartmentOption[]>([]),organizations=ref<OrganizationNode[]>([]),filterScopes=ref<string[]>([])
 const query=reactive({page:1,page_size:20,module:'',start_date:'',end_date:''})
-const modules=['user','organization','rbac','project','task','schedule','execution','evaluation']
+const modules=['user','organization','rbac','project','task','schedule','execution','overtime','evaluation']
 const pretty=(value?:Record<string,unknown>)=>value?JSON.stringify(value,null,2):'—'
 async function load(){loading.value=true;try{const result=await getOperationLogs({...query,module:query.module||undefined,start_date:query.start_date||undefined,end_date:query.end_date||undefined,personnel_scope:filterScopes.value.length?filterScopes.value.join(','):undefined});logs.value=result.items;total.value=result.total}finally{loading.value=false}}
 function open(row:OperationLog){selected.value=row;detailVisible.value=true}

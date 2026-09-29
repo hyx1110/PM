@@ -130,7 +130,7 @@ export interface DashboardProjectTimelineItem {
   tasks: DashboardTaskItem[]
 }
 
-export type DashboardPendingType = 'project_approval' | 'resource_approval' | 'booking'
+export type DashboardPendingType = 'project_approval' | 'resource_approval' | 'overtime_approval' | 'booking'
 
 export interface DashboardPendingItem {
   id: string

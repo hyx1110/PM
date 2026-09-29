@@ -206,7 +206,7 @@ onMounted(load)
     />
     <section class="quota-grid" v-if="project">
       <div class="surface quota"><span>项目总工时</span><strong>{{ project.budget_hours }}h</strong></div>
-      <div class="surface quota"><span>已预约工时</span><strong>{{ project.booked_hours }}h</strong></div>
+      <div class="surface quota"><span>已占用工时（含待确认）</span><strong>{{ project.booked_hours }}h</strong></div>
       <div class="surface quota"><span>剩余工时</span><strong :class="{ danger: project.remaining_hours<=0 }">{{ project.remaining_hours }}h</strong></div>
       <div class="surface quota"><span>审批状态</span><strong>{{ approvalLabel[project.approval_status] }}</strong></div>
     </section>
@@ -248,7 +248,7 @@ onMounted(load)
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`人力预约 (${schedules.length})`" name="schedules">
-          <div class="tab-tools"><span>预约经成员确认后才占用项目额度</span><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
+          <div class="tab-tools"><span>提交即预占任务及项目额度，确认后占用人员时段；拒绝或撤回后释放额度</span><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
           <el-table :data="schedules">
             <el-table-column prop="user_name" label="人员"/>
             <el-table-column prop="task_name" label="任务" min-width="180"/>

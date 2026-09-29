@@ -12,6 +12,8 @@ import type { UserOption } from '@/types/user'
 import type { WorkCalendarDay } from '@/types/work-calendar'
 import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
+import TaskBookingSummary from './TaskBookingSummary.vue'
+import { remainingTaskHours, reservedBookingHours, withinTaskDates } from '@/utils/schedule-quota'
 
 const props = defineProps<{
   modelValue: boolean
@@ -20,6 +22,7 @@ const props = defineProps<{
   projects: Project[]
   tasks: Task[]
   users: UserOption[]
+  saving?: boolean
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -39,6 +42,8 @@ const form = reactive({
 })
 const calendar = ref<WorkCalendarDay[]>([])
 const projectUsers = ref<UserOption[]>([])
+const usersLoading = ref(false)
+let memberRequest = 0
 const currentProjectMemberIds = ref(new Set<number>())
 const loadedYears = new Set<number>()
 const rules: FormRules = {
@@ -55,10 +60,11 @@ const projectTasks = computed(() =>
         || props.projects.find((project) => project.id === item.project_id)?.manager_id === userStore.profile?.id
         || item.owner_ids.includes(userStore.profile?.id || -1)
       )
-      && (!form.user_id || item.owner_ids.includes(form.user_id)),
+      && (!props.slot?.userId || item.owner_ids.includes(props.slot.userId)),
   ),
 )
 const selectedTask = computed(() => props.tasks.find((item) => item.id === form.task_id))
+const taskRemaining = computed(() => remainingTaskHours(selectedTask.value, props.initial))
 const startOptions = computed(() =>
   form.session === 'morning'
     ? ['08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30']
@@ -85,15 +91,14 @@ const plannedHours = computed(() => {
 const projectRemaining = computed(() => {
   const project = props.projects.find((item) => item.id === form.project_id)
   if (!project) return undefined
-  return project.remaining_hours
-    + (props.initial?.project_id === project.id ? Number(props.initial.planned_hours) : 0)
+  return availableHours(project)
 })
 const isSelfBooking = computed(() => {
   return form.user_id === userStore.profile?.id
 })
 const availableHours = (project: Project) =>
-  project.remaining_hours
-  + (props.initial?.project_id === project.id ? Number(props.initial.planned_hours) : 0)
+  Math.max(0, Number(project.budget_hours) - Number(project.booked_hours)
+    + (props.initial?.project_id === project.id ? reservedBookingHours(props.initial) : 0))
 
 function canBookUserForProject(item: UserOption, project?: Project) {
   if (!project) return false
@@ -108,25 +113,28 @@ function canBookUserForProject(item: UserOption, project?: Project) {
 }
 
 async function loadProjectUsers(projectId: number) {
-  if (!projectId) {
-    projectUsers.value = []
-    return
+  const request = ++memberRequest
+  projectUsers.value = []
+  currentProjectMemberIds.value = new Set()
+  usersLoading.value = false
+  if (!projectId || !selectedTask.value) return
+  const taskId = form.task_id
+  usersLoading.value = true
+  try {
+    const members = await getProjectMembers(projectId)
+    if (request !== memberRequest || projectId !== form.project_id || taskId !== form.task_id) return
+    const ids = new Set(members.map((item) => item.user_id))
+    currentProjectMemberIds.value = ids
+    const project = props.projects.find((item) => item.id === projectId)
+    const ownerIds = new Set(selectedTask.value?.owner_ids || [])
+    projectUsers.value = props.users.filter((item) => ids.has(item.id)
+      && ownerIds.has(item.id) && canBookUserForProject(item, project))
+    if (!props.slot?.userId && !projectUsers.value.some((item) => item.id === form.user_id)) form.user_id = 0
+  } catch {
+    // The shared request interceptor reports failures; leave choices empty.
+  } finally {
+    if (request === memberRequest) usersLoading.value = false
   }
-  const members = await getProjectMembers(projectId)
-  const ids = new Set(members.map((item) => item.user_id))
-  currentProjectMemberIds.value = ids
-  const project = props.projects.find((item) => item.id === projectId)
-  const taskOwnerIds = selectedTask.value ? new Set(selectedTask.value.owner_ids) : undefined
-  const eligible = props.users.filter(
-    (item) => ids.has(item.id)
-      && (!taskOwnerIds || taskOwnerIds.has(item.id))
-      && canBookUserForProject(item, project),
-  )
-  const lockedUser = props.slot?.userId ? props.users.find((item) => item.id === props.slot?.userId) : undefined
-  projectUsers.value = lockedUser && !eligible.some((item) => item.id === lockedUser.id)
-    ? [lockedUser, ...eligible]
-    : eligible
-  if (!props.slot?.userId && !projectUsers.value.some((item) => item.id === form.user_id)) form.user_id = 0
 }
 
 async function changeProject(projectId: number) {
@@ -137,13 +145,9 @@ async function changeProject(projectId: number) {
 
 async function changeTask(taskId: number) {
   const task = props.tasks.find((item) => item.id === taskId)
-  if (task && form.user_id && !task.owner_ids.includes(form.user_id)) form.user_id = 0
+  if (!props.slot?.userId) form.user_id = 0
+  if (task && !withinTaskDates(form.work_date, task)) form.work_date = ''
   await loadProjectUsers(form.project_id)
-}
-
-function changeUser(userId: number) {
-  const task = props.tasks.find((item) => item.id === form.task_id)
-  if (task && !task.owner_ids.includes(userId)) form.task_id = 0
 }
 
 async function ensureCalendar(year: number) {
@@ -159,6 +163,7 @@ async function ensureCalendar(year: number) {
 function disabledDate(value: Date) {
   const date = dayjs(value).format('YYYY-MM-DD')
   if (date < beijingNow().format('YYYY-MM-DD')) return true
+  if (selectedTask.value && !withinTaskDates(date, selectedTask.value)) return true
   const override = calendar.value.find((item) => item.work_date === date)
   if (override) return override.day_type === 'holiday'
   const weekday = dayjs(value).day()
@@ -195,7 +200,7 @@ watch(
       const session = clock < '12:00' ? 'morning' : 'afternoon'
       Object.assign(form, {
         user_id: props.slot?.userId || 0,
-        project_id: props.projects[0]?.id || 0,
+        project_id: 0,
         task_id: 0,
         work_date: date,
         session,
@@ -203,10 +208,9 @@ watch(
         end_clock: dayjs(`2000-01-01 ${clock}`).add(60, 'minute').format('HH:mm'),
         remark: '',
       })
-      form.task_id = projectTasks.value[0]?.id || 0
     }
     await loadProjectUsers(form.project_id)
-    await ensureCalendar(dayjs(form.work_date).year())
+    try { await ensureCalendar(dayjs(form.work_date).year()) } catch { /* Reported by request interceptor. */ }
   },
   { immediate: true },
 )
@@ -214,7 +218,7 @@ watch(
 watch(
   () => form.work_date,
   (value) => {
-    if (value) ensureCalendar(dayjs(value).year())
+    if (value) void ensureCalendar(dayjs(value).year()).catch(() => {})
   },
 )
 
@@ -233,7 +237,11 @@ watch(
 )
 
 async function submit() {
-  if (!(await formRef.value?.validate())) return
+  if (props.saving || usersLoading.value) return
+  if (!form.project_id || !form.task_id || !form.user_id) return ElMessage.warning('请依次选择项目、任务和人员')
+  if (!(await formRef.value?.validate().catch(() => false))) return
+  if (!withinTaskDates(form.work_date, selectedTask.value)) return ElMessage.warning('预约日期必须位于任务计划起止日期内')
+  try { await ensureCalendar(dayjs(form.work_date).year()) } catch { return }
   if (!currentProjectMemberIds.value.has(form.user_id)) {
     return ElMessage.warning('当前人员不是所选项目的有效成员，请更换项目')
   }
@@ -246,7 +254,10 @@ async function submit() {
   if (`${form.work_date} ${form.start_clock}` <= beijingNow().format('YYYY-MM-DD HH:mm')) {
     return ElMessage.warning('不能预约已经开始或已经过去的时间段，请选择当前北京时间之后的时间')
   }
-  if (plannedHours.value <= 0) return ElMessage.warning('请选择有效的预约时段')
+  if (plannedHours.value <= 0 || !endOptions.value.includes(form.end_clock)) return ElMessage.warning('请选择有效的预约时段')
+  if (plannedHours.value > taskRemaining.value) {
+    return ElMessage.warning(`任务剩余可预约工时为 ${taskRemaining.value}h，待确认预约也占用额度`)
+  }
   if (projectRemaining.value !== undefined && plannedHours.value > projectRemaining.value) {
     return ElMessage.warning('项目剩余工时不足，请先提交项目资源申请并等待部门主管审批')
   }
@@ -274,18 +285,20 @@ async function submit() {
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <div class="form-grid">
         <el-form-item label="项目" prop="project_id">
-          <el-select v-model="form.project_id" filterable style="width:100%" @change="changeProject">
+          <el-select :model-value="form.project_id || undefined" placeholder="先选择项目" filterable style="width:100%" @update:model-value="form.project_id=$event" @change="changeProject">
             <el-option v-for="item in projects" :key="item.id" :label="`${item.name}（本次可用 ${availableHours(item)}h）`" :value="item.id"/>
           </el-select>
         </el-form-item>
-        <el-form-item label="人员" prop="user_id">
-          <el-select v-model="form.user_id" filterable :disabled="Boolean(slot?.userId)" style="width:100%" @change="changeUser">
-            <el-option v-for="item in projectUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/>
+        <el-form-item label="任务" prop="task_id">
+          <el-select :model-value="form.task_id || undefined" placeholder="再选择任务" :disabled="!form.project_id" filterable style="width:100%" @update:model-value="form.task_id=$event" @change="changeTask">
+            <el-option v-for="item in projectTasks" :key="item.id" :label="`${item.name}（计划工时 ${item.estimated_hours}h）`" :value="item.id"/>
           </el-select>
         </el-form-item>
-        <el-form-item label="任务" prop="task_id">
-          <el-select v-model="form.task_id" filterable style="width:100%" @change="changeTask">
-            <el-option v-for="item in projectTasks" :key="item.id" :label="`${item.name}（计划工时 ${item.estimated_hours}h）`" :value="item.id"/>
+        <TaskBookingSummary v-if="selectedTask" class="full-row" :task="selectedTask" :remaining-hours="taskRemaining"/>
+        <el-form-item label="人员" prop="user_id">
+          <el-input v-if="slot?.userId" :model-value="users.find(item=>item.id===slot?.userId)?.name || '当前人员'" disabled/>
+          <el-select v-else :model-value="form.user_id || undefined" filterable placeholder="选择任务指定成员" :disabled="!form.task_id || usersLoading" :loading="usersLoading" style="width:100%" @update:model-value="form.user_id=$event">
+            <el-option v-for="item in projectUsers" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/>
           </el-select>
         </el-form-item>
         <el-form-item label="自动计算工时"><el-input :model-value="`${plannedHours} 小时`" disabled/></el-form-item>
@@ -313,11 +326,12 @@ async function submit() {
     </el-form>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" @click="submit">{{ isSelfBooking ? (initial ? '保存并自动确认' : '预约并自动确认') : (initial ? '保存并重新待确认' : '预约') }}</el-button>
+      <el-button type="primary" :loading="saving" :disabled="usersLoading" @click="submit">{{ isSelfBooking ? (initial ? '保存并自动确认' : '预约并自动确认') : (initial ? '保存并重新待确认' : '预约') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <style scoped>
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.full-row{grid-column:1 / -1}
 </style>

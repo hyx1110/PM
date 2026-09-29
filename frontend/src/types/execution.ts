@@ -2,6 +2,7 @@ import type { PageQuery } from './common'
 
 export interface Execution {
   id: number
+  overtime_request_id?: number
   task_id: number
   task_name?: string
   project_id?: number
@@ -21,6 +22,7 @@ export interface Execution {
 
 export interface ExecutionPayload {
   task_id: number
+  overtime_request_id?: number
   user_id?: number
   actual_start: string
   actual_end?: string
