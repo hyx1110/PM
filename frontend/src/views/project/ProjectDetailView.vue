@@ -22,6 +22,9 @@ import type { Task } from '@/types/task'
 import type { UserOption } from '@/types/user'
 import { formatDate, formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import TaskManagementPanel from '@/components/task/TaskManagementPanel.vue'
+import dayjs from 'dayjs'
+import { beijingNow } from '@/utils/time'
 
 const route = useRoute()
 const router = useRouter()
@@ -38,8 +41,10 @@ const departments = ref<DepartmentOption[]>([])
 const organizations = ref<OrganizationNode[]>([])
 const activeTab = ref(route.query.tab === 'resources' ? 'resources' : 'basic')
 const resourceDialog = ref(false)
+const resourceSaving = ref(false)
 const resourceForm = reactive({
   requested_hours: 0,
+  requested_planned_end: undefined as string | undefined,
   add_member_ids: [] as number[],
   remove_member_ids: [] as number[],
   reason: '',
@@ -86,6 +91,8 @@ const canRequestResources = computed(
     && project.value?.status !== 'completed'
     && canManageProject.value,
 )
+const canRequestExtension = computed(() => canRequestResources.value && Boolean(project.value && project.value.planned_end < beijingNow().format('YYYY-MM-DD')))
+const disableExtensionDate = (value: Date) => dayjs(value).format('YYYY-MM-DD') < beijingNow().format('YYYY-MM-DD')
 const canReviewResources = (item: ProjectResourceRequest) =>
   item.status === 'pending'
   && (
@@ -132,22 +139,29 @@ async function load() {
 }
 
 function openResourceRequest() {
-  Object.assign(resourceForm, { requested_hours: 0, add_member_ids: [], remove_member_ids: [], reason: '' })
+  Object.assign(resourceForm, { requested_hours: 0, requested_planned_end: undefined, add_member_ids: [], remove_member_ids: [], reason: '' })
   resourceDialog.value = true
 }
 
 async function submitResourceRequest() {
-  if (resourceForm.requested_hours <= 0 && !resourceForm.add_member_ids.length && !resourceForm.remove_member_ids.length) {
-    return ElMessage.warning('请至少申请一项工时或成员变更')
+  if (resourceSaving.value) return
+  if (resourceForm.requested_hours <= 0 && !resourceForm.add_member_ids.length && !resourceForm.remove_member_ids.length && !resourceForm.requested_planned_end) {
+    return ElMessage.warning('请至少申请一项工时、成员或延期变更')
   }
   if (!resourceForm.reason.trim()) return ElMessage.warning('请填写申请原因')
-  await createProjectResourceRequest(projectId.value, { ...resourceForm, reason: resourceForm.reason.trim() })
-  ElMessage.success('项目资源申请已提交部门主管审批')
-  resourceDialog.value = false
-  await load()
+  if (resourceForm.requested_planned_end && (!canRequestExtension.value || resourceForm.requested_planned_end < beijingNow().format('YYYY-MM-DD') || resourceForm.requested_planned_end <= (project.value?.planned_end || ''))) return ElMessage.warning('仅逾期项目可申请延期，新结束日期必须晚于原日期且不早于今天')
+  resourceSaving.value = true
+  try {
+    await createProjectResourceRequest(projectId.value, { ...resourceForm, requested_planned_end: resourceForm.requested_planned_end || null, reason: resourceForm.reason.trim() })
+    ElMessage.success('项目资源申请已提交部门主管审批')
+    resourceDialog.value = false
+    await load()
+  } catch { /* API interceptor displays the error. */ }
+  finally { resourceSaving.value = false }
 }
 
 const resourceSummary = (item: ProjectResourceRequest) => [
+  item.requested_planned_end ? `计划结束 ${formatDate(item.original_planned_end)} → ${formatDate(item.requested_planned_end)}` : '',
   item.requested_hours > 0 ? `${item.requested_hours}h 工时` : '',
   item.add_member_ids.length ? `新增 ${item.add_member_ids.length} 人` : '',
   item.remove_member_ids.length ? `移除 ${item.remove_member_ids.length} 人` : '',
@@ -181,7 +195,15 @@ async function finishProject() {
   await load()
 }
 
-onMounted(load)
+async function refreshTaskSummary() {
+  try {
+    const [p, t] = await Promise.all([getProject(projectId.value), getAllTasks({ project_id: projectId.value })])
+    project.value = p
+    tasks.value = t
+  } catch { /* API interceptor displays the error. */ }
+}
+
+onMounted(async () => { try { await load() } catch { /* API interceptor displays the error. */ } })
 </script>
 
 <template>
@@ -239,13 +261,7 @@ onMounted(load)
           </el-table>
         </el-tab-pane>
         <el-tab-pane :label="`项目任务 (${tasks.length})`" name="tasks">
-          <div class="tab-tools"><span>项目下多级任务</span><el-button size="small" @click="router.push('/tasks')">进入任务管理</el-button></div>
-          <el-table :data="tasks">
-            <el-table-column prop="name" label="任务" min-width="180"/>
-            <el-table-column prop="owner_name" label="项目成员"/>
-            <el-table-column label="计划日期" width="220"><template #default="{row}">{{ formatDate(row.planned_start) }} 至 {{ formatDate(row.planned_end) }}</template></el-table-column>
-            <el-table-column prop="effective_status" label="状态"/>
-          </el-table>
+          <TaskManagementPanel v-if="activeTab==='tasks'" :key="projectId" :project-id="projectId" @changed="refreshTaskSummary"/>
         </el-tab-pane>
         <el-tab-pane :label="`人力预约 (${schedules.length})`" name="schedules">
           <div class="tab-tools"><span>提交即预占任务及项目额度，确认后占用人员时段；拒绝或撤回后释放额度</span><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
@@ -258,7 +274,7 @@ onMounted(load)
           </el-table>
         </el-tab-pane>
         <el-tab-pane v-if="canManageProject" :label="`资源申请 (${resourceRequests.length})`" name="resources">
-          <div class="tab-tools"><span>工时与项目成员变更都必须由项目所属部门主管审批</span><el-button v-if="canRequestResources" size="small" type="primary" @click="openResourceRequest">发起申请</el-button></div>
+          <div class="tab-tools"><span>工时、成员和项目延期均由项目所属部门主管审批后生效</span><el-button v-if="canRequestResources" size="small" type="primary" @click="openResourceRequest">发起申请</el-button></div>
           <el-table :data="resourceRequests">
             <el-table-column prop="requester_name" label="申请人" width="110"/>
             <el-table-column label="资源变更" min-width="170"><template #default="{row}">{{ resourceSummary(row) }}</template></el-table-column>
@@ -275,7 +291,11 @@ onMounted(load)
 
     <el-dialog v-model="resourceDialog" title="项目资源申请" width="620px">
       <el-form :model="resourceForm" label-position="top">
-        <el-alert title="追加工时、添加成员和移除成员统一提交，部门主管批准后才生效。" type="info" :closable="false" show-icon/>
+        <el-alert title="追加工时、成员变更和项目延期统一申请，部门主管批准后才生效。" type="info" :closable="false" show-icon/>
+        <el-form-item v-if="canRequestExtension" label="项目延期至（可选）">
+          <el-date-picker v-model="resourceForm.requested_planned_end" type="date" value-format="YYYY-MM-DD" :disabled-date="disableExtensionDate" clearable placeholder="选择新的计划结束日期" style="width:100%"/>
+          <span class="extension-hint">原计划结束：{{formatDate(project?.planned_end)}}。仅延长项目周期，不自动改动任务计划或预约。</span>
+        </el-form-item>
         <el-form-item label="追加工时（可选）"><el-input-number v-model="resourceForm.requested_hours" :min="0" :step="0.5" :precision="2" style="width:100%"/></el-form-item>
         <el-form-item label="添加项目成员（可选）">
           <el-cascader v-model="resourceForm.add_member_ids" :options="memberCascaderOptions" :props="memberCascaderProps" clearable collapse-tags collapse-tags-tooltip filterable placeholder="按部门 / 组织选择成员" style="width:100%"/>
@@ -285,11 +305,12 @@ onMounted(load)
         </el-form-item>
         <el-form-item label="申请原因" required><el-input v-model="resourceForm.reason" type="textarea" :rows="4" maxlength="2000" show-word-limit/></el-form-item>
       </el-form>
-      <template #footer><el-button @click="resourceDialog=false">取消</el-button><el-button type="primary" @click="submitResourceRequest">提交部门主管审批</el-button></template>
+      <template #footer><el-button :disabled="resourceSaving" @click="resourceDialog=false">取消</el-button><el-button type="primary" :loading="resourceSaving" @click="submitResourceRequest">提交部门主管审批</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.extension-hint{margin-top:6px;color:var(--el-text-color-secondary);font-size:12px;line-height:1.6}
 .detail-title{margin-top:8px}.detail-card{padding:12px 24px 24px}.tab-tools{display:flex;align-items:center;justify-content:space-between;margin:8px 0 16px;color:#8b95a3;font-size:12px}.quota-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.quota{padding:18px}.quota span{display:block;color:#8b95a3;font-size:12px}.quota strong{display:block;margin-top:8px;color:#34445b;font-size:23px}.quota strong.danger{color:#c45656}
 </style>

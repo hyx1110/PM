@@ -1,5 +1,7 @@
 # V2.0 数据库说明
 
+当前最新迁移 `20260929_0018` 为 `project_resource_requests` 增加 `original_planned_end DATE NULL` 和 `requested_planned_end DATE NULL`：分别保存申请时原截止日及申请的新截止日。只有资源审批通过才更新 `projects.planned_end`，不自动修改任务计划或实际工时；旧申请字段为 NULL。详见 [延期迁移说明](BUGFIX_20260929.md)。
+
 ## 关系概览
 
 ```text

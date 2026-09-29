@@ -7,7 +7,7 @@ const title = computed(() => route.meta.title || '首页')
 </script>
 
 <template>
-  <div class="breadcrumb"><span>工作台</span><i>/</i><strong>{{ title }}</strong></div>
+  <div v-if="!route.meta.hideBreadcrumb" class="breadcrumb"><span>工作台</span><i>/</i><strong>{{ title }}</strong></div>
 </template>
 
 <style scoped>
@@ -15,4 +15,3 @@ const title = computed(() => route.meta.title || '首页')
 .breadcrumb i { font-style: normal; color: #c7cdd6; }
 .breadcrumb strong { color: #657083; font-weight: 500; }
 </style>
-

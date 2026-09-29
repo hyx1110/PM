@@ -86,30 +86,15 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
 def dashboard_visibility_scopes(
     db: Session,
     user: User,
-) -> tuple[set[str], set[int] | None, set[int] | None]:
-    """Resolve dashboard role, project and schedule scopes without duplicate hierarchy walks."""
-    roles = get_role_codes(db, user.id)
-    if roles & GLOBAL_PROJECT_ROLES:
-        return roles, None, None
+) -> tuple[set[str], set[int], set[int]]:
+    """Personal homepage scope, independent of global administration permissions.
 
-    people = {user.id}
-    if "functional_manager" in roles:
-        people.update(descendant_user_ids(db, user.id))
+    Every role, including super administrators and department managers, starts
+    from the logged-in person and all reporting descendants. Project ownership,
+    active membership and task assignment make a project related to these people.
+    An empty relationship scope must stay empty, never fall back to all projects.
+    """
+    roles = get_role_codes(db, user.id)
+    people = {user.id} | descendant_user_ids(db, user.id)
     project_ids = related_project_ids(db, people)
-    schedule_user_ids = set(people)
-    if roles & {"project_manager", "functional_manager"}:
-        managed_project_ids = select(Project.id).where(
-            Project.manager_id == user.id,
-            Project.approval_status == "approved",
-            Project.status != "completed",
-            Project.is_deleted.is_(False),
-        )
-        schedule_user_ids.update(
-            db.scalars(
-                select(ProjectMember.user_id).where(
-                    ProjectMember.project_id.in_(managed_project_ids),
-                    ProjectMember.left_at.is_(None),
-                )
-            ).all()
-        )
-    return roles, project_ids, schedule_user_ids
+    return roles, project_ids, people

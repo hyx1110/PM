@@ -95,6 +95,7 @@ class ExecutionRepository:
         end_date: date | None = None,
         visible_project_ids: set[int] | None = None,
         own_user_id: int | None = None,
+        managed_by_user_id: int | None = None,
         personnel_scope_user_ids: set[int] | None = None,
     ) -> tuple[list[dict], int]:
         filters = [
@@ -135,7 +136,10 @@ class ExecutionRepository:
             project_scope = Task.project_id.in_(visible_project_ids or {-1})
             filters.append(project_scope)
         if own_user_id is not None:
-            filters.append(ExecutionRecord.user_id == own_user_id)
+            own_scope = ExecutionRecord.user_id == own_user_id
+            if managed_by_user_id is not None:
+                own_scope = or_(own_scope, Project.manager_id == managed_by_user_id)
+            filters.append(own_scope)
         count_query = (
             select(func.count(ExecutionRecord.id))
             .join(Task, Task.id == ExecutionRecord.task_id)

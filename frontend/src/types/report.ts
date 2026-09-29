@@ -173,6 +173,24 @@ export interface DashboardProjectHealth {
   progress: number
 }
 
+export interface DashboardDayItem {
+  id: string
+  source_id: number
+  kind: 'booking' | 'personal'
+  title: string
+  project_name?: string | null
+  time_type?: string
+  start_time: string
+  end_time: string
+  status: string
+  remark?: string | null
+}
+
+export interface DashboardMyDay {
+  date: string
+  items: DashboardDayItem[]
+}
+
 export interface DashboardWorkbench {
   generated_at: string
   scope_label: string
@@ -194,6 +212,7 @@ export interface DashboardWorkbench {
   execution_comparison: DashboardTaskItem[]
   pending_items: DashboardPendingItem[]
   my_tasks: DashboardTaskItem[]
+  my_day: DashboardMyDay
   risk_alerts: DashboardRiskAlert[]
   workhour_trend: Array<{ date: string; planned_hours: number; actual_hours: number }>
   project_health: DashboardProjectHealth[]

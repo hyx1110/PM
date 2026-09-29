@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { approveProject, approveProjectResourceRequest, rejectProject, rejectProjectResourceRequest } from '@/api/project'
@@ -7,6 +7,8 @@ import { confirmSchedule, rejectSchedule } from '@/api/schedule'
 import { approveOvertime, rejectOvertime } from '@/api/overtime'
 import { getDashboardWorkbench } from '@/api/report'
 import DashboardOverviewStats from '@/components/dashboard/DashboardOverviewStats.vue'
+import DashboardPendingPanel from '@/components/dashboard/DashboardPendingPanel.vue'
+import DashboardMyDay from '@/components/dashboard/DashboardMyDay.vue'
 import DashboardProjectTimeline from '@/components/dashboard/DashboardProjectTimeline.vue'
 import DashboardTaskExecutionCompare from '@/components/dashboard/DashboardTaskExecutionCompare.vue'
 import DashboardRiskAlerts from '@/components/dashboard/DashboardRiskAlerts.vue'
@@ -16,8 +18,8 @@ import TaskDetailDrawer from '@/components/dashboard/TaskDetailDrawer.vue'
 import PendingDetailDrawer from '@/components/dashboard/PendingDetailDrawer.vue'
 import RiskDetailDrawer from '@/components/dashboard/RiskDetailDrawer.vue'
 import type { DashboardPendingItem, DashboardRiskAlert, DashboardTaskItem, DashboardWorkbench } from '@/types/report'
-import { formatDateTime } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
+import { beijingNow } from '@/utils/time'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -31,8 +33,12 @@ const selectedRisk = ref<DashboardRiskAlert>()
 const taskDrawerVisible = ref(false)
 const pendingDrawerVisible = ref(false)
 const riskDrawerVisible = ref(false)
+let dayRefreshTimer: ReturnType<typeof setInterval> | undefined
+let lastAttemptDay = ''
 
 async function loadDashboard() {
+  if (loading.value) return
+  lastAttemptDay = beijingNow().format('YYYY-MM-DD')
   loading.value = true
   loadError.value = false
   try {
@@ -142,29 +148,41 @@ async function rejectPendingItem(item: DashboardPendingItem) {
   }
 }
 
-onMounted(() => { void loadDashboard() })
+function refreshOnNewDay() {
+  // Refresh after Beijing midnight, including returning to a suspended tab.
+  // Once per new day: failed requests remain explicitly retryable, not a loop.
+  if (document.visibilityState === 'visible' && lastAttemptDay !== beijingNow().format('YYYY-MM-DD')) void loadDashboard()
+}
+onMounted(() => {
+  void loadDashboard()
+  dayRefreshTimer = setInterval(refreshOnNewDay, 60000)
+  document.addEventListener('visibilitychange', refreshOnNewDay)
+})
+onUnmounted(() => {
+  if (dayRefreshTimer) clearInterval(dayRefreshTimer)
+  document.removeEventListener('visibilitychange', refreshOnNewDay)
+})
 </script>
 
 <template>
   <div class="page-shell dashboard-page">
-    <header class="page-header dashboard-header">
-      <div class="dashboard-heading"><h1 class="page-title">管理驾驶舱</h1><p class="page-subtitle">{{userStore.profile?.name}}，先看待办与项目进展，再查看执行情况。</p></div>
-      <div v-if="dashboard" class="scope-meta"><i></i><div><span>{{dashboard.scope_label}}</span><small>数据更新于 {{formatDateTime(dashboard.generated_at)}}</small></div></div>
-    </header>
-
     <template v-if="dashboard">
-      <DashboardOverviewStats :overview="dashboard.overview" :pending-items="dashboard.pending_items" :tasks="dashboard.my_tasks" @open="openOverview" @pending="openPending" @task="openTask" />
+      <DashboardOverviewStats :overview="dashboard.overview" @open="openOverview" />
 
-      <DashboardProjectTimeline :projects="dashboard.timeline" @task="openTask" @project="openProject" />
-
-      <section class="detail-grid" aria-label="执行对比与关注事项">
-        <DashboardTaskExecutionCompare :items="dashboard.execution_comparison" @task="openTask" />
-        <div id="dashboard-risks"><DashboardRiskAlerts :items="dashboard.risk_alerts" @select="openRisk" /></div>
+      <section class="workday-grid" aria-label="待办、今日日程与关注事项">
+        <DashboardPendingPanel id="dashboard-pending" :overview="dashboard.overview" :pending-items="dashboard.pending_items" :tasks="dashboard.my_tasks" @pending="openPending" @task="openTask" />
+        <DashboardMyDay :day="dashboard.my_day" :loading="loading" :failed="loadError" @refresh="loadDashboard" />
+        <DashboardRiskAlerts id="dashboard-risks" :items="dashboard.risk_alerts" @select="openRisk" />
       </section>
 
-      <section class="detail-grid" aria-label="工时趋势与项目健康度">
-        <DashboardWorkhourTrend :items="dashboard.workhour_trend" />
+      <section class="project-grid" aria-label="项目健康度与项目进度">
         <DashboardProjectHealth :items="dashboard.project_health" @project="openProject" />
+        <DashboardProjectTimeline :projects="dashboard.timeline" @task="openTask" @project="openProject" />
+      </section>
+
+      <section class="analysis-grid" aria-label="计划与实际、工时趋势">
+        <DashboardTaskExecutionCompare :items="dashboard.execution_comparison" @task="openTask" />
+        <DashboardWorkhourTrend :items="dashboard.workhour_trend" />
       </section>
     </template>
 
@@ -180,18 +198,16 @@ onMounted(() => { void loadDashboard() })
 <style scoped>
 .dashboard-page { min-width: 0; gap: 24px; font-size: 14px; line-height: 1.6; }
 .dashboard-page :deep(.surface) { border-color: #e1e7ed; border-radius: 16px; box-shadow: 0 4px 18px rgba(38,53,70,.035); }
-.dashboard-header { align-items: center; padding: 4px 0 2px; }
-.dashboard-header .page-title { color: #172235; font-size: 28px; font-weight: 680; letter-spacing: -.025em; }
-.dashboard-header .page-subtitle { margin-top: 8px; color: #65758a; font-size: 14px; line-height: 1.6; }
-.dashboard-heading { min-width: 0; }
-.scope-meta { display: flex; flex-shrink: 0; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid #e1e7ed; border-radius: 12px; background: rgba(255,255,255,.8); }
-.scope-meta > i { width: 8px; height: 8px; border-radius: 50%; background: #4f846f; }
-.scope-meta > div { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.scope-meta span { color: #4d5d70; font-size: 14px; font-weight: 600; }
-.scope-meta small { color: #758397; font-size: 12px; }
-.detail-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; align-items: start; }
-.detail-grid > * { min-width: 0; }
-#dashboard-risks { scroll-margin-top: 90px; }
+.workday-grid,.project-grid,.analysis-grid { display: grid; gap: 24px; align-items: stretch; }
+.workday-grid { grid-template-columns: repeat(3,minmax(0,1fr)); grid-auto-rows: 420px; }
+.project-grid { grid-template-columns: minmax(0,1fr) minmax(0,3fr); }
+.analysis-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.workday-grid > *,.project-grid > *,.analysis-grid > * { min-width: 0; min-height: 0; box-sizing: border-box; }
+/* Grid stretches the two cards to one shared, content-sized row. Only the
+   lists scroll after the cap; no project records are removed to fit it. */
+.project-grid > * { max-height: 640px; }
+.analysis-grid > * { max-height: 500px; }
+#dashboard-pending,#dashboard-risks { scroll-margin-top: 90px; }
 .dashboard-state { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; }
 .dashboard-state h2 { margin: 0; color: #344256; font-size: 20px; }
 .dashboard-state p { margin: 12px 0 20px; color: #718095; font-size: 14px; }
@@ -201,10 +217,12 @@ onMounted(() => { void loadDashboard() })
 .skeleton-card:nth-child(n+6) { grid-column: span 2; min-height: 200px; }
 @media(max-width:1440px) {
   .dashboard-page { gap: 20px; }
-  .detail-grid { grid-template-columns: minmax(0,1fr); gap: 20px; }
-  .dashboard-header { flex-wrap: wrap; }
+  .workday-grid,.project-grid,.analysis-grid { gap: 20px; }
 }
 @media(max-width:1280px) {
+  .workday-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .workday-grid > :last-child { grid-column: 1/-1; }
+  .project-grid,.analysis-grid { grid-template-columns: minmax(0,1fr); }
   .dashboard-skeleton { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
 }
 </style>

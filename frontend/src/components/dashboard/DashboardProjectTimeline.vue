@@ -67,13 +67,13 @@ function tooltip(item: DashboardTaskItem | DashboardProjectTimelineItem) {
 <template>
   <section class="surface timeline-card">
     <header class="module-head">
-      <div><h2>项目进度</h2><p>先查看项目概览，展开查看重点任务；点击任务可查看详情。</p></div>
+      <div><h2>项目进度 <span class="project-count">{{projects.length}} 个项目</span></h2><p>展示本人及下属相关的已审批项目；展开查看重点任务，点击任务可查看详情。</p></div>
       <div class="timeline-tools">
         <div class="timeline-legend"><span><i class="plan"></i>计划</span><span><i class="actual"></i>实际</span><span><i class="today"></i>今天</span></div>
         <button v-if="expandableProjects.length" class="expand-all" :aria-label="allExpanded?'收起全部项目的重点任务':'展开全部项目的重点任务'" @click="toggleAll">{{allExpanded?'全部收起':'全部展开'}}</button>
       </div>
     </header>
-    <div v-if="projects.length" class="timeline-scroll" tabindex="0" role="region" aria-label="项目甘特图，窄窗口可横向滚动">
+    <div v-if="projects.length" class="timeline-scroll" tabindex="0" role="region" aria-label="项目甘特图，可上下滚动查看全部项目，窄窗口可横向滚动">
     <div class="timeline-table">
       <div class="timeline-header">
         <div class="name-column">项目 / 重点任务</div><div class="owner-column">负责人 / 状态</div>
@@ -93,7 +93,7 @@ function tooltip(item: DashboardTaskItem | DashboardProjectTimelineItem) {
             </div>
           </el-tooltip>
         </div>
-        <div v-show="expanded.has(project.id)" :id="`dashboard-project-tasks-${project.id}`">
+        <div v-if="expanded.has(project.id)" :id="`dashboard-project-tasks-${project.id}`">
         <div v-for="task in project.tasks" :key="task.id" class="timeline-row task-row" role="button" tabindex="0" @click="emit('task',task)" @keydown.enter="emit('task',task)" @keydown.space.prevent="emit('task',task)">
           <div class="name-column task-name-cell" :title="task.name"><span class="task-guide"></span><strong>{{task.name}}</strong></div>
           <div class="owner-column"><span :title="task.owner_name">{{task.owner_name}}</span><small :class="`status-${task.status}`">{{statusLabel[task.status] || task.status}}</small></div>
@@ -109,14 +109,16 @@ function tooltip(item: DashboardTaskItem | DashboardProjectTimelineItem) {
       </template>
     </div>
     </div>
-    <div v-else class="compact-empty">当前数据范围内暂无已审批项目</div>
+    <div v-else class="compact-empty">本人及下属暂无相关的已审批项目</div>
   </section>
 </template>
 
 <style scoped>
-.timeline-card { min-width: 0; padding: 24px; }
+.timeline-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 24px; }
+.module-head { flex-shrink: 0; }
 .module-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px 24px; }
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
+.project-count { margin-left: 10px; color: #6f7f92; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .module-head p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .timeline-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
 .timeline-legend { display: flex; align-items: center; gap: 18px; color: #5c6d81; font-size: 13px; }
@@ -127,10 +129,10 @@ function tooltip(item: DashboardTaskItem | DashboardProjectTimelineItem) {
 .timeline-legend .today { width: 2px; height: 17px; background: #c36761; }
 .expand-all { min-height: 36px; border: 1px solid #dce5ee; border-radius: 8px; background: #f8fafc; padding: 7px 12px; color: #3e6284; font-size: 13px; cursor: pointer; }
 .expand-all:hover { background: #edf3f8; }
-.timeline-scroll { overflow-x: auto; margin-top: 22px; border: 1px solid #e1e7ed; border-radius: 12px; }
+.timeline-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; margin-top: 22px; border: 1px solid #e1e7ed; border-radius: 12px; overscroll-behavior: contain; }
 .timeline-table { min-width: 940px; }
 .timeline-header,.timeline-row { display: grid; grid-template-columns: 280px 160px minmax(500px,1fr); align-items: stretch; }
-.timeline-header { min-height: 64px; background: #f5f7fa; color: #5c6d81; font-size: 13px; font-weight: 600; }
+.timeline-header { position: sticky; top: 0; z-index: 5; min-height: 64px; background: #f5f7fa; color: #5c6d81; font-size: 13px; font-weight: 600; }
 .timeline-header > div { display: flex; align-items: center; padding: 0 16px; }
 .axis-header { position: relative; padding: 0 12px!important; }
 .axis-header .axis-range { position: absolute; top: 8px; left: 14px; color: #697d91; font-size: 12px; font-weight: 500; }

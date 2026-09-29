@@ -8,11 +8,13 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.execution import ExecutionRecord
+from app.models.personal_time import PersonalTimeBlock
 from app.models.project import Project
 from app.models.risk import RiskRecord
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
+from app.repositories.personal_time_repository import PERSONAL_TIME_TYPE_LABELS
 from app.repositories.schedule_repository import schedule_repository
 from app.services import project_service, overtime_service
 from app.services.visibility_service import dashboard_visibility_scopes
@@ -32,7 +34,7 @@ def _effective_status(status: str, planned_end: date, today: date) -> str:
     return status
 
 
-def _execution_aggregate():
+def _execution_aggregate(project_ids_query):
     return (
         select(
             ExecutionRecord.task_id.label("task_id"),
@@ -41,7 +43,12 @@ def _execution_aggregate():
             func.coalesce(func.sum(ExecutionRecord.actual_hours), 0).label("actual_hours"),
             func.count(ExecutionRecord.id).label("record_count"),
         )
-        .where(ExecutionRecord.is_deleted.is_(False))
+        .where(
+            ExecutionRecord.is_deleted.is_(False),
+            ExecutionRecord.task_id.in_(select(Task.id).where(
+                Task.is_deleted.is_(False), Task.project_id.in_(project_ids_query),
+            )),
+        )
         .group_by(ExecutionRecord.task_id)
         .subquery()
     )
@@ -114,6 +121,53 @@ def _task_item(row, assignees: dict[int, list[dict]], today: date) -> dict:
     }
 
 
+def _my_day(db: Session, user_id: int, now: datetime) -> dict:
+    """Read only this user's Beijing calendar day; never mutate booking status."""
+    start = datetime.combine(now.date(), datetime.min.time())
+    end = start + timedelta(days=1)
+    items = []
+    bookings = db.execute(
+        select(ScheduleBooking, Project.name, Task.name)
+        .join(Project, Project.id == ScheduleBooking.project_id)
+        .join(Task, and_(Task.id == ScheduleBooking.task_id, Task.project_id == Project.id))
+        .where(
+            ScheduleBooking.user_id == user_id,
+            ScheduleBooking.start_time < end,
+            ScheduleBooking.end_time > start,
+            Project.is_deleted.is_(False), Task.is_deleted.is_(False),
+            or_(
+                ScheduleBooking.status.in_(COUNTED_SCHEDULE_STATUSES),
+                and_(ScheduleBooking.status.in_({"pending", "changed"}), ScheduleBooking.end_time > now),
+            ),
+        )
+    ).all()
+    for booking, project_name, task_name in bookings:
+        items.append({
+            "id": f"booking-{booking.id}", "source_id": booking.id,
+            "kind": "booking", "title": task_name, "project_name": project_name,
+            "start_time": booking.start_time, "end_time": booking.end_time,
+            "status": booking.status, "remark": booking.remark,
+        })
+    blocks = db.scalars(select(PersonalTimeBlock).where(
+        PersonalTimeBlock.user_id == user_id,
+        PersonalTimeBlock.status == "active",
+        PersonalTimeBlock.start_time < end,
+        PersonalTimeBlock.end_time > start,
+    )).all()
+    for block in blocks:
+        items.append({
+            "id": f"personal-{block.id}", "source_id": block.id,
+            "kind": "personal", "title": PERSONAL_TIME_TYPE_LABELS.get(block.time_type, "个人安排"),
+            "time_type": block.time_type, "project_name": None,
+            "start_time": block.start_time, "end_time": block.end_time,
+            "status": block.status, "remark": block.remark,
+        })
+    # Preserve every overlapping invitation as a separate row. Do not sum their
+    # duration as occupied hours: pending invitations do not reserve this time.
+    items.sort(key=lambda item: (item["start_time"], item["end_time"], item["id"]))
+    return {"date": now.date(), "items": items}
+
+
 def _pending_datetime(value: datetime | str | None) -> datetime | None:
     """Normalize serialized and ORM timestamps to naive Beijing time."""
     if isinstance(value, str):
@@ -159,6 +213,8 @@ def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
         })
     for request in project_service.list_pending_resource_requests(db, user):
         changes = []
+        if request.get("requested_planned_end"):
+            changes.append(f"计划结束日期 {request.get('original_planned_end')} → {request['requested_planned_end']}")
         if request.get("requested_hours"):
             changes.append(f"追加 {_number(request['requested_hours'])}h")
         if request.get("add_member_ids"):
@@ -212,11 +268,9 @@ def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
 def dashboard_workbench(db: Session, user: User) -> dict:
     now = beijing_now()
     today = now.date()
-    roles, project_scope, schedule_user_ids = dashboard_visibility_scopes(db, user)
+    _roles, project_scope, schedule_user_ids = dashboard_visibility_scopes(db, user)
 
-    project_filters = [Project.is_deleted.is_(False)]
-    if project_scope is not None:
-        project_filters.append(Project.id.in_(project_scope or {-1}))
+    project_filters = [Project.is_deleted.is_(False), Project.id.in_(project_scope or {-1})]
     approved_project_filters = [*project_filters, Project.approval_status == "approved"]
     visible_project_ids_query = select(Project.id).where(*project_filters)
     approved_project_ids_query = select(Project.id).where(*approved_project_filters)
@@ -224,7 +278,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         Task.is_deleted.is_(False),
         Task.project_id.in_(visible_project_ids_query),
     ]
-    execution_agg = _execution_aggregate()
+    execution_agg = _execution_aggregate(visible_project_ids_query)
 
     project_priority = case(
         (and_(Project.status != "completed", Project.planned_end < today), 0),
@@ -237,8 +291,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         select(Project, manager.name.label("manager_name"))
         .join(manager, manager.id == Project.manager_id)
         .where(*approved_project_filters)
-        .order_by(project_priority, Project.updated_at.desc(), Project.planned_end.asc())
-        .limit(5)
+        .order_by(project_priority, Project.updated_at.desc(), Project.planned_end.asc(), Project.id.desc())
     ).all()
     timeline_project_ids = [project.id for project, _ in project_rows]
 
@@ -552,11 +605,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
     pending_action_count = pending_approval_count + int(pending_schedule_count or 0)
     pending_count = pending_action_count + int(my_pending_task_count or 0)
     pending_today = pending_approval_count + int(pending_schedule_today or 0) + int(my_priority_task_count or 0)
-    scope_label = (
-        "全部项目与人员" if project_scope is None else
-        "本人及全部下属相关项目" if "functional_manager" in roles else
-        "本人负责、参与或执行的项目"
-    )
+    scope_label = "本人及全部下属相关项目" if schedule_user_ids - {user.id} else "本人负责、参与或执行的项目"
     overview = {
         "running_projects": int(running_projects),
         "due_this_week": int(due_this_week),
@@ -579,6 +628,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         "execution_comparison": [task_cache[row[0].id] for row in comparison_rows],
         "pending_items": pending_items,
         "my_tasks": [task_cache[row[0].id] for row in my_rows],
+        "my_day": _my_day(db, user.id, now),
         "risk_alerts": risk_alerts,
         "workhour_trend": workhour_trend,
         "project_health": project_health,

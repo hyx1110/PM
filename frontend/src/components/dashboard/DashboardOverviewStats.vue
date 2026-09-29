@@ -1,18 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Calendar, Collection, TrendCharts, Warning } from '@element-plus/icons-vue'
-import DashboardPendingPopover from '@/components/dashboard/DashboardPendingPopover.vue'
-import type { DashboardPendingItem, DashboardTaskItem, DashboardWorkbench } from '@/types/report'
+import type { DashboardWorkbench } from '@/types/report'
 
 const props = defineProps<{
   overview: DashboardWorkbench['overview']
-  pendingItems: DashboardPendingItem[]
-  tasks: DashboardTaskItem[]
 }>()
 const emit = defineEmits<{
   open: [target: 'projects' | 'tasks' | 'pending' | 'risks']
-  pending: [item: DashboardPendingItem]
-  task: [item: DashboardTaskItem]
 }>()
 
 const cards = computed(() => [
@@ -21,7 +16,7 @@ const cards = computed(() => [
     label: '待处理事项',
     value: props.overview.pending_count,
     note: `${props.overview.pending_action_count} 审批/预约 · ${props.overview.pending_task_count} 项任务`,
-    details: '',
+    details: '审批、预约确认和我的未完成任务已在下方展开，点击可定位到待处理事项。',
     icon: Calendar,
     tone: 'amber',
   },
@@ -58,19 +53,11 @@ const cards = computed(() => [
 <template>
   <section class="overview-grid" aria-label="核心概览">
     <template v-for="card in cards" :key="card.key">
-      <DashboardPendingPopover v-if="card.key==='pending'" :overview="overview" :pending-items="pendingItems" :tasks="tasks" @pending="emit('pending',$event)" @task="emit('task',$event)">
-        <article class="surface overview-card tone-amber pending-card" tabindex="0">
-          <span v-if="overview.pending_count" class="attention-badge">{{overview.pending_count>99?'99+':overview.pending_count}}</span>
+      <el-tooltip :content="card.details" placement="bottom" :show-after="260">
+        <article class="surface overview-card" :class="[`tone-${card.tone}`, {'has-pending':card.key==='pending' && overview.pending_count>0}]" role="button" tabindex="0" @click="emit('open',card.key)" @keydown.enter="emit('open',card.key)" @keydown.space.prevent="emit('open',card.key)">
           <div class="overview-icon"><el-icon><component :is="card.icon" /></el-icon></div>
           <div class="overview-copy"><span>{{card.label}}</span><strong>{{card.value}}</strong><small>{{card.note}}</small></div>
-          <span class="overview-link always">悬停查看</span>
-        </article>
-      </DashboardPendingPopover>
-      <el-tooltip v-else :content="card.details" placement="bottom" :show-after="260">
-        <article class="surface overview-card" :class="`tone-${card.tone}`" role="button" tabindex="0" @click="emit('open',card.key)" @keydown.enter="emit('open',card.key)">
-          <div class="overview-icon"><el-icon><component :is="card.icon" /></el-icon></div>
-          <div class="overview-copy"><span>{{card.label}}</span><strong>{{card.value}}</strong><small>{{card.note}}</small></div>
-          <span class="overview-link">查看</span>
+          <span class="overview-link" :class="{always:card.key==='pending'}"><i v-if="card.key==='pending' && overview.pending_count>0" aria-hidden="true"></i>{{card.key==='pending' ? (overview.pending_count ? '有事项待处理 · 查看下方' : '暂无待办') : '查看'}}</span>
         </article>
       </el-tooltip>
     </template>
@@ -82,7 +69,9 @@ const cards = computed(() => [
 .overview-card { position: relative; display: flex; min-width: 0; min-height: 132px; align-items: center; gap: 16px; padding: 22px 22px 30px; cursor: pointer; transition: border-color .15s,box-shadow .15s; }
 .overview-card:hover { border-color: #bacddd; box-shadow: 0 6px 22px rgba(36,53,72,.07); }
 .overview-card:focus-visible { outline: 2px solid #527fa6; outline-offset: 3px; }
-.pending-card { height: 100%; }
+.has-pending { border-color: #e8c8c5; }
+.has-pending .overview-copy strong { border-radius: 9px; background: #fbeeed; padding: 2px 10px; color: #ad4d47; }
+.has-pending .overview-icon { background: #fbeeed; color: #ad4d47; }
 .overview-icon { display: grid; width: 46px; height: 46px; flex: 0 0 46px; place-items: center; border-radius: 13px; font-size: 22px; }
 .tone-blue .overview-icon { background: #eaf2f9; color: #3d6e99; }
 .tone-green .overview-icon { background: #eaf5f0; color: #3f7761; }
@@ -94,6 +83,7 @@ const cards = computed(() => [
 .overview-copy small { grid-column: 1/-1; color: #748196; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .overview-link { position: absolute; right: 20px; bottom: 9px; color: #5f7891; font-size: 12px; opacity: 0; }
 .overview-link.always,.overview-card:hover .overview-link,.overview-card:focus-visible .overview-link { opacity: 1; }
-.attention-badge { position: absolute; z-index: 2; top: 9px; right: 9px; display: grid; min-width: 25px; height: 25px; place-items: center; padding: 0 6px; border: 2px solid #fff; border-radius: 14px; background: #b94e48; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; }
+.has-pending .overview-link { color: #ad4d47; }
+.overview-link i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: middle; }
 @media(max-width:1500px) { .overview-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 </style>

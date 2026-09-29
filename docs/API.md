@@ -1,5 +1,16 @@
 # V2.0 API 清单
 
+首页 `/api/v1/dashboard/workbench` 与兼容的 `/api/v1/dashboard/summary` 统一按本人及全部层级下属的项目关系过滤；部门主管/超级管理员的首页不再默认全量。`workbench.timeline` 返回全部相关已审批项目，取消 5 个项目上限，仍保持每项目最多 6 条任务摘要。其他业务模块权限及待办审批规则不变，无新增接口、依赖或数据库迁移。
+
+`GET /api/v1/dashboard/workbench` 新增 `my_day: { date, items }`：`date` 为北京时间当天（`YYYY-MM-DD`），`items` 合并当前登录用户的有效预约和未撤回个人安排，按起止时间升序，不接受外部用户 ID、不返回下属日程。仅查询与 `[当天 00:00, 次日 00:00)` 相交的记录；有效预约包括 `confirmed/running/completed` 和尚未过期的 `pending/changed`，不含取消、拒绝、草稿。每项包含 `id`（带来源前缀）、`source_id`、`kind`（`booking/personal`）、`title`、`project_name`、`start_time`、`end_time`、`status`、`remark`，个人安排另含 `time_type`。起止时间保留完整原始北京时间，前端仅在时间线裁剪跨天显示，详情显示完整日期。加班不进入此日程，未确认邀请不作为占用工时相加；此查询不修改任何预约状态。无表结构变更，部署时同步更新前后端。
+
+## 2026-09-29 接口补充
+
+- `GET /api/v1/work-calendar/planned-hours?start_date=2026-09-01&end_date=2026-09-30&member_count=3`：登录鉴权，返回 `workdays`、`member_count`、`hours_per_day`（8）和 `planned_hours`，按系统工作日历计算默认计划工时，不修改数据库。
+- `POST /api/v1/projects/{id}/resource-requests`：可选字段 `requested_planned_end`（YYYY-MM-DD），支持仅申请延期或同时申请工时/成员变更；`reason` 必填。响应及列表增加 `original_planned_end` 与 `requested_planned_end`。继续使用现有 approve/reject 接口，批准才更新项目结束日期。
+- `GET /api/v1/executions` 及单条详情：项目负责人可读自己负责项目的成员记录；普通用户仍只读本人记录，全局角色维持原范围。`mine=true` 进一步收窄到本人。读权限不授予代写权限。
+- 执行创建/更新：实际工时需为正数且是 0.5 的整数倍；创建已完成记录必须显式填写工时，更新已完成记录不能清空工时，仍可保留现有合法值。
+
 业务接口统一使用 `/api/v1` 前缀；登录外的接口通过 `Authorization: Bearer <token>` 鉴权。普通 JSON 响应保持：
 
 ```json

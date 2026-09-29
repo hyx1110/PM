@@ -54,6 +54,8 @@ class ProjectResourceRequest(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     requested_hours: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    original_planned_end: Mapped[date | None] = mapped_column(Date)
+    requested_planned_end: Mapped[date | None] = mapped_column(Date)
     add_member_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     remove_member_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     reason: Mapped[str] = mapped_column(Text, nullable=False)

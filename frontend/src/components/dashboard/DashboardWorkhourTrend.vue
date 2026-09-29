@@ -13,7 +13,7 @@ const visibleItems = computed(() => {
   return props.items.filter(item => item.date.startsWith(month))
 })
 const maxHours = computed(() => Math.max(...visibleItems.value.flatMap(item => [item.planned_hours, item.actual_hours]), 1))
-const height = (value: number) => `${Math.max(value / maxHours.value * 152, value ? 3 : 0)}px`
+const height = (value: number) => `${Math.max(value / maxHours.value * 100, value ? 2 : 0)}%`
 const plannedTotal = computed(() => Math.round(visibleItems.value.reduce((sum, item) => sum + item.planned_hours, 0) * 10) / 10)
 const actualTotal = computed(() => Math.round(visibleItems.value.reduce((sum, item) => sum + item.actual_hours, 0) * 10) / 10)
 const deviationTotal = computed(() => Math.round((actualTotal.value - plannedTotal.value) * 10) / 10)
@@ -32,7 +32,8 @@ const deviationTotal = computed(() => Math.round((actualTotal.value - plannedTot
 </template>
 
 <style scoped>
-.trend-card { min-width: 0; padding: 24px; }
+.trend-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 24px; }
+.module-head,.trend-meta { flex-shrink: 0; }
 .module-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
 .module-head p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
@@ -50,10 +51,10 @@ const deviationTotal = computed(() => Math.round((actualTotal.value - plannedTot
 .chart-legend i { display: block; width: 18px; height: 7px; border-radius: 3px; }
 .chart-legend .planned { background: #c0ccd8; }
 .chart-legend .actual { background: #527fa6; }
-.chart-scroll { overflow-x: auto; margin-top: 16px; }
-.trend-chart { display: flex; min-width: 620px; height: 194px; align-items: flex-end; gap: 4px; border-bottom: 1px solid #dfe6ec; background: repeating-linear-gradient(to bottom,transparent 0,transparent 46px,#eef2f6 47px); }
-.trend-column { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: center; }
-.bar-pair { display: flex; height: 156px; align-items: flex-end; gap: 3px; }
+.chart-scroll { min-height: 194px; flex: 1 1 auto; overflow: auto; margin-top: 16px; }
+.trend-chart { display: flex; min-width: 620px; min-height: 194px; height: 100%; align-items: flex-end; gap: 4px; border-bottom: 1px solid #dfe6ec; background: repeating-linear-gradient(to bottom,transparent 0,transparent 46px,#eef2f6 47px); }
+.trend-column { display: flex; min-width: 0; height: 100%; min-height: 194px; flex: 1; flex-direction: column; align-items: center; }
+.bar-pair { display: flex; height: calc(100% - 36px); min-height: 156px; align-items: flex-end; gap: 3px; }
 .bar-pair i { display: block; width: 8px; border-radius: 4px 4px 1px 1px; }
 .monthly .bar-pair { gap: 2px; }
 .monthly .bar-pair i { width: 5px; }

@@ -48,7 +48,7 @@ import { remainingTaskHours, withinTaskDates } from '@/utils/schedule-quota'
 
 const userStore = useUserStore()
 const loading = ref(false)
-const viewMode = ref<'day' | 'week' | 'month'>('week')
+const viewMode = ref<'day' | 'week' | 'month'>('day')
 const anchorDate = ref(beijingNow().format('YYYY-MM-DD'))
 const schedules = ref<Schedule[]>([])
 const hiddenBoardStatuses = new Set(['draft', 'rejected', 'withdrawn', 'cancelled'])

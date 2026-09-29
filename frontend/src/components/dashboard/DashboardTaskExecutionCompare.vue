@@ -14,7 +14,7 @@ const width = (value: number, item: DashboardTaskItem) => `${Math.min(value / Ma
 <template>
   <section class="surface compare-card">
     <header class="module-head"><div><h2>计划与实际</h2><p>优先展示延期或工时偏差较大的任务。</p></div><button v-if="items.length>3" class="text-button" :aria-expanded="expanded" @click="expanded=!expanded">{{expanded?'收起':`查看全部 ${items.length} 项`}}</button></header>
-    <div v-if="visibleItems.length" class="compare-list">
+    <div v-if="visibleItems.length" class="compare-list" tabindex="0" role="region" aria-label="计划与实际执行对比，可滚动查看">
       <el-tooltip v-for="item in visibleItems" :key="item.id" :content="`${item.project_name} · ${item.owner_name}；计划 ${item.planned_start} 至 ${item.planned_end}；实际 ${item.actual_start || '未开始'} 至 ${item.actual_end || '—'}`" placement="top" :show-after="260">
         <button class="compare-item" @click="emit('task',item)">
           <div class="compare-title"><div><strong>{{item.name}}</strong><small>{{item.project_name}} · {{item.owner_name}}</small></div><span :class="`variance-${item.variance}`">{{varianceLabel(item)}}</span></div>
@@ -28,13 +28,14 @@ const width = (value: number, item: DashboardTaskItem) => `${Math.min(value / Ma
 </template>
 
 <style scoped>
-.compare-card { min-width: 0; padding: 24px; }
+.compare-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 24px; }
+.module-head { flex-shrink: 0; }
 .module-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
 .module-head p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .text-button { border: 0; border-radius: 6px; background: transparent; padding: 8px 0; color: #436d94; font-size: 13px; cursor: pointer; }
-.compare-list { display: flex; flex-direction: column; margin-top: 16px; }
-.compare-item { width: 100%; border: 0; border-top: 1px solid #e8edf2; background: transparent; padding: 20px 4px; text-align: left; cursor: pointer; }
+.compare-list { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: auto; margin-top: 16px; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.compare-item { width: 100%; flex-shrink: 0; border: 0; border-top: 1px solid #e8edf2; background: transparent; padding: 20px 4px; text-align: left; cursor: pointer; }
 .compare-item:first-child { border-top: 0; }
 .compare-item:last-child { padding-bottom: 4px; }
 .compare-item:hover { border-radius: 9px; background: #f6f9fb; }
@@ -55,7 +56,7 @@ const width = (value: number, item: DashboardTaskItem) => `${Math.min(value / Ma
 .actual .bar-track .variance-severe { background: #ba6861; }
 .compare-bars span { display: block; margin-top: 7px; color: #52667b; font-size: 13px; line-height: 1.5; }
 .compare-periods { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 5px; color: #718095; font-size: 12px; line-height: 1.5; }
-.compact-empty { display: grid; min-height: 130px; place-items: center; color: #708095; font-size: 14px; }
-button:focus-visible { outline: 2px solid #527fa6; outline-offset: 2px; }
+.compact-empty { display: grid; min-height: 130px; flex: 1; place-items: center; color: #708095; font-size: 14px; }
+button:focus-visible,.compare-list:focus-visible { outline: 2px solid #527fa6; outline-offset: -2px; }
 @media(max-width:1440px) { .compare-card { padding: 20px; } }
 </style>

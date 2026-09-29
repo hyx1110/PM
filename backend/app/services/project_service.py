@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from uuid import uuid4
 
 from sqlalchemy import func, or_, select
@@ -27,7 +27,7 @@ from app.services.operation_log_service import log_operation
 from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
 from app.services.visibility_service import has_global_project_access, related_project_ids, related_user_ids
 from app.utils.model import model_to_dict
-from app.utils.time import beijing_now
+from app.utils.time import beijing_now, beijing_today
 from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 PROJECT_CREATOR_ROLES = {"project_manager", "functional_manager", "department_manager", "super_admin"}
@@ -94,6 +94,7 @@ def assert_project_owner_for_resource_request(
         select(Project)
         .where(Project.id == project_id, Project.is_deleted.is_(False))
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not project:
         raise not_found("project not found")
@@ -438,6 +439,11 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
 
 
 def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: User) -> Project:
+    # Serialize plan changes with resource approval and task creation.
+    project = db.scalar(select(Project).where(Project.id == project_id).with_for_update()
+                        .execution_options(populate_existing=True))
+    if not project or project.is_deleted:
+        raise not_found("project not found")
     project = assert_project_manageable(db, project_id, user)
     if project.status in PROJECT_CLOSED_STATUSES:
         raise bad_request("已完成项目不能再修改")
@@ -468,6 +474,8 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
         get_department_manager(db, department_id)
     planned_start = values.get("planned_start", project.planned_start)
     planned_end = values.get("planned_end", project.planned_end)
+    if project.approval_status == "approved" and planned_end > project.planned_end:
+        raise bad_request("已审批项目不能直接延长计划结束日期，请通过项目资源申请提交延期并由部门主管审批")
     if planned_end < planned_start:
         raise bad_request("planned_end must be on or after planned_start")
     if {"planned_start", "planned_end"} & values.keys():
@@ -720,6 +728,8 @@ def _assert_member_can_be_removed(
 
 def _resource_request_summary(item: ProjectResourceRequest) -> str:
     changes: list[str] = []
+    if item.requested_planned_end:
+        changes.append(f"计划结束日期从 {item.original_planned_end} 延期至 {item.requested_planned_end}")
     if item.requested_hours > 0:
         changes.append(f"追加 {item.requested_hours} 小时")
     if item.add_member_ids:
@@ -729,6 +739,18 @@ def _resource_request_summary(item: ProjectResourceRequest) -> str:
     return "、".join(changes)
 
 
+def _validate_project_extension(project: Project, requested_end: date | None) -> None:
+    if requested_end is None:
+        return
+    if project.approval_status != "approved" or project.status in PROJECT_CLOSED_STATUSES:
+        raise bad_request("只有已审批且未完成的项目可以申请延期")
+    today = beijing_today()
+    if project.planned_end >= today:
+        raise bad_request("项目尚未逾期，无需申请逾期延期")
+    if requested_end <= project.planned_end or requested_end < today:
+        raise bad_request("延期后的计划结束日期必须晚于原结束日期，且不能早于今天")
+
+
 def create_resource_request(
     db: Session,
     project_id: int,
@@ -736,6 +758,7 @@ def create_resource_request(
     user: User,
 ) -> ProjectResourceRequest:
     project = assert_project_owner_for_resource_request(db, project_id, user)
+    _validate_project_extension(project, payload.requested_planned_end)
     if not project.department_id:
         raise bad_request("项目未设置所属部门，无法申请资源变更")
     if db.scalar(
@@ -762,6 +785,8 @@ def create_resource_request(
     item = ProjectResourceRequest(
         project_id=project.id,
         requested_hours=payload.requested_hours,
+        original_planned_end=project.planned_end if payload.requested_planned_end else None,
+        requested_planned_end=payload.requested_planned_end,
         add_member_ids=payload.add_member_ids,
         remove_member_ids=payload.remove_member_ids,
         reason=payload.reason,
@@ -867,6 +892,7 @@ def decide_resource_request(
         select(Project)
         .where(Project.id == project_id, Project.is_deleted.is_(False))
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not project:
         raise not_found("project not found")
@@ -878,6 +904,7 @@ def decide_resource_request(
             ProjectResourceRequest.project_id == project_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if not item:
         raise not_found("resource request not found")
@@ -885,13 +912,22 @@ def decide_resource_request(
         raise bad_request("only pending resource requests can be reviewed")
     if not approved and not payload.note:
         raise bad_request("驳回项目资源申请时必须填写原因")
+    if approved:
+        if project.approval_status != "approved" or project.status in PROJECT_CLOSED_STATUSES:
+            raise bad_request("项目未审批或已完成，不能批准资源变更，请驳回该申请")
+        _validate_project_extension(project, item.requested_planned_end)
+        if item.requested_planned_end and project.planned_end != item.original_planned_end:
+            raise bad_request("项目计划结束日期已变化，请驳回后重新提交延期申请")
     before = model_to_dict(item)
+    project_before = model_to_dict(project)
     item.status = "approved" if approved else "rejected"
     item.reviewed_by = user.id
     item.reviewed_at = beijing_now()
     item.review_note = payload.note
     if approved:
         project.budget_hours += item.requested_hours
+        if item.requested_planned_end:
+            project.planned_end = item.requested_planned_end
         added_users = _validate_initial_project_members(db, item.add_member_ids or [])
         active_member_ids = set(
             db.scalars(
@@ -943,6 +979,11 @@ def decide_resource_request(
                 related_type="project",
                 related_id=project.id,
             )
+    if approved:
+        log_operation(db, operator_id=user.id, module="project", action="apply_resources",
+                      object_type="project", object_id=project.id,
+                      before_data=project_before, after_data=model_to_dict(project),
+                      reason=f"资源申请 #{item.id} 获批：{item.reason}")
     create_notification(
         db,
         item.requested_by,

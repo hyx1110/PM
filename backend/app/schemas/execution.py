@@ -14,7 +14,7 @@ class ExecutionCreate(ORMModel):
     user_id: int | None = None
     actual_start: date
     actual_end: date | None = None
-    actual_hours: Decimal | None = Field(default=None, gt=0)
+    actual_hours: Decimal | None = Field(default=None, gt=0, multiple_of=Decimal("0.5"))
     status: str = "running"
     description: str | None = None
 
@@ -26,13 +26,15 @@ class ExecutionCreate(ORMModel):
             raise ValueError("actual_end must be on or after actual_start")
         if self.status == "completed" and self.actual_end is None:
             raise ValueError("completed execution must have actual_end")
+        if self.status == "completed" and self.actual_hours is None:
+            raise ValueError("已完成记录必须填写实际工时")
         return self
 
 
 class ExecutionUpdate(ORMModel):
     actual_start: date | None = None
     actual_end: date | None = None
-    actual_hours: Decimal | None = Field(default=None, gt=0)
+    actual_hours: Decimal | None = Field(default=None, gt=0, multiple_of=Decimal("0.5"))
     status: str | None = None
     description: str | None = None
 

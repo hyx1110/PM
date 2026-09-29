@@ -177,8 +177,8 @@ onMounted(async () => {
         <el-table-column prop="owner_name" label="项目成员" min-width="120" show-overflow-tooltip/>
         <el-table-column label="计划工期" min-width="170" align="center"><template #default="{row}">{{formatPeriod(row.planned_start,row.planned_end)}}</template></el-table-column>
         <el-table-column label="实际工期" min-width="170" align="center"><template #default="{row}">{{formatPeriod(row.actual_start,row.actual_end,true)}}</template></el-table-column>
-        <el-table-column label="预估人力" min-width="100" align="center"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
-        <el-table-column label="实际人力" min-width="100" align="center"><template #default="{row}">{{row.actual_hours}}h</template></el-table-column>
+        <el-table-column label="预计工时" min-width="100" align="center"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
+        <el-table-column label="实际工时" min-width="100" align="center"><template #default="{row}">{{row.actual_hours}}h</template></el-table-column>
         <el-table-column prop="achievement_rate" label="项目达成率" min-width="110" align="center"><template #default="{row}">{{row.achievement_rate==null?'—':`${row.achievement_rate}%`}}</template></el-table-column>
         <el-table-column prop="achievement_quality" label="项目达成质量" min-width="120" align="center"><template #default="{row}">{{row.achievement_quality==null?'—':`${row.achievement_quality}%`}}</template></el-table-column>
         <el-table-column prop="effective_status" label="状态" min-width="95" align="center"/>

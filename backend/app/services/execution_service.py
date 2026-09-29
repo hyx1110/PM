@@ -83,8 +83,8 @@ def _resolve_actual_hours(
     if capacity <= 0:
         raise bad_request("所选日期范围不包含工作日")
     actual_hours = supplied_hours if supplied_hours is not None else capacity
-    if actual_hours <= 0:
-        raise bad_request("实际工时必须大于 0")
+    if not actual_hours.is_finite() or actual_hours <= 0 or actual_hours % Decimal("0.5") != 0:
+        raise bad_request("实际工时必须为大于 0 的 0.5 小时整数倍")
     if actual_hours > capacity:
         raise bad_request(f"实际工时不能超过所选工作日容量 {capacity} 小时")
     return actual_hours
@@ -125,6 +125,7 @@ def list_executions(db: Session, user: User, page: int, page_size: int, mine: bo
         page_size,
         visible_project_ids=None,
         own_user_id=None if _has_global_execution_access(db, user) else user.id,
+        managed_by_user_id=user.id,
         personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
         **filters,
     )
@@ -136,11 +137,18 @@ def execution_detail(db: Session, execution_id: int, user: User) -> dict:
     if not record:
         raise not_found("execution record not found")
     if record.user_id != user.id and not _has_global_execution_access(db, user):
-        raise forbidden("只能查看自己的执行记录")
+        managed_project = db.scalar(select(Project.id).join(Task, Task.project_id == Project.id).where(
+            Task.id == record.task_id, Project.manager_id == user.id,
+            Project.is_deleted.is_(False), Task.is_deleted.is_(False),
+        ))
+        if managed_project is None:
+            raise forbidden("只能查看本人或自己负责项目下的执行记录")
     return execution_repository.detail(db, execution_id)
 
 
 def create_execution(db: Session, payload: ExecutionCreate, user: User) -> ExecutionRecord:
+    if payload.status == "completed" and payload.actual_hours is None:
+        raise bad_request("已完成记录必须填写实际工时")
     task = _lock_executable_task(db, payload.task_id)
     _assert_project_not_evaluated(db, task.project_id)
     if task.status == "completed":
@@ -209,6 +217,8 @@ def update_execution(db: Session, execution_id: int, payload: ExecutionUpdate, u
     if status == "completed" and actual_end is None:
         raise bad_request("completed execution must have actual_end")
     supplied_hours = values.pop("actual_hours", record.actual_hours)
+    if status == "completed" and supplied_hours is None:
+        raise bad_request("已完成记录必须填写实际工时")
     if record.overtime_request_id:
         actual_hours = resolve_execution_hours(db, record.overtime_request_id, task.id,
             record.user_id, actual_start, actual_end, supplied_hours, exclude_execution_id=record.id)

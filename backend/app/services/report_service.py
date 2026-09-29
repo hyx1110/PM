@@ -102,10 +102,8 @@ def workload_report(db: Session, user: User, start_date: date, end_date: date, d
 
 
 def dashboard_summary(db: Session, user: User) -> dict:
-    roles, project_scope, schedule_user_ids = dashboard_visibility_scopes(db, user)
-    project_filters = [Project.is_deleted.is_(False)]
-    if project_scope is not None:
-        project_filters.append(Project.id.in_(project_scope or {-1}))
+    _roles, project_scope, schedule_user_ids = dashboard_visibility_scopes(db, user)
+    project_filters = [Project.is_deleted.is_(False), Project.id.in_(project_scope or {-1})]
     active_project_ids = select(Project.id).where(Project.is_deleted.is_(False))
     task_filters = [
         Task.is_deleted.is_(False),
@@ -118,11 +116,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
     if project_scope is not None:
         task_filters.append(Task.project_id.in_(project_scope or {-1}))
         schedule_filters.append(ScheduleBooking.project_id.in_(project_scope or {-1}))
-    scope_label = (
-        "全部项目" if project_scope is None else
-        "本人及全部下属相关项目" if "functional_manager" in roles else
-        "本人负责或参与的项目"
-    )
+    scope_label = "本人及全部下属相关项目" if schedule_user_ids - {user.id} else "本人负责、参与或执行的项目"
     now = beijing_now()
     today = now.date()
     project_total, project_running, project_completed, delayed_projects = db.execute(

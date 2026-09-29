@@ -4,6 +4,8 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 
 ## 主要模块
 
+- `alembic/versions/20260929_0018_project_extension.py`：在资源申请增加原结束日期与申请结束日期；项目延期批准后才生效。需维护者先执行迁移再部署新版后端，详见 [9 月 29 日修复与验收说明](../docs/BUGFIX_20260929.md)。
+- `GET /api/v1/work-calendar/planned-hours`：登录用户可读取包含节假日/调休规则的默认计划工时；`execution_service.py` 支持本人/本人负责项目的执行记录读取，并强制已完成工时必填和半小时校验。
 - `app/services/overtime_service.py` 与 `app/api/v1/overtime.py`：非工作时间加班申请、项目经理/部门主管审批、撤回和实际工时凭证；普通成员由项目经理审批，项目经理为自己负责项目申请时由项目所属部门主管审批。
 - `app/services/email_service.py`：SMTP 总开关、STARTTLS/隐式 TLS、可信公司 CA、异步投递和有限次数重试；默认关闭，无邮箱/未启用不影响站内业务。
 - `alembic/versions/20260928_0017_overtime_and_email.py`：新增加班表、执行记录的加班关联及通知邮件投递状态；升级前先备份，由维护者执行迁移。
@@ -15,7 +17,7 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 - `app/services/import_export_service.py`：标准模板、逐行导入和业务报表导出。
 - `app/tasks`：风险扫描、临期提醒、外部通知和预约状态推进的 Celery 任务。
 - `alembic/versions/20260910_0002_v2_features.py`：V1.0 到 V2.0 增量迁移。
-- `app/services/project_service.py`：项目草稿/直属主管审批、项目经理兼具 L3/管理员角色时自动通过、项目额度和追加工时 L3 审批。
+- `app/services/project_service.py`：所有项目提交所属部门主管审批，工时/成员/逾期延期通过资源申请审批；基本信息编辑不绕过资源审批。
 - `app/services/work_calendar_service.py`：工作日、法定节假日、上午/下午时段与自动工时校验。
 - `alembic/versions/20260911_0004_project_approval_and_work_calendar.py`：项目审批、额度、工作日历及 L3/L4 增量迁移。
 - `app/services/personal_time_service.py`：本人培训、会议、休假、外出、出差等个人占用的创建、冲突校验与撤回。

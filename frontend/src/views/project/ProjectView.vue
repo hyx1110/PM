@@ -21,6 +21,8 @@ import type { UserOption } from '@/types/user'
 import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
+import PlannedHoursHint from '@/components/common/PlannedHoursHint.vue'
+import { usePlannedHours } from '@/composables/usePlannedHours'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -64,6 +66,13 @@ const emptyForm = (): ProjectPayload => ({
   remark: '',
 })
 const form = reactive<ProjectPayload>(emptyForm())
+const { input: hoursInput, estimate: hoursEstimate, loading: hoursLoading, manual: hoursManual,
+  error: hoursError, reset: resetHours, useDefault: useDefaultHours } = usePlannedHours({
+  enabled: () => dialogVisible.value && !editingId.value,
+  start: () => form.planned_start, end: () => form.planned_end,
+  members: () => [form.manager_id, ...form.member_ids],
+  getHours: () => form.budget_hours, setHours: value => { form.budget_hours = value },
+})
 const rules: FormRules = {
   name: [{ required: true, message: '请输入项目名称' }],
   manager_id: [{ required: true, message: '请选择项目经理' }],
@@ -194,6 +203,7 @@ async function applyFilters() {
 }
 
 function openCreate() {
+  resetHours()
   editingId.value = undefined
   editingProject.value = undefined
   Object.assign(form, emptyForm())
@@ -214,7 +224,7 @@ function openEdit(row: Project) {
     manager_id: row.manager_id,
     member_ids: [],
     department_id: row.department_id,
-    budget_hours: row.budget_hours,
+    budget_hours: Number(row.budget_hours),
     planned_start: row.planned_start,
     planned_end: row.planned_end,
     description: row.description || '',
@@ -224,7 +234,10 @@ function openEdit(row: Project) {
 }
 
 async function save(submitAfterSave = false) {
-  if (!(await formRef.value?.validate())) return
+  if (!(await formRef.value?.validate().catch(() => false))) return
+  if (!editingId.value && !hoursManual.value && (hoursLoading.value || !hoursEstimate.value)) return ElMessage.warning('请等待默认工时计算完成，或手动填写工时')
+  if (!Number.isFinite(form.budget_hours) || form.budget_hours <= 0) return ElMessage.warning('项目总工时必须大于 0')
+  if (editingProject.value?.approval_status === 'approved' && form.planned_end > editingProject.value.planned_end) return ElMessage.warning('项目延期请通过项目资源申请提交部门主管审批')
   if (form.planned_end < form.planned_start) {
     return ElMessage.warning('计划结束日期不能早于开始日期')
   }
@@ -426,17 +439,19 @@ onMounted(async () => {
               style="width:100%"
             />
           </el-form-item>
+          <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
+          <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
           <el-form-item label="所属部门" prop="department_id">
             <el-select v-model="form.department_id" :disabled="editingProject?.approval_status==='approved'" style="width:100%">
               <el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/>
             </el-select>
           </el-form-item>
           <el-form-item label="项目总工时" prop="budget_hours">
-            <el-input-number v-model="form.budget_hours" :min="0.5" :step="0.5" :precision="2" :disabled="editingProject?.approval_status==='approved'" style="width:100%"/>
+            <el-input-number v-model="hoursInput" :min="editingId?0.5:0" :step="0.5" :precision="2" :disabled="editingProject?.approval_status==='approved'" style="width:100%"/>
           </el-form-item>
-          <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
-          <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
         </div>
+        <PlannedHoursHint v-if="!editingId" :estimate="hoursEstimate" :loading="hoursLoading" :manual="hoursManual" :error="hoursError" includes-manager @reset="useDefaultHours"/>
+        <div v-if="editingProject?.approval_status==='approved'" class="field-hint">已审批项目的延期、成员和工时变更，请在项目详情的“项目资源申请”中提交部门主管审批。</div>
         <div class="field-hint">项目实际起止日期由任务执行记录自动汇总，无需手工填写。</div>
         <el-form-item label="项目描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2"/></el-form-item>

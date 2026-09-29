@@ -126,6 +126,20 @@ def test_empty_pending_items(monkeypatch):
     ) == []
 
 
+def test_extension_only_request_shows_old_new_dates_and_reason(monkeypatch):
+    stub_pending_sources(monkeypatch, resources=[{
+        "id": 12, "project_id": 2, "project_name": "延期项目", "requester_name": "经理",
+        "requested_hours": 0, "add_member_ids": [], "remove_member_ids": [],
+        "original_planned_end": "2026-09-28", "requested_planned_end": "2026-10-09",
+        "reason": "延期交付", "created_at": "2026-09-29T09:00:00",
+    }])
+    item = dashboard_service._pending_items(object(), SimpleNamespace(id=9), datetime(2026, 9, 29, 12))[0]
+    assert item["type"] == "resource_approval"
+    assert item["actionable"] is True
+    assert "2026-09-28 → 2026-10-09" in item["content"]
+    assert "延期交付" in item["content"]
+
+
 def test_overtime_is_an_approval_with_normalized_time(monkeypatch):
     stub_pending_sources(monkeypatch)
     monkeypatch.setattr(dashboard_service.overtime_service, "list_requests", lambda *args, **kwargs: {"items": [{

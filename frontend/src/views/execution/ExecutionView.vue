@@ -19,17 +19,28 @@ import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.v
 import OvertimePanel from '@/components/execution/OvertimePanel.vue'
 import { getOvertime } from '@/api/overtime'
 import type { OvertimeRequest } from '@/types/overtime'
+import { isPositiveHalfHour } from '@/utils/hours'
 
 const userStore=useUserStore(),loading=ref(false),records=ref<Execution[]>([]),tasks=ref<Task[]>([]),total=ref(0)
 const users=ref<UserOption[]>([]),departments=ref<DepartmentOption[]>([]),organizations=ref<OrganizationNode[]>([]),filterScopes=ref<string[]>([])
 const route=useRoute()
 const activeTab=ref(route.query.tab==='overtime'?'overtime':'records'),overtimeRefreshKey=ref(0),overtimeMaxHours=ref<number>(),saving=ref(false)
 const hasGlobalAccess=computed(()=>Boolean(userStore.profile?.roles.some(role=>['super_admin','department_manager'].includes(role))))
-const query=reactive({page:1,page_size:20,project_id:Number(route.query.project_id)||undefined,task_id:Number(route.query.task_id)||undefined,mine:!hasGlobalAccess.value,start_date:'',end_date:''})
+const query=reactive({page:1,page_size:20,project_id:Number(route.query.project_id)||undefined,task_id:Number(route.query.task_id)||undefined,mine:false,start_date:'',end_date:''})
 const dialogVisible=ref(false),editingId=ref<number>(),formRef=ref<FormInstance>()
 const emptyForm=():ExecutionPayload=>({task_id:0,overtime_request_id:undefined,user_id:userStore.profile?.id,actual_start:beijingNow().format('YYYY-MM-DD'),actual_end:undefined,actual_hours:undefined,status:'running',description:''})
 const form=reactive<ExecutionPayload>(emptyForm())
-const rules:FormRules={task_id:[{required:true,message:'请选择任务'}],actual_start:[{required:true,message:'请选择实际开始日期'}]}
+const rules:FormRules={
+  task_id:[{required:true,message:'请选择任务'}],
+  actual_start:[{required:true,message:'请选择实际开始日期'}],
+  actual_end:[{validator:(_rule,value,callback)=>callback(form.status==='completed'&&!value?new Error('已完成记录必须填写实际结束日期'):undefined)}],
+  actual_hours:[{validator:(_rule,value,callback)=>{
+    const empty=value===undefined||value===null
+    if(empty&&form.status==='completed')return callback(new Error('已完成记录必须填写实际工时'))
+    if(!empty&&!isPositiveHalfHour(value))return callback(new Error('实际工时必须为大于 0 的 0.5 小时整数倍'))
+    callback()
+  },trigger:['blur','change']}],
+}
 const statuses=[{value:'running',label:'进行中'},{value:'completed',label:'已完成'}]
 const statusLabel=Object.fromEntries(statuses.map((item)=>[item.value,item.label])) as Record<string,string>
 const disableFutureDate=(value:Date)=>dayjs(value).format('YYYY-MM-DD')>beijingNow().format('YYYY-MM-DD')
@@ -83,7 +94,8 @@ onMounted(async()=>{try{await loadOptions();await load()}catch{/* The request in
     <template v-else>
     <section class="surface filter-bar"><el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:190px" @change="query.task_id=undefined"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select><el-select v-model="query.task_id" clearable filterable placeholder="任务" style="width:190px"><el-option v-for="item in tasks.filter(t=>!query.project_id||t.project_id===query.project_id)" :key="item.id" :label="item.name" :value="item.id"/></el-select><el-date-picker v-model="query.start_date" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" style="width:140px"/><el-date-picker v-model="query.end_date" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" style="width:140px"/><el-button-group><el-button @click="setQuickRange('today')">今天</el-button><el-button @click="setQuickRange('week')">本周</el-button><el-button @click="setQuickRange('month')">本月</el-button></el-button-group><el-button type="primary" plain @click="query.page=1;load()">查询</el-button></section>
     <section class="surface filter-bar">
-      <el-switch v-if="hasGlobalAccess" v-model="query.mine" active-text="只看本人" @change="query.page=1;load()"/>
+      <el-switch v-model="query.mine" active-text="只看本人" @change="query.page=1;load()"/>
+      <span class="field-hint">默认显示权限范围内的记录；项目负责人可查看本项目所有成员的记录，不能修改他人记录。</span>
       <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 执行人（可多选）" />
       <el-button @click="query.page=1;load()">筛选执行人</el-button>
     </section>
@@ -98,8 +110,13 @@ onMounted(async()=>{try{await loadOptions();await load()}catch{/* The request in
           <el-form-item v-if="hasGlobalAccess && !editingId && !form.overtime_request_id" label="执行人" required><el-select v-model="form.user_id" filterable style="width:100%" placeholder="请选择任务项目成员"><el-option v-for="item in executorOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
           <el-form-item label="状态"><el-select v-model="form.status" style="width:100%"><el-option v-for="item in statuses" :key="item.value" :label="item.label" :value="item.value"/></el-select></el-form-item>
           <el-form-item label="实际开始日期" prop="actual_start"><el-date-picker v-model="form.actual_start" type="date" value-format="YYYY-MM-DD" :disabled="Boolean(form.overtime_request_id)" :disabled-date="disableFutureDate" style="width:100%"/></el-form-item>
-          <el-form-item label="实际结束日期"><el-date-picker v-model="form.actual_end" type="date" value-format="YYYY-MM-DD" :disabled="Boolean(form.overtime_request_id)" :disabled-date="disableFutureDate" clearable style="width:100%"/></el-form-item>
-          <el-form-item label="实际工时"><el-input-number v-model="form.actual_hours" :min="0.5" :max="form.overtime_request_id?overtimeMaxHours:undefined" :step="0.5" :step-strictly="Boolean(form.overtime_request_id)" :precision="1" style="width:100%"/><div class="field-hint">{{form.overtime_request_id?'加班以 0.5h 计，最多为批准工时；一条申请只关联一条有效执行记录。':'每条记录填写本次新增工时，历史工时累计统计；留空时按所选日期范围内的工作日自动计算。'}}</div></el-form-item>
+          <el-form-item label="实际结束日期" prop="actual_end" :required="form.status==='completed'"><el-date-picker v-model="form.actual_end" type="date" value-format="YYYY-MM-DD" :disabled="Boolean(form.overtime_request_id)" :disabled-date="disableFutureDate" clearable style="width:100%"/></el-form-item>
+          <el-form-item label="实际工时" prop="actual_hours" :required="form.status==='completed'">
+            <!-- Preserve invalid historical values for explicit correction, not silent rounding on open. -->
+            <el-input-number v-model="form.actual_hours" :min="editingId?undefined:0.5" :max="form.overtime_request_id&&!editingId?overtimeMaxHours:undefined" :step="0.5" :step-strictly="!editingId" :precision="editingId?2:1" style="width:100%"/>
+            <div class="field-hint">{{form.overtime_request_id?'加班以 0.5h 计，最多为批准工时；一条申请只关联一条有效执行记录。':'每条记录填写本次新增工时，按 0.5 小时递增，历史工时累计统计；进行中可留空自动计算，已完成必须填写。'}}</div>
+            <div v-if="editingId && form.actual_hours != null && !isPositiveHalfHour(form.actual_hours)" class="field-hint">历史工时不符合半小时单位，请核实并修正后再保存。</div>
+          </el-form-item>
         </div>
         <el-form-item label="执行说明"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
       </el-form>
