@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.operation_log import OperationLog
 from app.models.user import User
 from app.services.operation_log_service import describe_change
+from app.services.business_text_service import load_reference_labels
 
 
 class OperationLogRepository:
@@ -42,6 +43,7 @@ class OperationLogRepository:
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).all()
+        labels = load_reference_labels(db, [(item.object_type, item.object_id, item.before_data, item.after_data) for item, _ in rows])
         return [
             {
                 **{col.name: getattr(item, col.name) for col in OperationLog.__table__.columns},
@@ -54,6 +56,7 @@ class OperationLogRepository:
                         item.object_id,
                         item.before_data,
                         item.after_data,
+                        labels,
                     )
                 ),
             }

@@ -38,4 +38,6 @@ export const approveProjectResourceRequest = (projectId: number, requestId: numb
   api.post<ProjectResourceRequest>(`/projects/${projectId}/resource-requests/${requestId}/approve`, { note })
 export const rejectProjectResourceRequest = (projectId: number, requestId: number, note: string) =>
   api.post<ProjectResourceRequest>(`/projects/${projectId}/resource-requests/${requestId}/reject`, { note })
+export const withdrawProjectResourceRequest = (projectId: number, requestId: number) =>
+  api.post<ProjectResourceRequest>(`/projects/${projectId}/resource-requests/${requestId}/withdraw`)
 export const getProjectMembers = (id: number) => api.get<ProjectMember[]>(`/projects/${id}/members`)

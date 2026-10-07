@@ -17,7 +17,8 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 - `app/services/import_export_service.py`：标准模板、逐行导入和业务报表导出。
 - `app/tasks`：风险扫描、临期提醒、外部通知和预约状态推进的 Celery 任务。
 - `alembic/versions/20260910_0002_v2_features.py`：V1.0 到 V2.0 增量迁移。
-- `app/services/project_service.py`：所有项目提交所属部门主管审批，工时/成员/逾期延期通过资源申请审批；基本信息编辑不绕过资源审批。
+- `app/services/project_service.py`：所有项目提交所属部门主管审批，工时/成员/逾期延期通过资源申请审批；延期追加工时必填，资源申请可由本人在待审批时撤回；基本信息编辑不绕过资源审批。资源 GET 列表同时返回人数与成员姓名/工号。
+- `app/services/business_text_service.py`：预约通知与操作日志共用的业务名称解析；新通知/日志保存事件时可读信息，历史数据只读补全，不重发通知。0930 变更无新增迁移，见 [修复说明](../docs/BUGFIX_20260930.md)。
 - `app/services/work_calendar_service.py`：工作日、法定节假日、上午/下午时段与自动工时校验。
 - `alembic/versions/20260911_0004_project_approval_and_work_calendar.py`：项目审批、额度、工作日历及 L3/L4 增量迁移。
 - `app/services/personal_time_service.py`：本人培训、会议、休假、外出、出差等个人占用的创建、冲突校验与撤回。

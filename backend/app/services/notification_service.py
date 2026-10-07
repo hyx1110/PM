@@ -9,6 +9,8 @@ from app.core.exceptions import not_found
 from app.models.notification import Notification
 from app.models.user import User
 from app.services.email_service import dispatch_email_pending
+from app.services.business_text_service import BOOKING_CONTEXT_PREFIXES, booking_contexts, numeric_id, readable_booking_notification
+from app.utils.model import model_to_dict
 from app.utils.time import beijing_now
 
 
@@ -25,6 +27,10 @@ def create_notification(
 ) -> Notification | None:
     # Notification preferences are no longer user-facing. Every business
     # notification is therefore persisted to the in-app notification center.
+    if related_type in {"schedule", "schedule_booking"} and not content.startswith(BOOKING_CONTEXT_PREFIXES):
+        booking_id = numeric_id(related_id)
+        context = booking_contexts(db, {booking_id} if booking_id is not None else set()).get(booking_id)
+        content = readable_booking_notification(event_type, content, context or "关联预约资料已不存在，无法还原人员、项目及任务信息。")
     delivered = ["in_app"]
     recipient = db.get(User, recipient_id) if settings.smtp_enabled else None
     item = Notification(
@@ -61,7 +67,20 @@ def list_notifications(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    # Legacy notifications have no event-time name snapshot. Enrich their
+    # display only, without replacing history or changing read/email state.
+    legacy = [item for item in items if item.related_type in {"schedule", "schedule_booking"} and not item.content.startswith(BOOKING_CONTEXT_PREFIXES)]
+    ids = {uid for item in legacy if (uid := numeric_id(item.related_id)) is not None}
+    contexts = booking_contexts(db, ids, include_time=False)
+    legacy_ids = {item.id for item in legacy}
+    output = []
+    for item in items:
+        data = model_to_dict(item)
+        if item.id in legacy_ids:
+            context = contexts.get(numeric_id(item.related_id), "关联预约资料已不存在，无法还原人员、项目及任务信息。")
+            data["content"] = readable_booking_notification(item.event_type, item.content, context)
+        output.append(data)
+    return {"items": output, "total": total, "page": page, "page_size": page_size}
 
 
 def unread_count(db: Session, user_id: int) -> int:

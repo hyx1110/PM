@@ -2,6 +2,8 @@
 
 当前最新迁移 `20260929_0018` 为 `project_resource_requests` 增加 `original_planned_end DATE NULL` 和 `requested_planned_end DATE NULL`：分别保存申请时原截止日及申请的新截止日。只有资源审批通过才更新 `projects.planned_end`，不自动修改任务计划或实际工时；旧申请字段为 NULL。详见 [延期迁移说明](BUGFIX_20260929.md)。
 
+0930 修改不新增字段或迁移：资源申请现有 VARCHAR `status` 增加业务状态 `withdrawn`，撤回时更新 `updated_at` 并保存操作日志，不伪造审批人或审批时间。新日志的现有 JSON `before_data/after_data` 附带 `_display_labels` 名称快照，内部 ID 保留；历史日志按当前档案只读补全名称。新预约通知的现有 `content` 保存当时的姓名、项目、任务、时段与结果，历史通知仅在读取时补全可解析信息，不批量改写数据库或重发邮件。
+
 ## 关系概览
 
 ```text

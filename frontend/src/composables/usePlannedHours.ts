@@ -1,7 +1,7 @@
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { getPlannedHours, type PlannedHoursEstimate } from '@/api/work-calendar'
 
-/** Creation defaults only; never rewrite persisted plans or manual overrides. */
+/** Unsaved form defaults only; never rewrite persisted plans or manual overrides. */
 export function usePlannedHours(options: {
   enabled: () => boolean
   start: () => string

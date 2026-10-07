@@ -218,9 +218,11 @@ def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
         if request.get("requested_hours"):
             changes.append(f"追加 {_number(request['requested_hours'])}h")
         if request.get("add_member_ids"):
-            changes.append(f"新增 {len(request['add_member_ids'])} 人")
+            names = "、".join(f"{person['name']}（{person['employee_no']}）" if person.get("employee_no") else person["name"] for person in request.get("add_members", []))
+            changes.append(f"新增 {len(request['add_member_ids'])} 人" + (f"：{names}" if names else "（成员名单暂不可用，请查看项目资源申请）"))
         if request.get("remove_member_ids"):
-            changes.append(f"移除 {len(request['remove_member_ids'])} 人")
+            names = "、".join(f"{person['name']}（{person['employee_no']}）" if person.get("employee_no") else person["name"] for person in request.get("remove_members", []))
+            changes.append(f"移除 {len(request['remove_member_ids'])} 人" + (f"：{names}" if names else "（成员名单暂不可用，请查看项目资源申请）"))
         items.append({
             "id": f"resource-{request['id']}",
             "source_id": request["id"],

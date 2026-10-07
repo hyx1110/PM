@@ -10,6 +10,7 @@ import {
   getProjectResourceRequests,
   getProjectMembers,
   rejectProjectResourceRequest,
+  withdrawProjectResourceRequest,
 } from '@/api/project'
 import { getAllTasks } from '@/api/task'
 import { getAllSchedules } from '@/api/schedule'
@@ -25,6 +26,8 @@ import { useUserStore } from '@/stores/user'
 import TaskManagementPanel from '@/components/task/TaskManagementPanel.vue'
 import dayjs from 'dayjs'
 import { beijingNow } from '@/utils/time'
+import { usePlannedHours } from '@/composables/usePlannedHours'
+import PlannedHoursHint from '@/components/common/PlannedHoursHint.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,6 +45,7 @@ const organizations = ref<OrganizationNode[]>([])
 const activeTab = ref(route.query.tab === 'resources' ? 'resources' : 'basic')
 const resourceDialog = ref(false)
 const resourceSaving = ref(false)
+const resourceActionId = ref<number>()
 const resourceForm = reactive({
   requested_hours: 0,
   requested_planned_end: undefined as string | undefined,
@@ -50,7 +54,7 @@ const resourceForm = reactive({
   reason: '',
 })
 const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已通过', rejected: '已驳回' }
-const resourceStatusLabel = { pending: '待部门主管审批', approved: '已批准', rejected: '已驳回' }
+const resourceStatusLabel = { pending: '待部门主管审批', approved: '已批准', rejected: '已驳回', withdrawn: '已撤回' }
 const projectStatusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', delayed: '已逾期' }
 interface MemberCascaderOption { value: string | number; label: string; children?: MemberCascaderOption[] }
 const memberCascaderProps = { multiple: true, emitPath: false }
@@ -93,6 +97,24 @@ const canRequestResources = computed(
 )
 const canRequestExtension = computed(() => canRequestResources.value && Boolean(project.value && project.value.planned_end < beijingNow().format('YYYY-MM-DD')))
 const disableExtensionDate = (value: Date) => dayjs(value).format('YYYY-MM-DD') < beijingNow().format('YYYY-MM-DD')
+const extensionMembers = computed(() => {
+  const ids = new Set(members.value.map(item => item.user_id))
+  if (project.value) ids.add(project.value.manager_id)
+  resourceForm.add_member_ids.forEach(id => ids.add(id))
+  resourceForm.remove_member_ids.forEach(id => ids.delete(id))
+  return [...ids]
+})
+const extensionStart = computed(() => project.value ? dayjs(project.value.planned_end).add(1, 'day').format('YYYY-MM-DD') : '')
+const extensionHours = usePlannedHours({
+  enabled: () => resourceDialog.value && canRequestExtension.value && !!resourceForm.requested_planned_end,
+  start: () => extensionStart.value,
+  end: () => resourceForm.requested_planned_end || '',
+  members: () => extensionMembers.value,
+  getHours: () => resourceForm.requested_hours,
+  setHours: value => { resourceForm.requested_hours = value },
+})
+const extensionHoursInput = extensionHours.input
+const canWithdrawResources = (item: ProjectResourceRequest) => item.status === 'pending' && item.requested_by === userStore.profile?.id
 const canReviewResources = (item: ProjectResourceRequest) =>
   item.status === 'pending'
   && (
@@ -139,12 +161,17 @@ async function load() {
 }
 
 function openResourceRequest() {
+  extensionHours.reset()
   Object.assign(resourceForm, { requested_hours: 0, requested_planned_end: undefined, add_member_ids: [], remove_member_ids: [], reason: '' })
   resourceDialog.value = true
 }
 
 async function submitResourceRequest() {
   if (resourceSaving.value) return
+  if (extensionHours.loading.value && !extensionHours.manual.value) return ElMessage.warning('正在计算延期工时，请稍候')
+  if (resourceForm.requested_planned_end && !extensionHours.manual.value && !extensionHours.estimate.value) return ElMessage.warning('尚未取得有效的延期工时计算结果，请重新选择日期或手动填写工时')
+  if (!Number.isFinite(resourceForm.requested_hours) || resourceForm.requested_hours < 0 || !Number.isInteger(resourceForm.requested_hours * 2)) return ElMessage.warning('追加工时须为非负数，且以 0.5 小时为单位')
+  if (resourceForm.requested_planned_end && resourceForm.requested_hours <= 0) return ElMessage.warning('项目延期必须填写正数追加工时')
   if (resourceForm.requested_hours <= 0 && !resourceForm.add_member_ids.length && !resourceForm.remove_member_ids.length && !resourceForm.requested_planned_end) {
     return ElMessage.warning('请至少申请一项工时、成员或延期变更')
   }
@@ -160,32 +187,50 @@ async function submitResourceRequest() {
   finally { resourceSaving.value = false }
 }
 
+const memberNames = (people?: ProjectResourceRequest['add_members']) => people?.map(person => person.employee_no ? `${person.name}（${person.employee_no}）` : person.name).join('、') || '名单暂不可用，请刷新'
 const resourceSummary = (item: ProjectResourceRequest) => [
   item.requested_planned_end ? `计划结束 ${formatDate(item.original_planned_end)} → ${formatDate(item.requested_planned_end)}` : '',
   item.requested_hours > 0 ? `${item.requested_hours}h 工时` : '',
-  item.add_member_ids.length ? `新增 ${item.add_member_ids.length} 人` : '',
-  item.remove_member_ids.length ? `移除 ${item.remove_member_ids.length} 人` : '',
-].filter(Boolean).join('、')
+  item.add_member_ids.length ? `新增 ${item.add_member_ids.length} 人：${memberNames(item.add_members)}` : '',
+  item.remove_member_ids.length ? `移除 ${item.remove_member_ids.length} 人：${memberNames(item.remove_members)}` : '',
+].filter(Boolean).join('；')
+
+async function withdrawResources(item: ProjectResourceRequest) {
+  if (resourceActionId.value) return
+  resourceActionId.value = item.id
+  try {
+    await ElMessageBox.confirm(`撤回项目资源申请（${resourceSummary(item)}）？撤回后不会变更项目工时、成员或日期，可重新申请。`, '撤回资源申请', { type: 'warning', confirmButtonText: '确认撤回' })
+    await withdrawProjectResourceRequest(projectId.value, item.id)
+    ElMessage.success('资源申请已撤回')
+    await load()
+  } catch { /* Cancellation is expected; API errors are displayed by the interceptor. */ }
+  finally { resourceActionId.value = undefined }
+}
 
 async function approveResources(item: ProjectResourceRequest) {
-  await ElMessageBox.confirm(
-    `确认批准资源申请（${resourceSummary(item)}）吗？`,
-    '部门主管资源审批',
-    { type: 'warning' },
-  )
-  await approveProjectResourceRequest(projectId.value, item.id)
-  ElMessage.success('项目资源申请已批准')
-  await load()
+  if (resourceActionId.value) return
+  resourceActionId.value = item.id
+  try {
+    await ElMessageBox.confirm(`确认批准资源申请（${resourceSummary(item)}）吗？`, '部门主管资源审批', { type: 'warning' })
+    await approveProjectResourceRequest(projectId.value, item.id)
+    ElMessage.success('项目资源申请已批准')
+    await load()
+  } catch { /* Cancellation is expected; API interceptor displays failures. */ }
+  finally { resourceActionId.value = undefined }
 }
 
 async function rejectResources(item: ProjectResourceRequest) {
-  const { value } = await ElMessageBox.prompt('请输入驳回原因', '部门主管资源审批', {
-    inputType: 'textarea',
-    inputValidator: (value) => Boolean(value?.trim()) || '请填写驳回原因',
-  })
-  await rejectProjectResourceRequest(projectId.value, item.id, value)
-  ElMessage.success('项目资源申请已驳回')
-  await load()
+  if (resourceActionId.value) return
+  resourceActionId.value = item.id
+  try {
+    const { value } = await ElMessageBox.prompt('请输入驳回原因', '部门主管资源审批', {
+      inputType: 'textarea', inputValidator: (value) => Boolean(value?.trim()) || '请填写驳回原因',
+    })
+    await rejectProjectResourceRequest(projectId.value, item.id, value)
+    ElMessage.success('项目资源申请已驳回')
+    await load()
+  } catch { /* Cancellation is expected; API interceptor displays failures. */ }
+  finally { resourceActionId.value = undefined }
 }
 
 async function finishProject() {
@@ -277,13 +322,13 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
           <div class="tab-tools"><span>工时、成员和项目延期均由项目所属部门主管审批后生效</span><el-button v-if="canRequestResources" size="small" type="primary" @click="openResourceRequest">发起申请</el-button></div>
           <el-table :data="resourceRequests">
             <el-table-column prop="requester_name" label="申请人" width="110"/>
-            <el-table-column label="资源变更" min-width="170"><template #default="{row}">{{ resourceSummary(row) }}</template></el-table-column>
+            <el-table-column label="资源变更（含成员名单）" min-width="300"><template #default="{row}">{{ resourceSummary(row) }}</template></el-table-column>
             <el-table-column prop="reason" label="申请原因" min-width="180"/>
             <el-table-column label="状态" width="115"><template #default="{row}">{{ resourceStatusLabel[row.status] }}</template></el-table-column>
             <el-table-column prop="reviewer_name" label="审批人" width="110"/>
             <el-table-column prop="review_note" label="审批意见" min-width="150"/>
             <el-table-column label="申请时间" width="160"><template #default="{row}">{{ formatDateTime(row.created_at) }}</template></el-table-column>
-            <el-table-column label="操作" width="130"><template #default="{row}"><el-button v-if="canReviewResources(row)" link type="success" @click="approveResources(row)">批准</el-button><el-button v-if="canReviewResources(row)" link type="danger" @click="rejectResources(row)">驳回</el-button></template></el-table-column>
+            <el-table-column label="操作" width="180"><template #default="{row}"><el-button v-if="canReviewResources(row)" :disabled="!!resourceActionId" link type="success" @click="approveResources(row)">批准</el-button><el-button v-if="canReviewResources(row)" :disabled="!!resourceActionId" link type="danger" @click="rejectResources(row)">驳回</el-button><el-button v-if="canWithdrawResources(row)" :disabled="!!resourceActionId" link type="warning" @click="withdrawResources(row)">撤回</el-button></template></el-table-column>
           </el-table>
         </el-tab-pane>
       </el-tabs>
@@ -296,7 +341,11 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
           <el-date-picker v-model="resourceForm.requested_planned_end" type="date" value-format="YYYY-MM-DD" :disabled-date="disableExtensionDate" clearable placeholder="选择新的计划结束日期" style="width:100%"/>
           <span class="extension-hint">原计划结束：{{formatDate(project?.planned_end)}}。仅延长项目周期，不自动改动任务计划或预约。</span>
         </el-form-item>
-        <el-form-item label="追加工时（可选）"><el-input-number v-model="resourceForm.requested_hours" :min="0" :step="0.5" :precision="2" style="width:100%"/></el-form-item>
+        <el-form-item :label="resourceForm.requested_planned_end ? '追加工时（延期必填）' : '追加工时（可选）'" :required="!!resourceForm.requested_planned_end"><el-input-number v-model="extensionHoursInput" :min="0" :step="0.5" step-strictly :precision="1" style="width:100%"/></el-form-item>
+        <template v-if="resourceForm.requested_planned_end">
+          <p class="extension-hint">仅计算延期新增周期：{{extensionStart}} 至 {{resourceForm.requested_planned_end}}，按变更后的有效项目成员人数（含项目经理）计算，不重复计入原项目预算。</p>
+          <PlannedHoursHint :estimate="extensionHours.estimate.value" :loading="extensionHours.loading.value" :manual="extensionHours.manual.value" :error="extensionHours.error.value" includes-manager @reset="extensionHours.useDefault"/>
+        </template>
         <el-form-item label="添加项目成员（可选）">
           <el-cascader v-model="resourceForm.add_member_ids" :options="memberCascaderOptions" :props="memberCascaderProps" clearable collapse-tags collapse-tags-tooltip filterable placeholder="按部门 / 组织选择成员" style="width:100%"/>
         </el-form-item>

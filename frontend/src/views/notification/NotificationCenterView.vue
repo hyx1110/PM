@@ -64,5 +64,6 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.message>span { white-space: pre-line; overflow-wrap: anywhere; }
 .page-header>div:last-child{display:flex;gap:10px}.notifications{overflow:hidden;padding:8px 18px 16px}.notification{display:flex;width:100%;align-items:flex-start;gap:13px;border:0;border-bottom:1px solid #edf0f3;background:#fff;padding:17px 6px;text-align:left;cursor:pointer}.notification:hover{background:#fafbfd}.notification.unread{background:#f6f9fc}.indicator{width:8px;height:8px;flex:0 0 8px;margin-top:5px;border-radius:50%;background:#9aa6b4}.notification.unread .indicator{background:#4777a6;box-shadow:0 0 0 4px #e5eef7}.notification.level-warning .indicator{background:#c58a38}.notification.level-error .indicator{background:#b84e4e}.message{display:flex;min-width:0;flex:1;flex-direction:column}.message strong{color:#344156;font-size:13px}.message>span{margin-top:6px;color:#6d798a;font-size:12px;line-height:1.6}.message small{margin-top:7px;color:#a1a9b4;font-size:10px}.notification-actions{display:flex;align-items:center;gap:8px}.hint{margin-left:10px;color:#959fac;font-size:11px}
 </style>

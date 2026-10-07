@@ -126,7 +126,7 @@ def test_empty_pending_items(monkeypatch):
     ) == []
 
 
-def test_extension_only_request_shows_old_new_dates_and_reason(monkeypatch):
+def test_historical_zero_hour_extension_still_shows_old_new_dates_and_reason(monkeypatch):
     stub_pending_sources(monkeypatch, resources=[{
         "id": 12, "project_id": 2, "project_name": "延期项目", "requester_name": "经理",
         "requested_hours": 0, "add_member_ids": [], "remove_member_ids": [],
@@ -138,6 +138,18 @@ def test_extension_only_request_shows_old_new_dates_and_reason(monkeypatch):
     assert item["actionable"] is True
     assert "2026-09-28 → 2026-10-09" in item["content"]
     assert "延期交付" in item["content"]
+
+
+def test_resource_approval_content_includes_member_counts_names_and_employee_numbers(monkeypatch):
+    stub_pending_sources(monkeypatch, resources=[{
+        "id": 12, "project_id": 2, "project_name": "交付项目", "requester_name": "经理",
+        "requested_hours": 8, "add_member_ids": [2, 3], "remove_member_ids": [4],
+        "add_members": [{"id":2,"name":"张三","employee_no":"001"}, {"id":3,"name":"李四","employee_no":"002"}],
+        "remove_members": [{"id":4,"name":"王五","employee_no":"003"}],
+        "reason":"调整交付人员", "created_at":"2026-09-30T09:00:00",
+    }])
+    item = dashboard_service._pending_items(object(), SimpleNamespace(id=9), datetime(2026, 9, 30, 12))[0]
+    assert all(value in item["content"] for value in ("新增 2 人", "移除 1 人", "张三（001）", "李四（002）", "王五（003）"))
 
 
 def test_overtime_is_an_approval_with_normalized_time(monkeypatch):

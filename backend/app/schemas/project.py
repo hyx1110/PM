@@ -101,7 +101,7 @@ class ProjectDecision(ORMModel):
 
 
 class ProjectResourceRequestCreate(ORMModel):
-    requested_hours: Decimal = Field(default=0, ge=0, decimal_places=2)
+    requested_hours: Decimal = Field(default=0, ge=0, decimal_places=2, multiple_of=Decimal("0.5"))
     requested_planned_end: date | None = None
     add_member_ids: list[int] = Field(default_factory=list)
     remove_member_ids: list[int] = Field(default_factory=list)
@@ -112,6 +112,8 @@ class ProjectResourceRequestCreate(ORMModel):
         self.reason = self.reason.strip()
         if not self.reason:
             raise ValueError("请填写资源变更或延期原因")
+        if self.requested_planned_end is not None and self.requested_hours <= 0:
+            raise ValueError("项目延期必须填写追加工时，且须为正数（以 0.5 小时为单位）")
         self.add_member_ids = list(dict.fromkeys(self.add_member_ids))
         self.remove_member_ids = list(dict.fromkeys(self.remove_member_ids))
         if set(self.add_member_ids) & set(self.remove_member_ids):
@@ -129,6 +131,8 @@ class ProjectResourceRequestResponse(ORMModel):
     requested_planned_end: date | None = None
     add_member_ids: list[int] = Field(default_factory=list)
     remove_member_ids: list[int] = Field(default_factory=list)
+    add_members: list[dict] = Field(default_factory=list)
+    remove_members: list[dict] = Field(default_factory=list)
     reason: str
     status: str
     requested_by: int

@@ -100,12 +100,14 @@ def make_project():
                    planned_start=date(2026, 9, 1), planned_end=date(2026, 9, 28))
 
 
-def test_extension_only_request_is_valid_and_blank_reason_is_not():
-    payload = ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="  延期交付  ")
-    assert payload.requested_hours == 0
+def test_extension_requires_hours_and_blank_reason_is_not_valid():
+    payload = ProjectResourceRequestCreate(requested_planned_end="2026-10-09", requested_hours="8", reason="  延期交付  ")
+    assert payload.requested_hours == Decimal("8")
     assert payload.reason == "延期交付"
     with pytest.raises(ValidationError):
-        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="  ")
+        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", requested_hours="8", reason="  ")
+    with pytest.raises(ValidationError):
+        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="延期但未填工时")
     with pytest.raises(ValidationError):
         ProjectResourceRequestCreate(reason="没有任何变更")
 
@@ -122,7 +124,7 @@ def test_submitting_extension_keeps_original_project_date(monkeypatch):
     monkeypatch.setattr(project_service, "create_notification", MagicMock())
     monkeypatch.setattr(project_service, "log_operation", MagicMock())
     request = project_service.create_resource_request(db, 10,
-        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="延期"), SimpleNamespace(id=7))
+        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", requested_hours="8", reason="延期"), SimpleNamespace(id=7))
     assert request.status == "pending"
     assert request.original_planned_end == project.planned_end == date(2026, 9, 28)
     assert request.requested_planned_end == date(2026, 10, 9)

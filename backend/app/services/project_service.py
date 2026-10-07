@@ -726,16 +726,30 @@ def _assert_member_can_be_removed(
     return member
 
 
-def _resource_request_summary(item: ProjectResourceRequest) -> str:
+def _resource_member_details(db: Session, items: list[ProjectResourceRequest]) -> dict:
+    """Batch resolve names for approval screens, including inactive/removed users."""
+    ids = {uid for item in items for uid in [*(item.add_member_ids or []), *(item.remove_member_ids or [])]}
+    people = {}
+    if ids:
+        for uid, name, employee_no in db.execute(select(User.id, User.name, User.employee_no).where(User.id.in_(ids))).all():
+            people[uid] = {"id": uid, "name": name, "employee_no": employee_no}
+    def members(ids):
+        return [people.get(uid, {"id": uid, "name": "原成员资料已不存在", "employee_no": None}) for uid in (ids or [])]
+    return {item.id: {"add_members": members(item.add_member_ids), "remove_members": members(item.remove_member_ids)} for item in items}
+
+
+def _resource_request_summary(item: ProjectResourceRequest, members: dict | None = None) -> str:
     changes: list[str] = []
     if item.requested_planned_end:
         changes.append(f"计划结束日期从 {item.original_planned_end} 延期至 {item.requested_planned_end}")
     if item.requested_hours > 0:
         changes.append(f"追加 {item.requested_hours} 小时")
     if item.add_member_ids:
-        changes.append(f"新增 {len(item.add_member_ids)} 名成员")
+        names = "、".join(f"{person['name']}（{person['employee_no']}）" if person.get("employee_no") else person["name"] for person in (members or {}).get("add_members", []))
+        changes.append(f"新增 {len(item.add_member_ids)} 名成员" + (f"：{names}" if names else ""))
     if item.remove_member_ids:
-        changes.append(f"移除 {len(item.remove_member_ids)} 名成员")
+        names = "、".join(f"{person['name']}（{person['employee_no']}）" if person.get("employee_no") else person["name"] for person in (members or {}).get("remove_members", []))
+        changes.append(f"移除 {len(item.remove_member_ids)} 名成员" + (f"：{names}" if names else ""))
     return "、".join(changes)
 
 
@@ -759,6 +773,8 @@ def create_resource_request(
 ) -> ProjectResourceRequest:
     project = assert_project_owner_for_resource_request(db, project_id, user)
     _validate_project_extension(project, payload.requested_planned_end)
+    if payload.requested_planned_end and payload.requested_hours <= 0:
+        raise bad_request("延期申请必须填写正数追加工时")
     if not project.department_id:
         raise bad_request("项目未设置所属部门，无法申请资源变更")
     if db.scalar(
@@ -800,7 +816,7 @@ def create_resource_request(
         approver.id,
         "project_resources_approval_required",
         "项目资源申请待部门主管审批",
-        f"项目 {project.code} 申请{_resource_request_summary(item)}。原因：{item.reason}",
+        f"项目“{project.name}”申请{_resource_request_summary(item, _resource_member_details(db, [item])[item.id])}。原因：{item.reason}",
         level="warning",
         related_type="project_resource_request",
         related_id=item.id,
@@ -844,9 +860,11 @@ def list_pending_resource_requests(db: Session, user: User) -> list[dict]:
     if "super_admin" not in roles:
         statement = statement.where(Department.manager_id == user.id)
     rows = db.execute(statement).all()
+    member_details = _resource_member_details(db, [row[0] for row in rows])
     return [
         {
             **model_to_dict(item),
+            **member_details[item.id],
             "project_code": project_code,
             "project_name": project_name,
             "requester_name": requester_name,
@@ -870,14 +888,47 @@ def list_resource_requests(db: Session, project_id: int, user: User) -> list[dic
         .where(ProjectResourceRequest.project_id == project_id)
         .order_by(ProjectResourceRequest.created_at.desc())
     ).all()
+    member_details = _resource_member_details(db, [row[0] for row in rows])
     return [
         {
             **model_to_dict(item),
+            **member_details[item.id],
             "requester_name": requester_name,
             "reviewer_name": reviewer_name,
         }
         for item, requester_name, reviewer_name in rows
     ]
+
+
+def withdraw_resource_request(db: Session, project_id: int, request_id: int, user: User) -> ProjectResourceRequest:
+    # Same project -> request lock order as approval: only one decision can win.
+    project = db.scalar(select(Project).where(Project.id == project_id, Project.is_deleted.is_(False))
+                        .with_for_update().execution_options(populate_existing=True))
+    if not project:
+        raise not_found("项目不存在")
+    item = db.scalar(select(ProjectResourceRequest).where(
+        ProjectResourceRequest.id == request_id, ProjectResourceRequest.project_id == project_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if not item:
+        raise not_found("资源申请不存在")
+    if item.requested_by != user.id:
+        raise forbidden("只能撤回本人提交的项目资源申请")
+    if item.status != "pending":
+        raise bad_request("申请已审批或已撤回，不能再次撤回，请刷新页面")
+    before = model_to_dict(item)
+    item.status = "withdrawn"
+    item.updated_at = beijing_now()
+    department = db.get(Department, project.department_id) if project.department_id else None
+    if department and department.manager_id and department.manager_id != user.id:
+        create_notification(db, department.manager_id, "project_resources_withdrawn", "项目资源申请已撤回",
+                            f"{user.name} 已撤回项目“{project.name}”的资源申请（{_resource_request_summary(item, _resource_member_details(db, [item])[item.id])}），无需继续审批。",
+                            related_type="project_resource_request", related_id=item.id)
+    log_operation(db, operator_id=user.id, module="project", action="withdraw_resources",
+                  object_type="project_resource_request", object_id=item.id,
+                  before_data=before, after_data=model_to_dict(item))
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 def decide_resource_request(
@@ -909,13 +960,15 @@ def decide_resource_request(
     if not item:
         raise not_found("resource request not found")
     if item.status != "pending":
-        raise bad_request("only pending resource requests can be reviewed")
+        raise bad_request("申请已审批或已撤回，不能重复审批，请刷新页面")
     if not approved and not payload.note:
         raise bad_request("驳回项目资源申请时必须填写原因")
     if approved:
         if project.approval_status != "approved" or project.status in PROJECT_CLOSED_STATUSES:
             raise bad_request("项目未审批或已完成，不能批准资源变更，请驳回该申请")
         _validate_project_extension(project, item.requested_planned_end)
+        if item.requested_planned_end and item.requested_hours <= 0:
+            raise bad_request("该延期申请未填写追加工时，请驳回后由申请人重新提交")
         if item.requested_planned_end and project.planned_end != item.original_planned_end:
             raise bad_request("项目计划结束日期已变化，请驳回后重新提交延期申请")
     before = model_to_dict(item)
@@ -983,13 +1036,13 @@ def decide_resource_request(
         log_operation(db, operator_id=user.id, module="project", action="apply_resources",
                       object_type="project", object_id=project.id,
                       before_data=project_before, after_data=model_to_dict(project),
-                      reason=f"资源申请 #{item.id} 获批：{item.reason}")
+                      reason=f"项目“{project.name}”的资源申请获批：{item.reason}")
     create_notification(
         db,
         item.requested_by,
         "project_resources_approved" if approved else "project_resources_rejected",
         "项目资源申请已获批" if approved else "项目资源申请被驳回",
-        f"项目 {project.code} 的资源申请（{_resource_request_summary(item)}）"
+        f"项目“{project.name}”的资源申请（{_resource_request_summary(item, _resource_member_details(db, [item])[item.id])}）"
         f"{'已通过' if approved else '未通过'}。"
         + (f" 审批意见：{payload.note}" if payload.note else ""),
         level="info" if approved else "warning",

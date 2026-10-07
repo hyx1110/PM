@@ -86,8 +86,10 @@ export interface ProjectResourceRequest {
   requested_planned_end?: string | null
   add_member_ids: number[]
   remove_member_ids: number[]
+  add_members?: Array<{ id: number; name: string; employee_no?: string | null }>
+  remove_members?: Array<{ id: number; name: string; employee_no?: string | null }>
   reason: string
-  status: 'pending' | 'approved' | 'rejected'
+  status: 'pending' | 'approved' | 'rejected' | 'withdrawn'
   requested_by: number
   requester_name?: string
   project_code?: string

@@ -7,7 +7,9 @@
 ## 2026-09-29 接口补充
 
 - `GET /api/v1/work-calendar/planned-hours?start_date=2026-09-01&end_date=2026-09-30&member_count=3`：登录鉴权，返回 `workdays`、`member_count`、`hours_per_day`（8）和 `planned_hours`，按系统工作日历计算默认计划工时，不修改数据库。
-- `POST /api/v1/projects/{id}/resource-requests`：可选字段 `requested_planned_end`（YYYY-MM-DD），支持仅申请延期或同时申请工时/成员变更；`reason` 必填。响应及列表增加 `original_planned_end` 与 `requested_planned_end`。继续使用现有 approve/reject 接口，批准才更新项目结束日期。
+- `POST /api/v1/projects/{id}/resource-requests`：可选字段 `requested_planned_end`（YYYY-MM-DD）；只要申请延期，`requested_hours` 就必须大于 0，否则拒绝。所有追加工时按 0.5h 校验，非延期的成员变更可填 0h，`reason` 必填。响应及列表包含 `original_planned_end` 与 `requested_planned_end`，批准才更新项目结束日期及预算。前端复用工作日历估算接口，仅计算原结束日次日至新结束日的新增区间，成员数使用本次增删后的有效成员并去重、含项目经理；默认值可手动调整。
+
+资源申请两个 GET 列表同时返回 `add_members/remove_members`（每项为 `id/name/employee_no`），供审批展示；人员已停用或退出项目也保留名称解析，不从候选下拉框猜测姓名。资料不存在时返回明确占位，不删除该项影响人数统计。新增 `POST /projects/{id}/resource-requests/{request_id}/withdraw`，需要 `project:edit` 且申请人本人、申请状态为 `pending`，无需请求体。成功返回状态 `withdrawn`；审批/驳回接口会拒绝已撤回请求。
 - `GET /api/v1/executions` 及单条详情：项目负责人可读自己负责项目的成员记录；普通用户仍只读本人记录，全局角色维持原范围。`mine=true` 进一步收窄到本人。读权限不授予代写权限。
 - 执行创建/更新：实际工时需为正数且是 0.5 的整数倍；创建已完成记录必须显式填写工时，更新已完成记录不能清空工时，仍可保留现有合法值。
 
@@ -95,6 +97,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | GET | `/projects/resource-requests/pending` | 当前部门主管 | 首页查询本人作为部门主管的待审批资源申请 |
 | POST | `/projects/{id}/resource-requests/{request_id}/approve` | 所属部门当前部门主管 | 批准后原子应用工时与成员变更 |
 | POST | `/projects/{id}/resource-requests/{request_id}/reject` | 所属部门当前部门主管 | 驳回资源申请，必须填写 `note` |
+| POST | `/projects/{id}/resource-requests/{request_id}/withdraw` | `project:edit` 且申请人本人 | 仅撤回待审批申请；与审批互斥，不变更项目资源 |
 | GET | `/projects/{id}/members` | `project:view` | 查询当前有效成员；成员增删不能绕过资源审批 |
 | GET/POST | `/tasks` | `task:view/edit` | GET 按可见项目返回；项目负责人/部门主管/超管为可管理项目新增任务，`owner_ids` 支持选择多名项目成员 |
 | GET | `/tasks/mine` | `task:view` | 只返回当前用户负责的“我的任务” |

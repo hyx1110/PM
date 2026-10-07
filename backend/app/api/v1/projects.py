@@ -186,6 +186,17 @@ def approve_resource_request(
     return success(model_to_dict(item))
 
 
+@router.post("/{project_id}/resource-requests/{request_id}/withdraw")
+def withdraw_resource_request(
+    project_id: int,
+    request_id: int,
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    item = project_service.withdraw_resource_request(db, project_id, request_id, current_user)
+    return success(model_to_dict(item))
+
+
 @router.post("/{project_id}/resource-requests/{request_id}/reject")
 def reject_resource_request(
     project_id: int,
