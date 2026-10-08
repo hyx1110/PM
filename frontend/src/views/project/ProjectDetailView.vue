@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction, requestActionReason } from '@/utils/confirm'
 import {
   approveProjectResourceRequest,
   createProjectResourceRequest,
@@ -28,6 +29,7 @@ import dayjs from 'dayjs'
 import { beijingNow } from '@/utils/time'
 import { usePlannedHours } from '@/composables/usePlannedHours'
 import PlannedHoursHint from '@/components/common/PlannedHoursHint.vue'
+import ProjectReportField from '@/components/project/ProjectReportField.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -117,13 +119,9 @@ const extensionHoursInput = extensionHours.input
 const canWithdrawResources = (item: ProjectResourceRequest) => item.status === 'pending' && item.requested_by === userStore.profile?.id
 const canReviewResources = (item: ProjectResourceRequest) =>
   item.status === 'pending'
-  && (
-    userStore.profile?.roles.includes('super_admin')
-    || (
-      userStore.profile?.roles.includes('department_manager')
-      && project.value?.department_manager_id === userStore.profile?.id
-    )
-  )
+  && userStore.profile?.roles.includes('department_manager')
+  && project.value?.department_manager_id === userStore.profile?.id
+  && project.value?.department_id === userStore.profile?.department_id
 
 async function load() {
   loading.value = true
@@ -179,6 +177,13 @@ async function submitResourceRequest() {
   if (resourceForm.requested_planned_end && (!canRequestExtension.value || resourceForm.requested_planned_end < beijingNow().format('YYYY-MM-DD') || resourceForm.requested_planned_end <= (project.value?.planned_end || ''))) return ElMessage.warning('仅逾期项目可申请延期，新结束日期必须晚于原日期且不早于今天')
   resourceSaving.value = true
   try {
+    if (!(await confirmAction(
+      `项目：${project.value?.name}\n追加工时：${resourceForm.requested_hours}h`
+      + (resourceForm.requested_planned_end ? `\n延期至：${resourceForm.requested_planned_end}` : '')
+      + `\n新增成员：${resourceForm.add_member_ids.map(id => users.value.find(user => user.id === id)?.name || `人员 ${id}`).join('、') || '无'}`
+      + `\n移除成员：${resourceForm.remove_member_ids.map(id => members.value.find(member => member.user_id === id)?.user_name || `人员 ${id}`).join('、') || '无'}`
+      + '\n确认提交资源申请？部门主管批准后才生效。', '提交项目资源申请',
+    ))) return
     await createProjectResourceRequest(projectId.value, { ...resourceForm, requested_planned_end: resourceForm.requested_planned_end || null, reason: resourceForm.reason.trim() })
     ElMessage.success('项目资源申请已提交部门主管审批')
     resourceDialog.value = false
@@ -199,7 +204,7 @@ async function withdrawResources(item: ProjectResourceRequest) {
   if (resourceActionId.value) return
   resourceActionId.value = item.id
   try {
-    await ElMessageBox.confirm(`撤回项目资源申请（${resourceSummary(item)}）？撤回后不会变更项目工时、成员或日期，可重新申请。`, '撤回资源申请', { type: 'warning', confirmButtonText: '确认撤回' })
+    if (!(await confirmAction(`撤回项目资源申请（${resourceSummary(item)}）？撤回后不会变更项目工时、成员或日期，可重新申请。`, '撤回资源申请', '确认撤回'))) return
     await withdrawProjectResourceRequest(projectId.value, item.id)
     ElMessage.success('资源申请已撤回')
     await load()
@@ -211,7 +216,7 @@ async function approveResources(item: ProjectResourceRequest) {
   if (resourceActionId.value) return
   resourceActionId.value = item.id
   try {
-    await ElMessageBox.confirm(`确认批准资源申请（${resourceSummary(item)}）吗？`, '部门主管资源审批', { type: 'warning' })
+    if (!(await confirmAction(`确认批准资源申请（${resourceSummary(item)}）吗？`, '部门主管资源审批', '确认批准'))) return
     await approveProjectResourceRequest(projectId.value, item.id)
     ElMessage.success('项目资源申请已批准')
     await load()
@@ -223,9 +228,8 @@ async function rejectResources(item: ProjectResourceRequest) {
   if (resourceActionId.value) return
   resourceActionId.value = item.id
   try {
-    const { value } = await ElMessageBox.prompt('请输入驳回原因', '部门主管资源审批', {
-      inputType: 'textarea', inputValidator: (value) => Boolean(value?.trim()) || '请填写驳回原因',
-    })
+    const value = await requestActionReason('驳回资源申请', '请输入驳回原因')
+    if (value === null || !(await confirmAction(`项目：${project.value?.name}\n申请：${resourceSummary(item)}\n驳回原因：${value}\n确认驳回？`, '驳回资源申请', '确认驳回'))) return
     await rejectProjectResourceRequest(projectId.value, item.id, value)
     ElMessage.success('项目资源申请已驳回')
     await load()
@@ -234,7 +238,7 @@ async function rejectResources(item: ProjectResourceRequest) {
 }
 
 async function finishProject() {
-  await ElMessageBox.confirm('全部任务已完成，是否正式确认项目完成？确认前仍可补充或调整任务，确认后项目停止新增任务。', '确认项目完成', { type: 'warning', confirmButtonText: '确认完成' })
+  if (!(await confirmAction('全部任务已完成，是否正式确认项目完成？确认前仍可补充或调整任务，确认后项目停止新增任务。', '确认项目完成', '确认完成'))) return
   await completeProject(projectId.value)
   ElMessage.success('项目已正式完成')
   await load()
@@ -291,6 +295,7 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
             <el-descriptions-item label="审批时间">{{ formatDateTime(project.approved_at) }}</el-descriptions-item>
             <el-descriptions-item label="审批意见" :span="3">{{ project.approval_note || '—' }}</el-descriptions-item>
             <el-descriptions-item label="描述" :span="3">{{ project.description || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="项目立项报告" :span="3"><ProjectReportField :project-id="project.id"/></el-descriptions-item>
           </el-descriptions>
         </el-tab-pane>
         <el-tab-pane name="members">

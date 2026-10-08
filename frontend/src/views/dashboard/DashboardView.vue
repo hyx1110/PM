@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction, requestActionReason } from '@/utils/confirm'
 import { approveProject, approveProjectResourceRequest, rejectProject, rejectProjectResourceRequest } from '@/api/project'
 import { confirmSchedule, rejectSchedule } from '@/api/schedule'
 import { approveOvertime, rejectOvertime } from '@/api/overtime'
+import { approveTask, rejectTask } from '@/api/task'
 import { getDashboardWorkbench } from '@/api/report'
 import DashboardOverviewStats from '@/components/dashboard/DashboardOverviewStats.vue'
 import DashboardPendingPanel from '@/components/dashboard/DashboardPendingPanel.vue'
@@ -97,52 +99,44 @@ function openRiskTask(taskId: number) {
 }
 
 async function approvePending(item: DashboardPendingItem) {
+  if (actionLoading.value) return
   const confirmation = item.type === 'booking'
     ? `确认接受“${item.title}”的时间预约吗？`
     : `确认批准“${item.title}”吗？`
-  try {
-    await ElMessageBox.confirm(confirmation, item.type_label, { type: 'warning', confirmButtonText: '确认' })
-  } catch {
-    return
-  }
+  if (!(await confirmAction(`${confirmation}\n关联项目：${item.project_name}\n${item.content}`, item.type_label, item.type === 'booking' ? '确认接受预约' : '确认批准'))) return
   actionLoading.value = true
   try {
     if (item.type === 'project_approval') await approveProject(item.source_id)
     else if (item.type === 'resource_approval') await approveProjectResourceRequest(item.project_id, item.source_id)
     else if (item.type === 'overtime_approval') await approveOvertime(item.source_id)
+    else if (item.type === 'task_approval') await approveTask(item.source_id)
     else await confirmSchedule(item.source_id)
     ElMessage.success(item.type === 'booking' ? '预约已确认' : '审批已通过')
     pendingDrawerVisible.value = false
     await loadDashboard()
+  } catch {
+    // The API interceptor shows stale-state and permission errors; keep details open.
   } finally {
     actionLoading.value = false
   }
 }
 
 async function rejectPendingItem(item: DashboardPendingItem) {
-  let reason = ''
-  try {
-    const result = await ElMessageBox.prompt('请填写驳回原因，相关人员将收到通知。', `驳回${item.type_label}`, {
-      inputType: 'textarea',
-      inputPattern: /\S+/,
-      inputErrorMessage: '驳回原因不能为空',
-      confirmButtonText: '确认驳回',
-      cancelButtonText: '取消',
-      type: 'warning',
-    })
-    reason = result.value.trim()
-  } catch {
-    return
-  }
+  if (actionLoading.value) return
+  const reason = await requestActionReason(`驳回${item.type_label}`, '请填写驳回原因，相关人员将收到通知。')
+  if (reason === null || !(await confirmAction(`事项：${item.title}\n关联项目：${item.project_name}\n驳回原因：${reason}\n确认驳回并通知相关人员？`, `驳回${item.type_label}`, '确认驳回'))) return
   actionLoading.value = true
   try {
     if (item.type === 'project_approval') await rejectProject(item.source_id, reason)
     else if (item.type === 'resource_approval') await rejectProjectResourceRequest(item.project_id, item.source_id, reason)
     else if (item.type === 'overtime_approval') await rejectOvertime(item.source_id, reason)
+    else if (item.type === 'task_approval') await rejectTask(item.source_id, reason)
     else await rejectSchedule(item.source_id, reason)
     ElMessage.success(item.type === 'booking' ? '预约已拒绝' : '申请已驳回')
     pendingDrawerVisible.value = false
     await loadDashboard()
+  } catch {
+    // The API interceptor shows stale-state and permission errors; keep details open.
   } finally {
     actionLoading.value = false
   }

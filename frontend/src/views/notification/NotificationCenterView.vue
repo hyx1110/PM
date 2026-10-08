@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import {
   deleteNotification,
   deleteReadNotifications,
@@ -28,6 +29,7 @@ async function read(item: AppNotification) {
   if (query.status === 'unread') await load()
 }
 async function readAll() {
+  if (!(await confirmAction('确认将当前账号的全部未读通知标为已读？这不会代替审批或确认预约。', '全部标为已读', '确认标为已读'))) return
   const result = await markAllNotificationsRead()
   notificationStore.markAllRead()
   await notificationStore.refreshUnreadCount()
@@ -35,14 +37,14 @@ async function readAll() {
   await load()
 }
 async function remove(item: AppNotification) {
-  await ElMessageBox.confirm('确认删除这条通知吗？','删除通知',{type:'warning',confirmButtonText:'确认删除'})
+  if (!(await confirmAction(`确认删除通知“${item.title}”吗？删除通知不会撤回关联申请或预约。`, '删除通知', '确认删除'))) return
   await deleteNotification(item.id)
   if (item.status === 'unread') notificationStore.markOneRead()
   await notificationStore.refreshUnreadCount()
   ElMessage.success('通知已删除')
   await load()
 }
-async function clearRead() { await ElMessageBox.confirm('确认清空全部已读通知吗？未读通知会保留。','清空已读通知',{type:'warning',confirmButtonText:'确认清空'});const result=await deleteReadNotifications();ElMessage.success(`已清空 ${result.deleted} 条已读通知`);await load() }
+async function clearRead() { if (!(await confirmAction('确认清空全部已读通知吗？未读通知会保留。','清空已读通知','确认清空'))) return;const result=await deleteReadNotifications();ElMessage.success(`已清空 ${result.deleted} 条已读通知`);await load() }
 function levelClass(level: string) { return `level-${level}` }
 onMounted(async () => {
   await Promise.all([load(), notificationStore.refreshUnreadCount()])

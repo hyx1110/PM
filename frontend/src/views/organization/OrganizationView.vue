@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import { Connection, OfficeBuilding, User } from '@element-plus/icons-vue'
 import {
   createDepartment,
@@ -20,6 +21,7 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const loading = ref(false)
+const saving = ref(false)
 const departments = ref<Department[]>([])
 const users = ref<UserOption[]>([])
 const l3Users = ref<UserOption[]>([])
@@ -113,12 +115,17 @@ function editActiveDepartment() {
 }
 
 async function saveDepartment() {
-  if (!(await formRef.value?.validate())) return
-  if (departmentId.value) await updateDepartment(departmentId.value, departmentForm)
-  else await createDepartment(departmentForm)
-  ElMessage.success('部门已保存')
-  departmentDialog.value = false
-  await load()
+  if (saving.value || !(await formRef.value?.validate().catch(() => false))) return
+  saving.value = true
+  try {
+    if (!(await confirmAction(`部门：${departmentForm.name}\n编码：${departmentForm.code}\n确认保存？部门主管设置会影响该部门项目、资源及父任务的审批权限。`, '保存部门', '确认保存'))) return
+    if (departmentId.value) await updateDepartment(departmentId.value, departmentForm)
+    else await createDepartment(departmentForm)
+    ElMessage.success('部门已保存')
+    departmentDialog.value = false
+    await load()
+  } catch { /* API interceptor displays the error. */ }
+  finally { saving.value = false }
 }
 
 function editOrganization(item?: OrganizationNode, parent?: OrganizationNode) {
@@ -134,12 +141,17 @@ function editOrganization(item?: OrganizationNode, parent?: OrganizationNode) {
 }
 
 async function saveOrganization() {
-  if (!(await formRef.value?.validate())) return
-  if (organizationId.value) await updateOrganization(organizationId.value, organizationForm)
-  else await createOrganization(organizationForm)
-  ElMessage.success('组织节点已保存')
-  organizationDialog.value = false
-  tree.value = await getOrganizationTree(activeDepartment.value)
+  if (saving.value || !(await formRef.value?.validate().catch(() => false))) return
+  saving.value = true
+  try {
+    if (!(await confirmAction(`组织：${organizationForm.name}\n编码：${organizationForm.code}\n确认保存组织节点及其层级、负责人设置？`, '保存组织', '确认保存'))) return
+    if (organizationId.value) await updateOrganization(organizationId.value, organizationForm)
+    else await createOrganization(organizationForm)
+    ElMessage.success('组织节点已保存')
+    organizationDialog.value = false
+    tree.value = await getOrganizationTree(activeDepartment.value)
+  } catch { /* API interceptor displays the error. */ }
+  finally { saving.value = false }
 }
 
 function clearToNull() {
@@ -147,11 +159,11 @@ function clearToNull() {
 }
 
 async function removeDepartment(item: Department) {
-  await ElMessageBox.confirm(
+  if (!(await confirmAction(
     `确认删除部门“${item.name}”吗？删除前必须先处理部门下的组织、用户和项目。`,
     '删除部门',
-    { type: 'warning', confirmButtonText: '确认删除' },
-  )
+    '确认删除',
+  ))) return
   await deleteDepartment(item.id)
   ElMessage.success('部门已删除')
   await load()
@@ -162,11 +174,11 @@ async function removeActiveDepartment() {
 }
 
 async function removeOrganization(item: OrganizationNode) {
-  await ElMessageBox.confirm(
+  if (!(await confirmAction(
     `确认删除组织“${item.name}”吗？请先删除其下级组织，已归属用户将变为未分配组织。`,
     '删除组织',
-    { type: 'warning', confirmButtonText: '确认删除' },
-  )
+    '确认删除',
+  ))) return
   await deleteOrganization(item.id)
   ElMessage.success('组织已删除')
   tree.value = await getOrganizationTree(activeDepartment.value)
@@ -217,11 +229,11 @@ onMounted(load)
 
     <el-dialog v-model="departmentDialog" :title="departmentId?'编辑部门':'新增部门'" width="500px">
       <el-form ref="formRef" :model="departmentForm" :rules="rules" label-position="top"><el-form-item label="部门编码" prop="code"><el-input v-model="departmentForm.code" :disabled="Boolean(departmentId)" /></el-form-item><el-form-item label="部门名称" prop="name"><el-input v-model="departmentForm.name" /></el-form-item><el-form-item v-if="departmentId" label="部门主管（项目/资源审批人）"><el-select v-model="departmentForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in l3Users.filter(user=>user.department_id===departmentId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select></el-form-item><el-alert v-else title="请先创建部门，再把部门主管用户分配到该部门，最后回到编辑部门设置负责人。" type="info" :closable="false" show-icon /></el-form>
-      <template #footer><el-button @click="departmentDialog=false">取消</el-button><el-button type="primary" @click="saveDepartment">保存</el-button></template>
+      <template #footer><el-button :disabled="saving" @click="departmentDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveDepartment">保存</el-button></template>
     </el-dialog>
     <el-dialog v-model="organizationDialog" :title="organizationId?'编辑组织':'新增组织'" width="540px">
       <el-form ref="formRef" :model="organizationForm" :rules="rules" label-position="top"><div class="form-grid"><el-form-item label="组织编码" prop="code"><el-input v-model="organizationForm.code" :disabled="Boolean(organizationId)" /></el-form-item><el-form-item label="层级"><el-select v-model="organizationForm.level" style="width:100%"><el-option v-for="level in ['L1','L2','L3','L4']" :key="level" :label="level" :value="level" /></el-select></el-form-item><el-form-item label="组织名称" prop="name"><el-input v-model="organizationForm.name" /></el-form-item><el-form-item label="主管"><el-select v-model="organizationForm.manager_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in users" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></div></el-form>
-      <template #footer><el-button @click="organizationDialog=false">取消</el-button><el-button type="primary" @click="saveOrganization">保存</el-button></template>
+      <template #footer><el-button :disabled="saving" @click="organizationDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOrganization">保存</el-button></template>
     </el-dialog>
   </div>
 </template>

@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import bad_request, conflict, not_found
+from app.core.exceptions import bad_request, conflict, forbidden, not_found
 from app.models.organization import Department
 from app.models.project import Project
 from app.models.rbac import Permission, Role, UserRole
@@ -38,6 +38,39 @@ def ensure_default_system_role(db: Session, user_id: int) -> None:
     db.flush()
 
 
+def validate_user_role_ids(
+    db: Session,
+    role_ids: list[int],
+    *,
+    operator_id: int,
+    existing_user_id: int | None = None,
+) -> list[int]:
+    """Roles are additive; only an existing super admin can grant/revoke that role."""
+    unique_ids = list(dict.fromkeys(role_ids))
+    if unique_ids:
+        found = set(db.scalars(select(Role.id).where(Role.id.in_(unique_ids))).all())
+        if found != set(unique_ids):
+            raise not_found("one or more roles do not exist")
+    # Serialize super-admin grants/removals with the last-admin guard.
+    super_role = db.scalar(select(Role).where(Role.code == "super_admin").with_for_update())
+    currently_super = bool(super_role and existing_user_id and db.scalar(
+        select(UserRole.id).where(UserRole.user_id == existing_user_id, UserRole.role_id == super_role.id)
+        .with_for_update()
+    ))
+    will_be_super = bool(super_role and super_role.id in unique_ids)
+    if will_be_super != currently_super:
+        # A current read prevents a concurrent demotion from using stale roles.
+        operator_is_super = db.scalar(
+            select(UserRole.id).join(User, User.id == UserRole.user_id).where(
+                UserRole.user_id == operator_id, UserRole.role_id == super_role.id,
+                User.status == "active", User.is_deleted.is_(False),
+            ).with_for_update()
+        )
+        if not operator_is_super:
+            raise forbidden("只有超级管理员可以授予或移除超级管理员角色")
+    return unique_ids
+
+
 def assert_super_admin_continuity(
     db: Session,
     target_user: User,
@@ -49,7 +82,7 @@ def assert_super_admin_continuity(
     """Keep at least one active, non-deleted super administrator."""
     if target_user.is_deleted or target_user.status != "active":
         return
-    super_role = db.scalar(select(Role).where(Role.code == "super_admin"))
+    super_role = db.scalar(select(Role).where(Role.code == "super_admin").with_for_update())
     if not super_role:
         return
     currently_super = bool(
@@ -58,6 +91,7 @@ def assert_super_admin_continuity(
                 UserRole.user_id == target_user.id,
                 UserRole.role_id == super_role.id,
             )
+            .with_for_update()
         )
     )
     if not currently_super:
@@ -76,6 +110,7 @@ def assert_super_admin_continuity(
             User.is_deleted.is_(False),
         )
         .limit(1)
+        .with_for_update()
     )
     if not another_super_admin:
         raise bad_request("不能移除、禁用或删除最后一个有效的超级管理员")
@@ -111,24 +146,7 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int], operator_i
     target_user = db.get(User, user_id)
     if not target_user or target_user.is_deleted:
         raise not_found("user not found")
-    existing_count = db.scalar(select(func.count(Role.id)).where(Role.id.in_(role_ids or {-1}))) or 0
-    if existing_count != len(set(role_ids)):
-        raise not_found("one or more roles do not exist")
-    normalized_role_ids = list(dict.fromkeys(role_ids))
-    super_role = db.scalar(select(Role).where(Role.code == "super_admin"))
-    currently_super = bool(
-        super_role
-        and db.scalar(
-            select(UserRole.id).where(
-                UserRole.user_id == user_id,
-                UserRole.role_id == super_role.id,
-            )
-        )
-    )
-    if super_role and super_role.id in normalized_role_ids and not currently_super:
-        raise bad_request("超级管理员只能在系统初始化时配置，不能通过角色管理新增")
-    if super_role and currently_super and super_role.id not in normalized_role_ids:
-        raise bad_request("初始化超级管理员角色受系统保护，不能通过角色管理移除")
+    normalized_role_ids = validate_user_role_ids(db, role_ids, operator_id=operator_id, existing_user_id=user_id)
     new_role_codes = set(
         db.scalars(
             select(Role.code).where(Role.id.in_(normalized_role_ids or {-1}))

@@ -1,6 +1,6 @@
 import { api } from './request'
 import type { PageData } from '@/types/common'
-import type { Project, ProjectMember, ProjectPayload, ProjectQuery, ProjectResourceRequest, ProjectResourceRequestPayload } from '@/types/project'
+import type { Project, ProjectInitiationReport, ProjectMember, ProjectPayload, ProjectQuery, ProjectResourceRequest, ProjectResourceRequestPayload } from '@/types/project'
 
 export const getProjects = (params: ProjectQuery = {}) => api.get<PageData<Project>>('/projects', { params })
 export async function getAllProjects(params: ProjectQuery = {}) {
@@ -17,6 +17,15 @@ export async function getAllProjects(params: ProjectQuery = {}) {
   return items
 }
 export const getProject = (id: number) => api.get<Project>(`/projects/${id}`)
+export const getProjectInitiationReport = (id: number) =>
+  api.get<ProjectInitiationReport | null>(`/projects/${id}/initiation-report`)
+export function uploadProjectInitiationReport(id: number, file: File) {
+  const data = new FormData()
+  data.append('file', file)
+  return api.post<ProjectInitiationReport>(`/projects/${id}/initiation-report`, data, { timeout: 120000 })
+}
+export const downloadProjectInitiationReport = (id: number) =>
+  api.download(`/projects/${id}/initiation-report/download`, { timeout: 120000 })
 export const createProject = (payload: ProjectPayload) => api.post<Project>('/projects', payload)
 export const submitProject = (id: number) => api.post<Project>(`/projects/${id}/submit`)
 export const completeProject = (id: number) => api.post<Project>(`/projects/${id}/complete`)

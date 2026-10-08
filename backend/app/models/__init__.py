@@ -7,6 +7,7 @@ from app.models.overtime import OvertimeRequest
 from app.models.organization import Department, Organization
 from app.models.personal_time import PersonalTimeBlock
 from app.models.project import Project, ProjectMember, ProjectResourceRequest
+from app.models.project_report import ProjectInitiationReport
 from app.models.rbac import Permission, Role, RolePermission, UserRole
 from app.models.risk import RiskRecord
 from app.models.schedule import ScheduleBooking
@@ -27,6 +28,7 @@ __all__ = [
     "Permission",
     "Project",
     "ProjectEvaluation",
+    "ProjectInitiationReport",
     "ProjectResourceRequest",
     "ProjectMember",
     "RiskRecord",

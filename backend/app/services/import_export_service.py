@@ -43,7 +43,8 @@ from app.services.project_service import (
     _validate_project_manager,
 )
 from app.services.rbac_service import ensure_default_system_role
-from app.services.task_service import _validate_assignees_with_parent, _validate_estimated_hours
+from app.services.task_service import _notify_task_approval, _root_task_approver, _validate_assignees_with_parent, _validate_estimated_hours
+from app.services.task_approval_policy import assert_task_approved
 from app.services.visibility_service import related_user_ids, has_global_project_access
 from app.utils.time import beijing_now
 
@@ -244,7 +245,7 @@ def _import_user(db: Session, row: dict[str, Any], operator: User) -> User:
     if missing_roles:
         raise ValueError(f"角色编码不存在：{', '.join(sorted(missing_roles))}")
     if "super_admin" in role_codes:
-        raise ValueError("超级管理员只能在系统初始化时配置，不能通过导入新增")
+        raise ValueError("批量导入不授予超级管理员角色，请由现有超级管理员在用户管理中单独配置")
     payload = UserCreate(
         employee_no=row.get("employee_no"),
         name=row.get("name"),
@@ -434,6 +435,7 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         if len(parent_matches) > 1:
             raise ValueError("上级任务名称不唯一，请先调整任务名称后再导入")
         parent = parent_matches[0]
+        assert_task_approved(db, parent)
         if parent.status == "completed":
             raise ValueError("不能在已完成的任务下导入子任务")
         assert_no_unrecorded_overtime(db, task_id=parent.id)
@@ -481,17 +483,22 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
         parent.id if parent else None,
         payload.estimated_hours,
     )
+    approver = _root_task_approver(db, project) if parent is None else None
     item = Task(
         **payload.model_dump(exclude={"owner_ids"}),
         owner_id=ordered_owners[0].id,
         priority="medium",
         status="not_started",
+        approval_status="pending" if parent is None else "not_required",
+        created_by=operator.id,
+        approver_id=approver.id if approver else None,
+        submitted_at=beijing_now() if approver else None,
     )
     db.add(item)
     db.flush()
     for owner in ordered_owners:
         db.add(TaskAssignee(task_id=item.id, user_id=owner.id))
-        if owner.id != operator.id:
+        if parent is not None and owner.id != operator.id:
             create_notification(
                 db,
                 owner.id,
@@ -501,6 +508,8 @@ def _import_task(db: Session, row: dict[str, Any], operator: User) -> Task:
                 related_type="task",
                 related_id=item.id,
             )
+    if approver:
+        _notify_task_approval(db, item, project, operator, approver)
     return item
 
 

@@ -243,8 +243,8 @@ def get_department_manager(db: Session, department_id: int) -> User:
 
 
 def _assert_department_manager(db: Session, project: Project, user: User) -> User:
-    if "super_admin" in get_role_codes(db, user.id):
-        return user
+    if "department_manager" not in get_role_codes(db, user.id):
+        raise forbidden("只有项目所属部门的部门主管可以审批，超级管理员身份不授予审批权")
     if not project.department_id:
         raise bad_request("项目未设置所属部门，无法确定部门主管审批人")
     approver = get_department_manager(db, project.department_id)
@@ -306,6 +306,7 @@ def list_pending_project_approvals(db: Session, user: User) -> list[dict]:
             select(Department.id).where(
                 Department.manager_id == user.id,
                 Department.status == "active",
+                Department.id == user.department_id,
             )
         ).all()
     )
@@ -547,9 +548,7 @@ def decide_project(
         raise bad_request("only pending projects can be reviewed")
     if not project.department_id:
         raise bad_request("项目必须设置所属部门")
-    approver = get_department_manager(db, project.department_id)
-    if user.id != approver.id:
-        raise forbidden("只有项目所属部门当前设置的部门主管可以审批")
+    approver = _assert_department_manager(db, project, user)
     if not approved and not payload.note:
         raise bad_request("驳回项目时必须填写原因")
     if approved:
@@ -838,7 +837,7 @@ def create_resource_request(
 def list_pending_resource_requests(db: Session, user: User) -> list[dict]:
     """Return the department manager's actionable resource requests."""
     roles = get_role_codes(db, user.id)
-    if not roles & {"department_manager", "super_admin"}:
+    if "department_manager" not in roles:
         return []
     requester = aliased(User)
     statement = (
@@ -854,11 +853,12 @@ def list_pending_resource_requests(db: Session, user: User) -> list[dict]:
         .where(
             ProjectResourceRequest.status == "pending",
             Project.is_deleted.is_(False),
+            Department.manager_id == user.id,
+            Department.status == "active",
+            Department.id == user.department_id,
         )
         .order_by(ProjectResourceRequest.created_at.asc())
     )
-    if "super_admin" not in roles:
-        statement = statement.where(Department.manager_id == user.id)
     rows = db.execute(statement).all()
     member_details = _resource_member_details(db, [row[0] for row in rows])
     return [

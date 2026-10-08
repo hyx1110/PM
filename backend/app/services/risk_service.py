@@ -16,6 +16,7 @@ from app.models.user import User
 from app.repositories.risk_repository import risk_repository
 from app.schemas.risk import RiskHandleRequest
 from app.services.notification_service import create_notification
+from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS
 from app.services.operation_log_service import log_operation
 from app.services.project_service import manageable_project_ids
 from app.services.visibility_service import visible_schedule_user_ids
@@ -71,6 +72,7 @@ def _detect_task_and_project_risks(
     result: list[dict] = []
     task_filters = [
         Task.status.in_(OPEN_TASK_STATUSES),
+        Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
         Task.is_deleted.is_(False),
         Task.project_id.in_(
             select(Project.id).where(Project.is_deleted.is_(False))

@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { beijingNow } from '@/utils/time'
 import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import type { TagProps } from 'element-plus'
 import { downloadExport, downloadImportTemplate, getImportJobs, uploadImportWorkbook } from '@/api/data-exchange'
 import type { ImportJob } from '@/types/data-exchange'
@@ -40,7 +41,20 @@ function saveBlob(blob: Blob, filename: string) { const url = URL.createObjectUR
 async function load() { loading.value = true; try { const page = await getImportJobs(importQuery); jobs.value = page.items; total.value = page.total } finally { loading.value = false } }
 async function template() { if (!resource.value) return; saveBlob(await downloadImportTemplate(resource.value), `${resource.value}_import_template.xlsx`) }
 function chooseFile(event: Event) { selectedFile.value = (event.target as HTMLInputElement).files?.[0] }
-async function upload() { if (!resource.value) return ElMessage.warning('当前角色没有可导入的数据类型'); if (!selectedFile.value) return ElMessage.warning('请选择 .xlsx 文件'); importing.value = true; try { const job = await uploadImportWorkbook(resource.value, selectedFile.value); ElMessage.success(`导入完成：成功 ${job.success_rows}，失败 ${job.failed_rows}`); selectedFile.value = undefined; await load() } finally { importing.value = false } }
+async function upload() {
+  if (importing.value) return
+  if (!resource.value) return ElMessage.warning('当前角色没有可导入的数据类型')
+  if (!selectedFile.value) return ElMessage.warning('请选择 .xlsx 文件')
+  importing.value = true
+  try {
+    if (!(await confirmAction(`导入类型：${resources.value.find(item => item.value === resource.value)?.label}\n文件：${selectedFile.value.name}\n确认导入？有效数据行将写入系统，失败行不会回滚已成功的行；项目和父任务按现有规则进入审批流程。`, '导入数据', '确认导入'))) return
+    const job = await uploadImportWorkbook(resource.value, selectedFile.value)
+    ElMessage.success(`导入完成：成功 ${job.success_rows}，失败 ${job.failed_rows}`)
+    selectedFile.value = undefined
+    await load()
+  } catch { /* API interceptor displays the error. */ }
+  finally { importing.value = false }
+}
 async function exportData() { if (!exportForm.range?.length) return ElMessage.warning('请选择日期范围'); const blob = await downloadExport(exportForm.kind, { start_date: exportForm.range[0], end_date: exportForm.range[1], project_id: exportForm.project_id, personnel_keyword: exportForm.personnel_keyword || undefined, organization_keyword: exportForm.organization_keyword || undefined }); saveBlob(blob, `${exportForm.kind}_${exportForm.range[0]}_${exportForm.range[1]}.xlsx`) }
 function showErrors(item: ImportJob) { selected.value = item; detailVisible.value = true }
 onMounted(async () => { resource.value = resources.value[0]?.value || ''; projects.value = await getAllProjects(); if (canImport.value) await load() })

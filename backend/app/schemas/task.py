@@ -7,11 +7,12 @@ from app.schemas.common import ORMModel
 
 TASK_STATUSES = {"not_started", "running", "completed"}
 TASK_FILTER_STATUSES = TASK_STATUSES | {"delayed"}
+TASK_APPROVAL_STATUSES = {"pending", "approved", "rejected", "not_required"}
 
 
 class TaskBase(ORMModel):
     project_id: int
-    parent_id: int | None = None
+    parent_id: int | None = Field(default=None, gt=0)
     name: str = Field(min_length=1, max_length=200)
     planned_start: date
     planned_end: date
@@ -31,7 +32,7 @@ class TaskCreate(TaskBase):
 
 
 class TaskUpdate(ORMModel):
-    parent_id: int | None = None
+    parent_id: int | None = Field(default=None, gt=0)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     owner_ids: list[int] | None = Field(default=None, min_length=1)
     planned_start: date | None = None
@@ -55,7 +56,19 @@ class TaskResponse(TaskBase):
     can_manage: bool = False
     can_edit: bool = False
     can_delete: bool = False
+    can_review: bool = False
+    approval_status: str = "pending"
+    approval_note: str | None = None
+    approver_id: int | None = None
+    created_by: int | None = None
+    submitted_at: datetime | None = None
+    approved_by: int | None = None
+    approved_at: datetime | None = None
     booked_hours: Decimal = Decimal("0")
     effective_status: str
     created_at: datetime
     updated_at: datetime
+
+
+class TaskDecision(ORMModel):
+    note: str | None = Field(default=None, max_length=2000)

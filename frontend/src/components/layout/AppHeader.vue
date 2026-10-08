@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ArrowDown, Bell } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useNotificationStore } from '@/stores/notification'
@@ -29,6 +30,7 @@ const allRoleNames = computed(() => {
 
 async function handleCommand(command: string) {
   if (command === 'logout') {
+    if (!(await confirmAction('确认退出当前账号？未保存的表单内容不会提交。', '退出登录', '确认退出'))) return
     await userStore.logout()
     await router.push('/login')
   }
@@ -46,9 +48,11 @@ async function handleCommand(command: string) {
 }
 
 async function saveProfile() {
+  if (saving.value) return
   if (!profileForm.name.trim()) return ElMessage.warning('姓名不能为空')
   saving.value = true
   try {
+    if (!(await confirmAction(`姓名：${profileForm.name.trim()}\n邮箱：${profileForm.email || '未设置'}\n确认保存个人资料？`, '修改个人资料', '确认保存'))) return
     await updateCurrentUser({ name: profileForm.name.trim(), email: profileForm.email || null })
     await userStore.fetchProfile()
     profileVisible.value = false
@@ -57,10 +61,12 @@ async function saveProfile() {
 }
 
 async function savePassword() {
+  if (saving.value) return
   if (passwordForm.new_password.length < 8) return ElMessage.warning('新密码至少 8 位')
   if (passwordForm.new_password !== passwordForm.confirm_password) return ElMessage.warning('两次输入的新密码不一致')
   saving.value = true
   try {
+    if (!(await confirmAction('确认修改当前账号的登录密码？修改后请使用新密码登录。', '修改登录密码', '确认修改密码'))) return
     await changeCurrentPassword(passwordForm)
     passwordVisible.value = false
     ElMessage.success('登录密码已修改')

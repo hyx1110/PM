@@ -53,8 +53,8 @@ def require_permission(permission_code: str) -> Callable:
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
     ) -> User:
-        # The initialized administrator remains capable of every endpoint even
-        # before a newly introduced permission row has been seeded.
+        # Super administrators bypass menu-level checks, never service-level
+        # business rules (e.g. project approvals require the assigned department manager).
         if "super_admin" in get_role_codes(db, current_user.id):
             return current_user
         if permission_code not in get_permission_codes(db, current_user.id):

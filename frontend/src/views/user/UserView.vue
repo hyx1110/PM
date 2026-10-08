@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import { createUser, deleteUser, getUserOptions, getUsers, updateUser } from '@/api/user'
 import { getDepartments, getOrganizationTree } from '@/api/organization'
 import { getRoles } from '@/api/role'
@@ -15,6 +16,7 @@ import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.v
 const userStore = useUserStore()
 const loading = ref(false)
 const users = ref<User[]>([])
+const saving = ref(false)
 const userOptions = ref<UserOption[]>([])
 const total = ref(0)
 const query = reactive({ page: 1, page_size: 20, status: '' })
@@ -27,7 +29,8 @@ const editingId = ref<number>()
 const editingIsSuper = ref(false)
 const editingRootUser = ref(false)
 const formRef = ref<FormInstance>()
-const assignableRoles = computed(() => roles.value.filter((item) => item.code !== 'super_admin'))
+const canAssignSuperAdmin = computed(() => Boolean(userStore.profile?.roles.includes('super_admin')))
+const assignableRoles = computed(() => roles.value.filter((item) => item.code !== 'super_admin' || canAssignSuperAdmin.value || editingIsSuper.value))
 
 const emptyForm = (): UserPayload => ({
   employee_no: '',
@@ -177,8 +180,9 @@ function handleDepartmentChange(departmentId: number | null | undefined) {
 }
 
 async function save() {
+  if (saving.value) return
   if (!editingId.value && form.employee_no) form.employee_no = form.employee_no.normalize('NFKC').trim()
-  if (!(await formRef.value?.validate())) return
+  if (!(await formRef.value?.validate().catch(() => false))) return
   const payload: Partial<UserPayload> = {
     ...form,
     department_id: form.department_id ?? null,
@@ -190,14 +194,13 @@ async function save() {
     delete payload.confirm_password
   }
   if (!userStore.hasPermission('role:edit')) delete payload.role_ids
-  if (editingIsSuper.value && payload.role_ids) {
-    const superRoleId = roles.value.find((item) => item.code === 'super_admin')?.id
-    if (superRoleId && !payload.role_ids.includes(superRoleId)) payload.role_ids.push(superRoleId)
-  }
+  saving.value = true
   try {
+    if (!(await confirmAction(`用户：${form.name}（${form.employee_no}）\n确认${editingId.value ? '保存用户资料、组织关系及角色变更' : '创建该用户'}？${payload.password ? '\n同时设置该用户的登录密码。' : ''}`, editingId.value ? '保存用户' : '新增用户', '确认保存'))) return
     if (editingId.value) {
       delete payload.employee_no
       await updateUser(editingId.value, payload)
+      if (editingId.value === userStore.profile?.id) await userStore.fetchProfile()
     } else {
       await createUser(payload as UserPayload)
     }
@@ -206,22 +209,23 @@ async function save() {
     await Promise.all([load(), loadOptions()])
   } catch {
     // 统一请求层已经显示后端返回的具体错误。
-  }
+  } finally { saving.value = false }
 }
 
 async function toggleStatus(row: User) {
   const status = row.status === 'active' ? 'disabled' : 'active'
+  if (!(await confirmAction(`用户：${row.name}（${row.employee_no}）\n确认${status === 'active' ? '启用该账号，允许登录系统' : '禁用该账号，禁止登录系统'}？`, '修改账号状态', status === 'active' ? '确认启用' : '确认禁用'))) return
   await updateUser(row.id, { status })
   ElMessage.success(status === 'active' ? '用户已启用' : '用户已禁用')
   await load()
 }
 
 async function remove(row: User) {
-  await ElMessageBox.confirm(
+  if (!(await confirmAction(
     `确认删除用户“${row.name}（${row.employee_no}）”吗？用户将无法登录，但历史业务记录会保留。`,
     '删除用户',
-    { type: 'warning', confirmButtonText: '确认删除' },
-  )
+    '确认删除',
+  ))) return
   await deleteUser(row.id)
   ElMessage.success('用户已删除')
   await Promise.all([load(), loadOptions()])
@@ -264,13 +268,13 @@ onMounted(async () => { await loadOptions(); await load() })
           <el-form-item label="所属部门" prop="department_id" required><el-select v-model="form.department_id" style="width:100%" @change="handleDepartmentChange"><el-option v-for="item in activeDepartments" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="所属组织"><el-select v-model="form.organization_id" clearable filterable :value-on-clear="clearToNull" style="width:100%"><el-option v-for="item in flatOrganizations.filter(v=>v.status==='active'&&(!form.department_id||v.department_id===form.department_id))" :key="item.id" :label="item.label" :value="item.id" /></el-select></el-form-item>
           <el-form-item label="直属主管" prop="supervisor_id" :required="!editingRootUser"><el-select v-model="form.supervisor_id" filterable style="width:100%"><el-option v-for="item in userOptions.filter(v=>v.id!==editingId)" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id" /></el-select><small class="field-hint">新增用户必须选择直属主管；最高级主管由数据库维护。</small></el-form-item>
-          <el-form-item v-if="userStore.hasPermission('role:edit')" label="系统角色"><el-select v-model="form.role_ids" multiple style="width:100%"><el-option v-for="item in assignableRoles" :key="item.id" :label="item.name" :value="item.id" /></el-select><small v-if="editingIsSuper" class="field-hint">初始化超级管理员角色受系统保护，不能在用户管理中新增或移除。</small></el-form-item>
+          <el-form-item v-if="userStore.hasPermission('role:edit')" label="系统角色"><el-select v-model="form.role_ids" multiple style="width:100%"><el-option v-for="item in assignableRoles" :key="item.id" :label="item.name" :value="item.id" :disabled="item.code==='super_admin' && !canAssignSuperAdmin" /></el-select><small class="field-hint">支持多选兼任。超级管理员角色仅由现有超级管理员授予；系统必须保留至少一个有效超级管理员。</small></el-form-item>
           <el-form-item :label="editingId?'重置密码（留空不修改）':'初始密码'" prop="password" :required="!editingId"><el-input v-model="form.password" type="password" show-password /></el-form-item>
           <el-form-item :label="editingId?'确认新密码':'确认初始密码'" prop="confirm_password" :required="!editingId"><el-input v-model="form.confirm_password" type="password" show-password /></el-form-item>
         </div>
-        <el-alert title="用户管理可分配部门主管、职能主管、项目经理和项目成员；超级管理员只能在系统初始化时配置。未选择角色时默认授予项目成员。" type="info" :closable="false" show-icon />
+        <el-alert title="五类系统角色可同时兼任，未选择角色时默认授予项目成员。超级管理员身份不授予项目审批权；项目及资源申请仅由项目所属部门指定的部门主管审批。" type="info" :closable="false" show-icon />
       </el-form>
-      <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" @click="save">保存</el-button></template>
+      <template #footer><el-button :disabled="saving" @click="dialogVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
     </el-dialog>
   </div>
 </template>

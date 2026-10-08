@@ -1,6 +1,10 @@
 # V2.0 数据库说明
 
-当前最新迁移 `20260929_0018` 为 `project_resource_requests` 增加 `original_planned_end DATE NULL` 和 `requested_planned_end DATE NULL`：分别保存申请时原截止日及申请的新截止日。只有资源审批通过才更新 `projects.planned_end`，不自动修改任务计划或实际工时；旧申请字段为 NULL。详见 [延期迁移说明](BUGFIX_20260929.md)。
+当前最新迁移 `20261008_0020` 为 `tasks` 增加父任务审批字段：`approval_status VARCHAR(20)`、`created_by/approver_id/approved_by INT NULL`（用户外键，删除用户时置空）、`submitted_at/approved_at DATETIME NULL`、`approval_note TEXT NULL`，并建立审批状态索引。历史顶层任务回填 `approved`，历史子任务回填 `not_required`；新记录默认 `pending`，服务创建子任务显式使用 `not_required`。无历史审批人/时间时保留 NULL，不伪造审批记录。详见 [父任务审批说明](ROOT_TASK_APPROVAL.md)。
+
+此前迁移 `20261008_0019` 新建 `project_initiation_reports`：以 `project_id` 为主键及项目外键，每个项目一份当前立项报告；保存 `original_filename`、`storage_name`（UUID 文件名）、`media_type`、`size_bytes`、`uploaded_by` 和创建/更新时间。报告文件保存在服务器私有目录，不写入 MySQL。历史项目无需补录；数据库与附件目录须配套备份。详见 [立项报告附件说明](PROJECT_INITIATION_REPORT.md)。
+
+此前迁移 `20260929_0018` 为 `project_resource_requests` 增加 `original_planned_end DATE NULL` 和 `requested_planned_end DATE NULL`：分别保存申请时原截止日及申请的新截止日。只有资源审批通过才更新 `projects.planned_end`，不自动修改任务计划或实际工时；旧申请字段为 NULL。详见 [延期迁移说明](BUGFIX_20260929.md)。
 
 0930 修改不新增字段或迁移：资源申请现有 VARCHAR `status` 增加业务状态 `withdrawn`，撤回时更新 `updated_at` 并保存操作日志，不伪造审批人或审批时间。新日志的现有 JSON `before_data/after_data` 附带 `_display_labels` 名称快照，内部 ID 保留；历史日志按当前档案只读补全名称。新预约通知的现有 `content` 保存当时的姓名、项目、任务、时段与结果，历史通知仅在读取时补全可解析信息，不批量改写数据库或重发邮件。
 
@@ -13,6 +17,7 @@ users n ── 1 users              via supervisor_id
 
 projects n ── n users          via project_members
 projects n ── 1 users          via approver_id（项目所属部门主管）
+projects 1 ── 0..1 project_initiation_reports（文件存服务器私有目录）
 projects 1 ── n tasks          tasks 支持任意层级自关联
 tasks n ── n users            via task_assignees
 projects 1 ── n project_resource_requests
@@ -48,7 +53,7 @@ work_calendar_days             法定节假日/调休日期覆盖
 | `project_resource_requests` | 由追加工时表升级 | `requested_hours/add_member_ids/remove_member_ids` 统一保存工时与成员资源变更及部门主管审批结果 |
 | `work_calendar_days` | 新表 | `holiday/workday` 日期覆盖；迁移内置 2026 法定安排 |
 | `personal_time_blocks` | 新表 | 用户本人的培训/会议/休假/出差/其他占用，支持生效与撤回状态 |
-| `tasks` | 增加 `is_deleted` 并统一状态，删除 `task_type` | 业务删除保留历史；状态为未开始、进行中、已完成、已暂停、已取消，延期为动态展示状态 |
+| `tasks` | 增加 `is_deleted` 与独立审批字段，删除 `task_type` | 执行状态为未开始、进行中、已完成，已逾期按日期动态计算；审批状态为 pending/approved/rejected/not_required |
 | `task_assignees` | `20260916_0010` 新表 | 任务多人负责人；任务编辑权限及“我的任务”范围以该表为准 |
 | `execution_records` | 增加 `is_deleted` | 删除后不参与正常查询和统计，但保留审计历史 |
 

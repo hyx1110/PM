@@ -56,6 +56,7 @@ ACTION_LABELS = {
 OBJECT_LABELS = {
     "user": "用户",
     "project": "项目",
+    "project_initiation_report": "项目立项报告",
     "task": "任务",
     "execution_record": "执行记录",
     "overtime_request": "加班申请",
@@ -76,6 +77,9 @@ OBJECT_LABELS = {
     "risk_record": "风险记录",
 }
 FIELD_LABELS = {
+    "filename": "附件名称",
+    "size_bytes": "文件大小（字节）",
+    "uploaded_by": "上传人",
     "user_id": "人员",
     "project_id": "所属项目",
     "task_id": "关联任务",
@@ -104,6 +108,9 @@ FIELD_LABELS = {
     "permission_ids": "功能权限",
     "status": "状态",
     "approval_status": "审批状态",
+    "approval_note": "审批意见",
+    "submitted_at": "提交审批时间",
+    "approved_at": "审批时间",
     "manager_id": "项目经理",
     "owner_id": "主要项目成员",
     "owner_ids": "项目成员",
@@ -132,6 +139,7 @@ FIELD_LABELS = {
 
 
 STATUS_LABELS = {
+    "not_required": "无需单独审批",
     "pending": "待审批", "approved": "已批准", "rejected": "已驳回", "withdrawn": "已撤回",
     "draft": "草稿", "confirmed": "已确认", "changed": "改期待确认", "cancelled": "已取消",
     "running": "进行中", "not_started": "未开始", "completed": "已完成", "delayed": "已逾期",

@@ -18,6 +18,7 @@ from app.models.user import User
 
 
 REFERENCE_FIELDS = {
+    "uploaded_by": "user",
     **dict.fromkeys(("user_id", "user_ids", "manager_id", "owner_id", "owner_ids", "member_ids", "add_member_ids", "remove_member_ids", "supervisor_id", "created_by", "requested_by", "reviewed_by", "approved_by", "approver_id", "operator_id"), "user"),
     "project_id": "project", "task_id": "task", "parent_id": "task",
     "department_id": "department", "organization_id": "organization",

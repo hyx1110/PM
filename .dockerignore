@@ -1,0 +1,10 @@
+.git/
+**/.env
+**/.env.*
+!**/.env.example
+backend/storage/
+**/uploads/
+**/logs/
+**/node_modules/
+**/__pycache__/
+**/.venv/

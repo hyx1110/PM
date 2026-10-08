@@ -15,6 +15,14 @@ export interface Task {
   can_manage: boolean
   can_edit: boolean
   can_delete: boolean
+  can_review: boolean
+  approval_status: 'pending' | 'approved' | 'rejected' | 'not_required'
+  approval_note?: string | null
+  approver_id?: number | null
+  created_by?: number | null
+  submitted_at?: string | null
+  approved_by?: number | null
+  approved_at?: string | null
   planned_start: string
   planned_end: string
   estimated_hours: number
@@ -43,6 +51,8 @@ export interface TaskQuery extends PageQuery {
   project_id?: number
   owner_id?: number
   status?: string
+  approval_status?: string
+  executable_only?: boolean
   department_id?: number
   organization_id?: number
   employee_no?: string

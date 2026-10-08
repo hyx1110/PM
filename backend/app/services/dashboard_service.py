@@ -16,7 +16,8 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.personal_time_repository import PERSONAL_TIME_TYPE_LABELS
 from app.repositories.schedule_repository import schedule_repository
-from app.services import project_service, overtime_service
+from app.services import project_service, overtime_service, task_service
+from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS
 from app.services.visibility_service import dashboard_visibility_scopes
 from app.utils.time import BEIJING_TIMEZONE, beijing_now
 
@@ -185,6 +186,19 @@ def _pending_datetime(value: datetime | str | None) -> datetime | None:
 
 def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
     items: list[dict] = []
+    for task in task_service.list_pending_task_approvals(db, user):
+        owners = "、".join(task["owner_names"]) or "未分配"
+        items.append({
+            "id": f"task-approval-{task['id']}", "source_id": task["id"],
+            "type": "task_approval", "type_label": "父任务审批",
+            "title": task["name"], "project_id": task["project_id"], "task_id": task["id"],
+            "project_name": task["project_name"], "applicant_name": task.get("creator_name") or "未知申请人",
+            "content": f"项目成员：{owners}；计划日期：{task['planned_start']} 至 {task['planned_end']}；"
+                       f"预计工时：{task['estimated_hours']}h。\n描述：{task.get('description') or '无'}"
+                       f"\n备注：{task.get('remark') or '无'}",
+            "created_at": task.get("submitted_at") or task.get("created_at"),
+            "status": "pending", "actionable": True,
+        })
     for request in overtime_service.list_requests(db, user, page_size=200, scope="approvals", status="pending")["items"]:
         items.append({
             "id": f"overtime-{request['id']}", "source_id": request["id"],
@@ -278,6 +292,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
     approved_project_ids_query = select(Project.id).where(*approved_project_filters)
     task_filters = [
         Task.is_deleted.is_(False),
+        Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
         Task.project_id.in_(visible_project_ids_query),
     ]
     execution_agg = _execution_aggregate(visible_project_ids_query)
@@ -312,6 +327,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         task_select.where(
             Task.project_id.in_(timeline_project_ids or {-1}),
             Task.is_deleted.is_(False),
+            Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
         ).order_by(Task.project_id, Task.planned_start, Task.parent_id, Task.id)
     ).all()
 

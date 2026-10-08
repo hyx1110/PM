@@ -9,6 +9,7 @@ import { beijingNow } from '@/utils/time'
 
 const props = defineProps<{
   modelValue: boolean
+  saving?: boolean
   slot?: { date: string; time: string }
 }>()
 const emit = defineEmits<{
@@ -122,7 +123,8 @@ watch(
 )
 
 async function submit() {
-  if (!(await formRef.value?.validate())) return
+  if (props.saving) return
+  if (!(await formRef.value?.validate().catch(() => false))) return
   if (!isValidWorkday(form.work_date)) {
     return ElMessage.warning('个人时间只能设置在工作日，法定节假日不能设置')
   }
@@ -150,7 +152,7 @@ async function submit() {
       </div>
       <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="3" maxlength="1000" show-word-limit/></el-form-item>
     </el-form>
-    <template #footer><el-button @click="emit('update:modelValue',false)">取消</el-button><el-button type="primary" @click="submit">保存时间安排</el-button></template>
+    <template #footer><el-button :disabled="saving" @click="emit('update:modelValue',false)">取消</el-button><el-button type="primary" :loading="saving" @click="submit">保存时间安排</el-button></template>
   </el-dialog>
 </template>
 

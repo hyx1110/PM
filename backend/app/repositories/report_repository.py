@@ -9,6 +9,7 @@ from app.models.execution import ExecutionRecord
 from app.models.project import Project
 from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
+from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS
 from app.models.user import User
 
 
@@ -30,6 +31,7 @@ class ReportRepository:
         parent = aliased(Task)
         filters = [
             Task.is_deleted.is_(False),
+            Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
             Task.project_id.in_(
                 select(Project.id).where(Project.is_deleted.is_(False))
             ),

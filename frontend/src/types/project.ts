@@ -2,6 +2,15 @@ import type { PageQuery } from './common'
 
 export type ProjectApprovalStatus = 'draft' | 'pending' | 'approved' | 'rejected'
 
+export interface ProjectInitiationReport {
+  project_id: number
+  filename: string
+  size_bytes: number
+  uploaded_by: number | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Project {
   id: number
   code: string

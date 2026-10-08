@@ -18,6 +18,7 @@ from app.services.operation_log_service import log_operation
 from app.services.rbac_service import (
     assert_super_admin_continuity,
     ensure_default_system_role,
+    validate_user_role_ids as _validate_role_ids,
 )
 from app.utils.model import model_to_dict
 from app.utils.personnel_scope import resolve_personnel_scope_user_ids
@@ -79,44 +80,6 @@ def user_detail(db: Session, user_id: int) -> dict:
     if not item:
         raise not_found("user not found")
     return item
-
-
-def _validate_role_ids(
-    db: Session,
-    role_ids: list[int],
-    *,
-    existing_user_id: int | None = None,
-) -> list[int]:
-    unique_ids = list(dict.fromkeys(role_ids))
-    if unique_ids:
-        found = set(db.scalars(select(Role.id).where(Role.id.in_(unique_ids))).all())
-        if found != set(unique_ids):
-            raise not_found("one or more roles do not exist")
-    super_role = db.scalar(select(Role).where(Role.code == "super_admin"))
-    if super_role and super_role.id in unique_ids:
-        already_super = bool(
-            existing_user_id
-            and db.scalar(
-                select(UserRole.id)
-                .where(
-                    UserRole.user_id == existing_user_id,
-                    UserRole.role_id == super_role.id,
-                )
-            )
-        )
-        if not already_super:
-            raise bad_request("超级管理员只能在系统初始化时配置，不能通过用户管理新增")
-    elif super_role and existing_user_id and db.scalar(
-        select(UserRole.id).where(
-            UserRole.user_id == existing_user_id,
-            UserRole.role_id == super_role.id,
-        )
-    ):
-        # This check intentionally also runs for an empty role list. Otherwise
-        # an API client could bypass the UI guard and remove the initialized
-        # super administrator by submitting role_ids=[].
-        raise bad_request("初始化超级管理员角色受系统保护，不能通过用户管理移除")
-    return unique_ids
 
 
 def _collect_active_dependencies(
@@ -221,7 +184,7 @@ def create_user(db: Session, payload: UserCreate, operator_id: int) -> User:
     if payload.email and db.scalar(select(User).where(User.email == payload.email)):
         raise conflict("email already exists", 40903)
     _validate_relations(db, payload.department_id, payload.organization_id, payload.supervisor_id)
-    role_ids = _validate_role_ids(db, payload.role_ids)
+    role_ids = _validate_role_ids(db, payload.role_ids, operator_id=operator_id)
     values = payload.model_dump(
         exclude={
             "employee_no",
@@ -323,7 +286,7 @@ def update_user(db: Session, user_id: int, payload: UserUpdate, operator_id: int
     if any(values.get(key) is None for key in {"name", "status"} if key in values):
         raise bad_request("姓名和账号状态不能为空")
     normalized_role_ids = (
-        _validate_role_ids(db, role_ids, existing_user_id=user_id)
+        _validate_role_ids(db, role_ids, operator_id=operator_id, existing_user_id=user_id)
         if role_ids is not None
         else None
     )

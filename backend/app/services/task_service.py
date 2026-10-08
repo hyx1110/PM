@@ -1,10 +1,12 @@
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, aliased
 
+from app.core.dependencies import get_role_codes
 from app.core.exceptions import bad_request, conflict, forbidden, not_found
+from app.models.organization import Department
 from app.models.execution import ExecutionRecord
 from app.models.overtime import OvertimeRequest
 from app.services.overtime_service import assert_no_unrecorded_overtime, unrecorded_overtime_filters
@@ -14,10 +16,13 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.project_repository import booked_schedule_predicate
 from app.repositories.task_repository import task_repository
-from app.schemas.task import TASK_FILTER_STATUSES, TaskCreate, TaskUpdate
+from app.schemas.task import TASK_APPROVAL_STATUSES, TASK_FILTER_STATUSES, TaskCreate, TaskDecision, TaskUpdate
+from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS, assert_task_approved
 from app.services.operation_log_service import log_operation
 from app.services.notification_service import create_notification
 from app.services.project_service import (
+    _assert_department_manager,
+    get_department_manager,
     assert_project_approved,
     assert_project_manageable,
     assert_project_visible,
@@ -32,7 +37,7 @@ from app.services.status_sync_service import (
     synchronize_task_status,
 )
 from app.utils.model import model_to_dict
-from app.utils.time import beijing_today
+from app.utils.time import beijing_now, beijing_today
 from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 def effective_status(task_status: str, planned_end: date, now: date | None = None) -> str:
@@ -56,6 +61,8 @@ def _validate_owners(db: Session, project_id: int, owner_ids: list[int]) -> list
                 User.status == "active",
                 User.is_deleted.is_(False),
             )
+            .order_by(User.id)
+            .with_for_update()
         ).all()
     )
     missing = set(unique_ids) - active_member_ids
@@ -64,8 +71,131 @@ def _validate_owners(db: Session, project_id: int, owner_ids: list[int]) -> list
     return unique_ids
 
 
+def _root_task_approver(db: Session, project: Project) -> User:
+    if not project.department_id:
+        raise bad_request("请先为项目设置所属部门及部门主管，再提交父任务审批")
+    return get_department_manager(db, project.department_id)
+
+
+def reviewable_task_project_ids(db: Session, user: User) -> set[int]:
+    # Match project approval policy: administrator privileges alone never grant approval.
+    if "department_manager" not in get_role_codes(db, user.id):
+        return set()
+    return set(db.scalars(
+        select(Project.id).join(Department, Department.id == Project.department_id).where(
+            Department.manager_id == user.id, Department.id == user.department_id,
+            Department.status == "active", Project.is_deleted.is_(False),
+            Project.approval_status == "approved", Project.status != "completed",
+        )
+    ).all())
+
+
+def _notify_task_approval(db: Session, task: Task, project: Project, user: User, approver: User) -> None:
+    create_notification(
+        db, approver.id, "task_approval_pending", "父任务待审批",
+        f"{user.name} 在项目“{project.name}”中提交父任务“{task.name}”，"
+        f"计划 {task.planned_start} 至 {task.planned_end}，预计 {task.estimated_hours}h，请审批。",
+        related_type="task", related_id=task.id,
+    )
+
+
+def list_pending_task_approvals(db: Session, user: User) -> list[dict]:
+    project_ids = reviewable_task_project_ids(db, user)
+    if not project_ids:
+        return []
+    creator = aliased(User)
+    rows = db.execute(
+        select(Task, Project.name, creator.name)
+        .join(Project, Project.id == Task.project_id)
+        .outerjoin(creator, creator.id == Task.created_by)
+        .where(Task.project_id.in_(project_ids), Task.parent_id.is_(None),
+               Task.is_deleted.is_(False), Task.approval_status == "pending")
+        .order_by(Task.submitted_at.asc(), Task.id.asc())
+    ).all()
+    owners = task_repository._assignee_map(db, [task.id for task, _, _ in rows])
+    return [{
+        **model_to_dict(task), "project_name": project_name, "creator_name": creator_name,
+        "owner_names": [owner["name"] for owner in owners.get(task.id, [])],
+        "can_review": True,
+    } for task, project_name, creator_name in rows]
+
+
+def _lock_task_approval(db: Session, task_id: int) -> tuple[Task, Project]:
+    task = task_repository.get(db, task_id)
+    if not task:
+        raise not_found("task not found")
+    # Use the same project -> task lock order as scheduling and execution.
+    project = db.scalar(select(Project).where(Project.id == task.project_id)
+                        .with_for_update().execution_options(populate_existing=True))
+    task = db.scalar(select(Task).where(Task.id == task_id)
+                     .with_for_update().execution_options(populate_existing=True))
+    if not task or task.is_deleted or not project or project.is_deleted:
+        raise not_found("task not found")
+    assert_project_approved(db, project.id)
+    if task.parent_id is not None:
+        raise bad_request("子任务无需单独审批")
+    return task, project
+
+
+def _validate_root_task_submission(db: Session, task: Task) -> list[int]:
+    owner_ids = _validate_owners(db, task.project_id, _assignee_ids(db, task.id))
+    _validate_task_window(db, task.project_id, task.planned_start, task.planned_end, None, task.id)
+    _validate_estimated_hours(db, task.project_id, None, task.estimated_hours, task.id)
+    return owner_ids
+
+
+def submit_task(db: Session, task_id: int, user: User) -> Task:
+    task, project = _lock_task_approval(db, task_id)
+    assert_project_manageable(db, project.id, user)
+    if task.approval_status != "rejected":
+        raise bad_request("只有被驳回的父任务可以重新提交审批")
+    _validate_root_task_submission(db, task)
+    approver = _root_task_approver(db, project)
+    before = model_to_dict(task)
+    task.approval_status = "pending"
+    task.approver_id = approver.id
+    task.submitted_at = beijing_now()
+    task.approved_by = task.approved_at = task.approval_note = None
+    _notify_task_approval(db, task, project, user, approver)
+    log_operation(db, operator_id=user.id, module="task", action="submit", object_type="task",
+                  object_id=task.id, before_data=before, after_data=model_to_dict(task))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+def decide_task(db: Session, task_id: int, payload: TaskDecision, user: User, *, approve: bool) -> Task:
+    task, project = _lock_task_approval(db, task_id)
+    _assert_department_manager(db, project, user)
+    if task.approval_status != "pending":
+        raise bad_request("该父任务已处理，不能重复审批，请刷新列表")
+    note = (payload.note or "").strip()
+    if not approve and not note:
+        raise bad_request("请填写驳回原因")
+    owner_ids = _validate_root_task_submission(db, task) if approve else []
+    before = model_to_dict(task)
+    task.approval_status = "approved" if approve else "rejected"
+    task.approver_id = task.approved_by = user.id
+    task.approved_at = beijing_now()
+    task.approval_note = note or None
+    recipients = {task.created_by, project.manager_id, *owner_ids} - {None, user.id}
+    result = "已通过" if approve else "已驳回"
+    for recipient_id in recipients:
+        create_notification(
+            db, recipient_id, "task_approval_result", f"父任务审批{result}",
+            f"项目“{project.name}”的父任务“{task.name}”{result}。"
+            + (f"审批意见：{note}" if note else "可开始安排子任务、预约工时和填写执行记录。"),
+            related_type="task", related_id=task.id,
+        )
+    log_operation(db, operator_id=user.id, module="task", action="approve" if approve else "reject",
+                  object_type="task", object_id=task.id, before_data=before, after_data=model_to_dict(task))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
 def _assignee_ids(db: Session, task_id: int) -> list[int]:
-    return list(db.scalars(select(TaskAssignee.user_id).where(TaskAssignee.task_id == task_id)).all())
+    return list(db.scalars(select(TaskAssignee.user_id).where(TaskAssignee.task_id == task_id).with_for_update()).all())
 
 
 def _assert_task_assignee(db: Session, task: Task, user: User) -> None:
@@ -73,9 +203,11 @@ def _assert_task_assignee(db: Session, task: Task, user: User) -> None:
         raise forbidden("只有任务项目成员可以编辑或删除该任务")
 
 
-def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False, personnel_keyword: str | None = None, organization_keyword: str | None = None, personnel_scope: str | None = None):
+def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: int | None, owner_id: int | None, status: str | None, department_id: int | None = None, organization_id: int | None = None, employee_no: str | None = None, owner_name: str | None = None, managed_project_scope: bool = False, personnel_keyword: str | None = None, organization_keyword: str | None = None, personnel_scope: str | None = None, approval_status: str | None = None, executable_only: bool = False):
     if status and status not in TASK_FILTER_STATUSES:
         raise bad_request("invalid task status filter")
+    if approval_status and approval_status not in TASK_APPROVAL_STATUSES:
+        raise bad_request("invalid task approval status filter")
     scope = manageable_project_ids(db, user) if managed_project_scope else visible_project_ids(db, user)
     items, total = task_repository.list(
         db,
@@ -92,11 +224,14 @@ def list_tasks(db: Session, user: User, page: int, page_size: int, project_id: i
         personnel_keyword=personnel_keyword,
         organization_keyword=organization_keyword,
         personnel_scope_user_ids=resolve_personnel_scope_user_ids(db, personnel_scope),
+        approval_status=approval_status,
+        executable_only=executable_only,
     )
     global_access = has_global_project_access(db, user)
+    reviewable = reviewable_task_project_ids(db, user)
     for item in items:
         item["effective_status"] = effective_status(item["status"], item["planned_end"])
-        _add_permissions(item, user, global_access)
+        _add_permissions(item, user, global_access, reviewable)
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -115,6 +250,7 @@ def list_my_tasks(
         page_size,
         owner_id=user.id,
         status=status,
+        executable_only=True,
     )
     for item in items:
         item["effective_status"] = effective_status(
@@ -144,11 +280,15 @@ def task_detail(db: Session, task_id: int, user: User) -> dict:
     return task_response(db, task_id, user)
 
 
-def _add_permissions(item: dict, user: User, global_access: bool) -> None:
+def _add_permissions(item: dict, user: User, global_access: bool, reviewable: set[int] | None = None) -> None:
     can_manage = global_access or item.get("project_manager_id") == user.id
     item["can_manage"] = can_manage
     item["can_edit"] = can_manage or user.id in item.get("owner_ids", []) or item.get("owner_id") == user.id
     item["can_delete"] = can_manage
+    item["can_review"] = item.get("parent_id") is None and item.get("approval_status") == "pending" and item.get("project_id") in (reviewable or set())
+    if item.get("approval_status") not in EXECUTABLE_TASK_APPROVALS:
+        item["effective_status"] = "not_started"
+        item["can_edit"] = can_manage and item.get("approval_status") == "rejected"
 
 
 def task_response(db: Session, task_id: int, user: User | None = None) -> dict:
@@ -158,7 +298,7 @@ def task_response(db: Session, task_id: int, user: User | None = None) -> dict:
         raise not_found("task not found")
     match["effective_status"] = effective_status(match["status"], match["planned_end"])
     if user:
-        _add_permissions(match, user, has_global_project_access(db, user))
+        _add_permissions(match, user, has_global_project_access(db, user), reviewable_task_project_ids(db, user))
     return match
 
 
@@ -168,6 +308,7 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
     parent = task_repository.get(db, parent_id)
     if not parent or parent.project_id != project_id:
         raise bad_request("parent task must belong to the same project")
+    assert_task_approved(db, parent)
     if parent.status == "completed":
         raise bad_request("不能在已完成的任务下新增或移动子任务")
     if parent_id != (task_repository.get(db, current_task_id).parent_id if current_task_id else None):
@@ -213,9 +354,11 @@ def _validate_estimated_hours(
     ]
     if current_task_id:
         sibling_filters.append(Task.id != current_task_id)
-    sibling_hours = db.scalar(
-        select(func.coalesce(func.sum(Task.estimated_hours), 0)).where(*sibling_filters)
-    ) or Decimal("0")
+    # A locking read sees current committed allocations even if an earlier
+    # permission lookup opened a MySQL REPEATABLE READ snapshot before the lock.
+    sibling_hours = sum(db.scalars(
+        select(Task.estimated_hours).where(*sibling_filters).order_by(Task.id).with_for_update()
+    ).all(), Decimal("0"))
     limit = project.budget_hours
     if parent_id:
         parent = task_repository.get(db, parent_id)
@@ -229,12 +372,12 @@ def _validate_estimated_hours(
             f"本次 {estimated_hours} 小时，可用上限 {limit} 小时"
         )
     if current_task_id:
-        child_hours = db.scalar(
-            select(func.coalesce(func.sum(Task.estimated_hours), 0)).where(
+        child_hours = sum(db.scalars(
+            select(Task.estimated_hours).where(
                 Task.parent_id == current_task_id,
                 Task.is_deleted.is_(False),
-            )
-        ) or Decimal("0")
+            ).order_by(Task.id).with_for_update()
+        ).all(), Decimal("0"))
         if child_hours > estimated_hours:
             raise bad_request(
                 f"当前任务的直接子任务预计工时合计为 {child_hours} 小时，"
@@ -277,7 +420,7 @@ def _validate_task_window(
 def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
     db.scalar(select(Project).where(Project.id == payload.project_id).with_for_update().execution_options(populate_existing=True))
     assert_project_manageable(db, payload.project_id, user)
-    assert_project_approved(db, payload.project_id)
+    project = assert_project_approved(db, payload.project_id)
     owner_ids = _validate_owners(db, payload.project_id, payload.owner_ids)
     parent = _validate_parent(db, payload.project_id, payload.parent_id)
     _validate_assignees_with_parent(db, parent, owner_ids)
@@ -292,17 +435,22 @@ def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
         payload.parent_id,
     )
     values = payload.model_dump(exclude={"owner_ids"})
+    approver = _root_task_approver(db, project) if parent is None else None
     task = Task(
         **values,
         owner_id=owner_ids[0],
         priority="medium",
         status="not_started",
+        approval_status="pending" if parent is None else "not_required",
+        created_by=user.id,
+        approver_id=approver.id if approver else None,
+        submitted_at=beijing_now() if approver else None,
     )
     db.add(task)
     db.flush()
     for owner_id in owner_ids:
         db.add(TaskAssignee(task_id=task.id, user_id=owner_id))
-        if owner_id != user.id:
+        if parent is not None and owner_id != user.id:
             create_notification(
                 db,
                 owner_id,
@@ -312,6 +460,8 @@ def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
                 related_type="task",
                 related_id=task.id,
             )
+    if approver:
+        _notify_task_approval(db, task, project, user, approver)
     log_operation(db, operator_id=user.id, module="task", action="create", object_type="task", object_id=task.id, after_data=model_to_dict(task))
     db.commit()
     db.refresh(task)
@@ -333,6 +483,10 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
         if set(values) - {"remark"}:
             raise forbidden("任务项目成员可修改备注并填写执行记录；核心计划字段仅项目负责人、部门主管或超级管理员可维护")
     assert_project_approved(db, task.project_id)
+    if task.approval_status == "pending":
+        raise bad_request("父任务正在等待部门主管审批，不能修改；驳回后可修改并重新提交")
+    if task.approval_status == "rejected" and not can_manage:
+        raise forbidden("被驳回的父任务只能由有项目管理权限的人员修订")
     if task.status == "completed":
         raise bad_request("已完成的任务不能再修改")
     before = model_to_dict(task)
@@ -350,6 +504,8 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
     owner_ids = values.pop("owner_ids", None)
     normalized_owner_ids = _validate_owners(db, task.project_id, owner_ids) if owner_ids is not None else _assignee_ids(db, task.id)
     target_parent_id = values.get("parent_id", task.parent_id)
+    if (target_parent_id is None) != (task.parent_id is None):
+        raise bad_request("不能将顶层任务与子任务相互转换；请按正确层级新建任务")
     parent = _validate_parent(db, task.project_id, target_parent_id, task.id)
     _validate_assignees_with_parent(db, parent, normalized_owner_ids)
     if target_parent_id != previous_parent_id and target_parent_id and db.scalar(
@@ -442,12 +598,12 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
     else:
         synchronize_parent_status(db, task.parent_id)
         synchronize_project_status(db, task.project_id)
-    if owner_changed:
+    if owner_changed and task.approval_status in EXECUTABLE_TASK_APPROVALS:
         for owner_id in previous_owner_ids - set(normalized_owner_ids):
             create_notification(db, owner_id, "task_owner_changed", "任务项目成员已变更", f"你已不再参与任务“{task.name}”。", level="warning", related_type="task", related_id=task.id)
         for owner_id in set(normalized_owner_ids) - previous_owner_ids:
             create_notification(db, owner_id, "task_owner_changed", "任务项目成员已变更", f"你已加入任务“{task.name}”。", level="warning", related_type="task", related_id=task.id)
-    if time_changed:
+    if time_changed and task.approval_status in EXECUTABLE_TASK_APPROVALS:
         for owner_id in normalized_owner_ids:
             create_notification(db, owner_id, "task_time_changed", "任务计划日期发生变化", f"任务“{task.name}”的计划日期已调整为 {task.planned_start:%Y-%m-%d} 至 {task.planned_end:%Y-%m-%d}。", level="warning", related_type="task", related_id=task.id)
     log_operation(db, operator_id=user.id, module="task", action="update", object_type="task", object_id=task.id, before_data=before, after_data=model_to_dict(task))

@@ -13,6 +13,7 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.schemas.overtime import OvertimeCreate, OvertimeDecision
 from app.services.notification_service import create_notification
+from app.services.task_approval_policy import assert_task_approved
 from app.services.operation_log_service import log_operation
 from app.services.visibility_service import has_global_project_access
 from app.services.work_calendar_service import (
@@ -62,6 +63,7 @@ def _validate_context(db: Session, project: Project, task: Task, user_id: int) -
         raise bad_request("只有已审批且未结束的项目可以申请或批准加班")
     if task.is_deleted or task.status == "completed":
         raise bad_request("已完成或已删除的任务不能申请或批准加班")
+    assert_task_approved(db, task)
     if db.scalar(select(ProjectEvaluation.id).where(ProjectEvaluation.project_id == project.id).with_for_update()):
         raise bad_request("已评价项目不能申请加班")
     if db.scalar(select(Task.id).where(Task.parent_id == task.id, Task.is_deleted.is_(False)).limit(1).with_for_update()):

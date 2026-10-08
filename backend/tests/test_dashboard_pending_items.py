@@ -28,8 +28,9 @@ def test_pending_datetime_normalizes_to_beijing(value, expected):
     assert dashboard_service._pending_datetime(value) == expected
 
 
-def stub_pending_sources(monkeypatch, *, projects=(), resources=(), bookings=()):
+def stub_pending_sources(monkeypatch, *, projects=(), resources=(), bookings=(), tasks=()):
     # Replace all data providers: these tests do not connect to a database.
+    monkeypatch.setattr(dashboard_service.task_service, "list_pending_task_approvals", lambda *args: list(tasks))
     monkeypatch.setattr(dashboard_service.overtime_service, "list_requests", lambda *args, **kwargs: {"items": []})
     monkeypatch.setattr(
         dashboard_service.project_service,
@@ -124,6 +125,20 @@ def test_empty_pending_items(monkeypatch):
     assert dashboard_service._pending_items(
         object(), SimpleNamespace(id=9), datetime(2026, 9, 28, 12)
     ) == []
+
+
+def test_parent_task_approval_is_actionable_and_has_full_plan(monkeypatch):
+    stub_pending_sources(monkeypatch, tasks=[{
+        "id": 12, "project_id": 2, "name": "开发父任务", "project_name": "研发项目",
+        "owner_names": ["张三", "李四"], "creator_name": "项目经理",
+        "planned_start": "2026-10-09", "planned_end": "2026-10-20", "estimated_hours": 16,
+        "description": "完成开发", "remark": "先评审", "submitted_at": "2026-10-08T09:00:00",
+    }])
+    item = dashboard_service._pending_items(object(), SimpleNamespace(id=8), datetime(2026, 10, 8, 12))[0]
+    assert item["type"] == "task_approval" and item["actionable"] is True
+    assert item["task_id"] == item["source_id"] == 12
+    assert item["created_at"] == datetime(2026, 10, 8, 9)
+    assert all(text in item["content"] for text in ("张三、李四", "2026-10-09", "2026-10-20", "16h", "完成开发", "先评审"))
 
 
 def test_historical_zero_hour_extension_still_shows_old_new_dates_and_reason(monkeypatch):

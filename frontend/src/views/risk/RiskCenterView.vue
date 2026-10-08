@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import type { TagProps } from 'element-plus'
 import { handleRisk, getRisks, getRiskStats, syncRisks } from '@/api/risk'
 import { getProjects } from '@/api/project'
@@ -26,12 +27,16 @@ async function load() {
   try { const [page, summary] = await Promise.all([getRisks(query), getRiskStats()]); rows.value = page.items; total.value = page.total; stats.value = summary } finally { loading.value = false }
 }
 async function scan() {
+  if (syncing.value) return
+  if (!(await confirmAction('确认立即扫描风险？系统将按当前数据新增或更新风险记录，并按现有规则通知相关人员。', '扫描风险', '确认扫描'))) return
   syncing.value = true
   try { const result = await syncRisks(); ElMessage.success(`扫描完成：新增 ${result.created}，刷新 ${result.refreshed}，重开 ${result.reopened}`); await load() } finally { syncing.value = false }
 }
 function openHandle(item: RiskRecord) { selected.value = item; form.status = 'resolved'; form.handling_note = ''; dialogVisible.value = true }
 async function submitHandle() {
   if (!selected.value || !form.handling_note.trim()) return ElMessage.warning('请填写处理说明')
+  const statusName: Record<string,string> = { resolved: '已解决', handling: '处理中', ignored: '已忽略' }
+  if (!(await confirmAction(`风险：${selected.value.title}\n处理结果：${statusName[form.status]}\n处理说明：${form.handling_note}\n确认保存风险处理结果？`, '处理风险', '确认保存'))) return
   await handleRisk(selected.value.id, form)
   ElMessage.success('风险状态已更新')
   dialogVisible.value = false

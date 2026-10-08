@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -11,7 +12,7 @@ from app.schemas.project import (
     ProjectResourceRequestCreate,
     ProjectUpdate,
 )
-from app.services import project_service
+from app.services import project_report_service, project_service
 from app.utils.model import model_to_dict
 
 router = APIRouter(prefix="/projects", tags=["项目"])
@@ -93,6 +94,38 @@ def get_project(
     db: Session = Depends(get_db),
 ):
     return success(project_service.project_detail(db, project_id, current_user))
+
+
+@router.get("/{project_id}/initiation-report")
+def get_initiation_report(
+    project_id: int,
+    current_user: User = Depends(require_permission("project:view")),
+    db: Session = Depends(get_db),
+):
+    return success(project_report_service.get_report(db, project_id, current_user))
+
+
+@router.post("/{project_id}/initiation-report")
+def upload_initiation_report(
+    project_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_permission("project:edit")),
+    db: Session = Depends(get_db),
+):
+    return success(project_report_service.upload_report(db, project_id, file, current_user))
+
+
+@router.get("/{project_id}/initiation-report/download")
+def download_initiation_report(
+    project_id: int,
+    current_user: User = Depends(require_permission("project:view")),
+    db: Session = Depends(get_db),
+):
+    path, filename, media_type = project_report_service.report_download(db, project_id, current_user)
+    return FileResponse(
+        path, filename=filename, media_type=media_type,
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+    )
 
 
 @router.post("/{project_id}/submit")

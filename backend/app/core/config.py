@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     risk_stale_days: int = Field(default=7, ge=1)
     import_max_mb: int = Field(default=10, ge=1, le=100)
     import_default_password: str = Field(default="ChangeMe123!", min_length=8)
+    # Relative paths are resolved against backend/, never against the process cwd.
+    project_files_dir: str = Field(default="storage/projects", min_length=1)
     redis_url: str = "redis://127.0.0.1:6379/0"
     smtp_enabled: bool = False
     smtp_host: str | None = None

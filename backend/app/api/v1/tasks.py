@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.core.dependencies import require_permission
 from app.core.responses import success
 from app.models.user import User
-from app.schemas.task import TaskCreate, TaskUpdate
+from app.schemas.task import TaskCreate, TaskDecision, TaskUpdate
 from app.services import task_service
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
@@ -26,10 +26,12 @@ def list_tasks(
     personnel_keyword: str | None = None,
     organization_keyword: str | None = None,
     personnel_scope: str | None = None,
+    approval_status: str | None = None,
+    executable_only: bool = False,
     current_user: User = Depends(require_permission("task:view")),
     db: Session = Depends(get_db),
 ):
-    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name, managed_project_scope, personnel_keyword, organization_keyword, personnel_scope))
+    return success(task_service.list_tasks(db, current_user, page, page_size, project_id, owner_id, status, department_id, organization_id, employee_no, name, managed_project_scope, personnel_keyword, organization_keyword, personnel_scope, approval_status, executable_only))
 
 
 @router.post("")
@@ -53,6 +55,44 @@ def list_my_tasks(
     return success(
         task_service.list_my_tasks(db, current_user, page, page_size, status)
     )
+
+
+@router.get("/approvals/pending")
+def pending_approvals(
+    current_user: User = Depends(require_permission("task:view")),
+    db: Session = Depends(get_db),
+):
+    return success(task_service.list_pending_task_approvals(db, current_user))
+
+
+@router.post("/{task_id}/submit")
+def submit_task(
+    task_id: int,
+    current_user: User = Depends(require_permission("task:edit")),
+    db: Session = Depends(get_db),
+):
+    task_service.submit_task(db, task_id, current_user)
+    return success(task_service.task_response(db, task_id, current_user))
+
+
+@router.post("/{task_id}/approve")
+def approve_task(
+    task_id: int, payload: TaskDecision,
+    current_user: User = Depends(require_permission("task:view")),
+    db: Session = Depends(get_db),
+):
+    task_service.decide_task(db, task_id, payload, current_user, approve=True)
+    return success(task_service.task_response(db, task_id, current_user))
+
+
+@router.post("/{task_id}/reject")
+def reject_task(
+    task_id: int, payload: TaskDecision,
+    current_user: User = Depends(require_permission("task:view")),
+    db: Session = Depends(get_db),
+):
+    task_service.decide_task(db, task_id, payload, current_user, approve=False)
+    return success(task_service.task_response(db, task_id, current_user))
 
 
 @router.get("/{task_id}")

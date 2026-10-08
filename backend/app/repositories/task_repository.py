@@ -7,6 +7,7 @@ from app.models.schedule import ScheduleBooking
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.project_repository import booked_schedule_predicate
+from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS
 from app.utils.time import beijing_today
 
 
@@ -85,6 +86,8 @@ class TaskRepository:
         personnel_keyword: str | None = None,
         organization_keyword: str | None = None,
         personnel_scope_user_ids: set[int] | None = None,
+        approval_status: str | None = None,
+        executable_only: bool = False,
     ) -> tuple[list[dict], int]:
         filters = [
             Task.is_deleted.is_(False),
@@ -95,11 +98,15 @@ class TaskRepository:
         if owner_id:
             filters.append(Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == owner_id)))
         if status == "delayed":
-            filters.extend([Task.planned_end < beijing_today(), Task.status != "completed"])
+            filters.extend([Task.planned_end < beijing_today(), Task.status != "completed", Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS)])
         elif status in {"not_started", "running"}:
-            filters.extend([Task.status == status, Task.planned_end >= beijing_today()])
+            filters.extend([Task.status == status, or_(Task.planned_end >= beijing_today(), Task.approval_status.in_({"pending", "rejected"}))])
         elif status:
             filters.append(Task.status == status)
+        if approval_status:
+            filters.append(Task.approval_status == approval_status)
+        if executable_only:
+            filters.append(Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS))
         if department_id or organization_id or employee_no or owner_name or personnel_keyword or organization_keyword:
             people = select(User.id).where(User.is_deleted.is_(False))
             if department_id:

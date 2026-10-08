@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import { ArrowDown, ArrowRight } from '@element-plus/icons-vue'
 import { getEvaluation, getProcessReport, updateEvaluation } from '@/api/report'
 import { getAllProjects } from '@/api/project'
@@ -28,6 +29,7 @@ const query = reactive({
   end_date: beijingNow().endOf('month').format('YYYY-MM-DD'),
 })
 const evaluationDialog = ref(false)
+const evaluationSaving = ref(false)
 const evaluationProjectId = ref<number>()
 const evaluationForm = reactive<EvaluationPayload>({ achievement_rate: 100, achievement_quality: 100, comment: '' })
 const canEvaluate = (row: ProcessReportItem) => row.can_evaluate
@@ -117,11 +119,16 @@ async function openEvaluation(row: ProcessReportItem) {
 }
 
 async function saveEvaluation() {
-  if (!evaluationProjectId.value) return
-  await updateEvaluation(evaluationProjectId.value, evaluationForm)
-  ElMessage.success('项目评价已保存')
-  evaluationDialog.value = false
-  await loadProcess()
+  if (!evaluationProjectId.value || evaluationSaving.value) return
+  evaluationSaving.value = true
+  try {
+    if (!(await confirmAction(`项目：${projects.value.find(item => item.id === evaluationProjectId.value)?.name || '当前项目'}\n达成率：${evaluationForm.achievement_rate}\n完成质量：${evaluationForm.achievement_quality}\n确认提交项目评价？提交后不能重复评价。`, '提交项目评价'))) return
+    await updateEvaluation(evaluationProjectId.value, evaluationForm)
+    ElMessage.success('项目评价已保存')
+    evaluationDialog.value = false
+    await loadProcess()
+  } catch { /* API interceptor displays the error. */ }
+  finally { evaluationSaving.value = false }
 }
 
 const projectRowSpans = computed(() => {
@@ -192,7 +199,7 @@ onMounted(async () => {
         <el-form-item label="达成质量"><el-slider v-model="evaluationForm.achievement_quality" show-input :min="0" :max="100"/></el-form-item>
         <el-form-item label="评价说明"><el-input v-model="evaluationForm.comment" type="textarea" :rows="4"/></el-form-item>
       </el-form>
-      <template #footer><el-button @click="evaluationDialog=false">取消</el-button><el-button type="primary" @click="saveEvaluation">保存评价</el-button></template>
+      <template #footer><el-button :disabled="evaluationSaving" @click="evaluationDialog=false">取消</el-button><el-button type="primary" :loading="evaluationSaving" @click="saveEvaluation">保存评价</el-button></template>
     </el-dialog>
   </div>
 </template>

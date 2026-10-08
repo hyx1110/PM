@@ -65,7 +65,19 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
     visible = {user.id}
     if "functional_manager" in roles:
         visible.update(descendant_user_ids(db, user.id))
-    if roles & {"project_manager", "functional_manager"}:
+    if "project_manager" in roles:
+        # Read-only calendar scope covers every project's current members,
+        # including other managers' projects. Booking authorization is separate.
+        visible.update(db.scalars(
+            select(ProjectMember.user_id).join(Project, Project.id == ProjectMember.project_id)
+            .where(ProjectMember.left_at.is_(None), Project.is_deleted.is_(False))
+        ).all())
+        # Ownership also establishes membership for legacy projects whose
+        # manager was not written into project_members during initialization.
+        visible.update(db.scalars(
+            select(Project.manager_id).where(Project.is_deleted.is_(False))
+        ).all())
+    elif "functional_manager" in roles:
         managed_project_ids = select(Project.id).where(
             Project.manager_id == user.id,
             Project.approval_status == "approved",

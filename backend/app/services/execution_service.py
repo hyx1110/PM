@@ -14,6 +14,7 @@ from app.models.user import User
 from app.repositories.execution_repository import execution_repository
 from app.schemas.execution import EXECUTION_STATUSES, ExecutionCreate, ExecutionUpdate
 from app.services.operation_log_service import log_operation
+from app.services.task_approval_policy import assert_task_approved
 from app.services.overtime_service import assert_no_unrecorded_overtime, resolve_execution_hours
 from app.services.status_sync_service import synchronize_task_status
 from app.services.visibility_service import has_global_project_access
@@ -54,6 +55,7 @@ def _lock_executable_task(db: Session, task_id: int) -> Task:
     )
     if not task:
         raise not_found("task not found")
+    assert_task_approved(db, task)
     return task
 
 

@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+.business-action-confirm { width: 480px; max-width: calc(100vw - 32px); }
+.business-action-confirm .el-message-box__message { max-height: 55vh; overflow-y: auto; }
+.business-action-confirm .el-message-box__message p { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.7; }
+
 :root {
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
   color: #1f2937;

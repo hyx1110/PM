@@ -17,7 +17,12 @@ client.interceptors.request.use((config) => {
 
 client.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    // File downloads also return the standard JSON envelope on business errors.
+    // Decode it before reporting errors instead of showing only "status code 404".
+    if (error.response?.data instanceof Blob && error.response.data.type.includes('json')) {
+      try { error.response.data = JSON.parse(await error.response.data.text()) } catch { /* Keep the original error. */ }
+    }
     const status = error.response?.status
     const responseData = error.response?.data as {
       message?: string

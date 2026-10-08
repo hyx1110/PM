@@ -42,6 +42,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-project_user}:${MYSQL_PASSWORD:-change_me}@mysql:3306/${MYSQL_DATABASE:-project_management}?charset=utf8mb4
+      PROJECT_FILES_DIR: /app/storage/projects
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -50,6 +51,7 @@ services:
     command: ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "--workers", "2"]
     volumes:
       - backend_logs:/app/logs
+      - project_files:/app/storage/projects
 
   worker:
     build: ./backend
@@ -95,3 +97,4 @@ volumes:
   mysql_data:
   redis_data:
   backend_logs:
+  project_files:

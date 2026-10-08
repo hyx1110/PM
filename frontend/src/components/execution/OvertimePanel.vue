@@ -2,7 +2,8 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import dayjs from 'dayjs'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction, requestActionReason } from '@/utils/confirm'
 import type { FormInstance, FormRules } from 'element-plus'
 import { approveOvertime, createOvertime, getOvertimeRequests, rejectOvertime, withdrawOvertime } from '@/api/overtime'
 import type { OvertimeRequest, OvertimeStatus } from '@/types/overtime'
@@ -56,22 +57,27 @@ function openCreate() {
   dialog.value = true
 }
 async function submit() {
+  if (saving.value) return
   if (!(await formRef.value?.validate().catch(() => false)) || !form.task_id) return
   if (!hours.value) return void ElMessage.warning('结束时间必须晚于开始时间')
   saving.value = true
   try {
+    if (!(await confirmAction(`项目：${selectedTask.value?.project_name}\n任务：${selectedTask.value?.name}\n加班时间：${form.date} ${form.start} 至 ${form.end}\n申请工时：${hours.value}h\n确认提交加班申请？审批通过后才能填报加班执行。`, '提交加班申请'))) return
     await createOvertime({ task_id: form.task_id, start_time: `${form.date}T${form.start}:00+08:00`, end_time: endTimestamp(), reason: form.reason.trim() })
     ElMessage.success('加班申请已提交，等待审批'); dialog.value = false; query.scope = 'mine'; query.status = ''; query.page = 1; await load()
   } catch { /* Already reported by the request interceptor. */ }
   finally { saving.value = false }
 }
 async function act(item: OvertimeRequest, action: 'approve' | 'reject' | 'withdraw') {
+  if (actionId.value) return
   let note = ''
   try {
     if (action === 'reject') {
-      const result = await ElMessageBox.prompt('请填写驳回原因', '驳回加班申请', { inputType: 'textarea', inputPattern: /\S+/, inputErrorMessage: '原因不能为空' })
-      note = result.value.trim()
-    } else await ElMessageBox.confirm(action === 'approve' ? `确认批准 ${item.user_name} 的 ${item.hours}h 加班吗？批准后尚不计入实际工时。` : '确认撤回申请吗？撤回后不能再用于填报加班执行。', '加班申请', { type: 'warning' })
+      const result = await requestActionReason('驳回加班申请', '请填写驳回原因')
+      if (result === null) return
+      note = result
+    }
+    if (!(await confirmAction(`人员：${item.user_name}\n任务：${item.task_name}\n加班工时：${item.hours}h\n` + (action === 'approve' ? '确认批准？批准后尚不计入实际工时。' : action === 'reject' ? `驳回原因：${note}\n确认驳回？` : '确认撤回申请？撤回后不能用于填报加班执行。'), '加班申请', action === 'approve' ? '确认批准' : action === 'reject' ? '确认驳回' : '确认撤回'))) return
   } catch { return }
   actionId.value = item.id
   try {

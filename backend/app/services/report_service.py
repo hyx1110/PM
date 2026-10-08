@@ -12,6 +12,7 @@ from app.models.task import Task, TaskAssignee
 from app.models.user import User
 from app.repositories.report_repository import report_repository
 from app.services.task_service import effective_status
+from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS
 from app.services.project_service import visible_project_ids
 from app.services.visibility_service import dashboard_visibility_scopes, visible_schedule_user_ids
 from app.services.work_calendar_service import count_workdays, is_workday
@@ -107,6 +108,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
     active_project_ids = select(Project.id).where(Project.is_deleted.is_(False))
     task_filters = [
         Task.is_deleted.is_(False),
+        Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
         Task.project_id.in_(active_project_ids),
     ]
     schedule_filters = [
@@ -158,6 +160,7 @@ def dashboard_summary(db: Session, user: User) -> dict:
         )
     ) or 0
     my_task_filters = [
+        Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
         Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
         Task.project_id.in_(active_project_ids),
         Task.is_deleted.is_(False),

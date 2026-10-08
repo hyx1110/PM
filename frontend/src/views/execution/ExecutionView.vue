@@ -3,7 +3,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import dayjs from 'dayjs'
 import type { FormInstance, FormRules } from 'element-plus'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import { createExecution, deleteExecution, getExecutions, updateExecution } from '@/api/execution'
 import { getAllTasks } from '@/api/task'
 import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
@@ -45,7 +46,7 @@ const statuses=[{value:'running',label:'进行中'},{value:'completed',label:'�
 const statusLabel=Object.fromEntries(statuses.map((item)=>[item.value,item.label])) as Record<string,string>
 const disableFutureDate=(value:Date)=>dayjs(value).format('YYYY-MM-DD')>beijingNow().format('YYYY-MM-DD')
 async function load(){if(query.start_date&&query.end_date&&query.end_date<query.start_date){ElMessage.warning('筛选结束日期不能早于开始日期');return}loading.value=true;try{const result=await getExecutions({...query,start_date:query.start_date||undefined,end_date:query.end_date||undefined,personnel_scope:filterScopes.value.length?filterScopes.value.join(','):undefined});records.value=result.items;total.value=result.total}finally{loading.value=false}}
-async function loadOptions(){[tasks.value,users.value,departments.value,organizations.value]=await Promise.all([getAllTasks(),getUserOptions(),getDepartmentOptions(),getOrganizationTree()])}
+async function loadOptions(){[tasks.value,users.value,departments.value,organizations.value]=await Promise.all([getAllTasks({executable_only:true}),getUserOptions(),getDepartmentOptions(),getOrganizationTree()])}
 const canEditRecord=(row:Execution)=>hasGlobalAccess.value||row.user_id===userStore.profile?.id
 const summaryTaskIds=computed(()=>new Set(tasks.value.map(item=>item.parent_id).filter((id):id is number=>Boolean(id))))
 const myTasks=()=>tasks.value.filter(item=>!summaryTaskIds.value.has(item.id)&&(hasGlobalAccess.value||item.owner_ids.includes(userStore.profile?.id||-1))&&(Boolean(editingId.value)||item.status!=='completed'))
@@ -75,6 +76,7 @@ async function save(){
   if(form.status==='completed'&&!form.actual_end)return ElMessage.warning('已完成记录必须填写实际结束日期')
   saving.value=true
   try {
+    if(!(await confirmAction(`任务：${tasks.value.find(task=>task.id===form.task_id)?.name || '当前任务'}\n执行日期：${form.actual_start} 至 ${form.actual_end || '尚未结束'}\n实际工时：${form.actual_hours ?? '由系统计算'}${form.actual_hours == null ? '' : 'h'}\n状态：${form.status==='completed'?'已完成':'进行中'}\n确认保存？将同步更新任务状态与实际工时。`,'保存执行记录','确认保存')))return
     const payload={...form}
     if(editingId.value){const{task_id:_taskId,user_id:_userId,overtime_request_id:_overtimeId,...updatePayload}=payload;await updateExecution(editingId.value,updatePayload)}else await createExecution(payload)
     ElMessage.success('执行记录已保存，任务状态与实际工时已更新；项目由负责人确认完成');dialogVisible.value=false;overtimeRefreshKey.value++
@@ -82,7 +84,7 @@ async function save(){
   } catch { /* The request interceptor displays the error. */ }
   finally {saving.value=false}
 }
-async function remove(row:Execution){await ElMessageBox.confirm(`确认删除“${row.task_name||'该任务'}”的这条执行记录吗？系统会保留审计数据，但不再计入报表。`,'删除执行记录',{type:'warning',confirmButtonText:'确认删除'});await deleteExecution(row.id);ElMessage.success('执行记录已软删除');await load()}
+async function remove(row:Execution){if(!(await confirmAction(`确认删除“${row.task_name||'该任务'}”的这条执行记录吗？系统会保留审计数据，但不再计入报表。`,'删除执行记录','确认删除')))return;await deleteExecution(row.id);ElMessage.success('执行记录已软删除');await load()}
 onMounted(async()=>{try{await loadOptions();await load()}catch{/* The request interceptor displays the error. */}})
 </script>
 

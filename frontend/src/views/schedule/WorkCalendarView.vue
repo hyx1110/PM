@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import {
   deleteWorkCalendarDay,
   getWorkCalendar,
@@ -56,6 +57,7 @@ async function save() {
   if (!form.work_date || !form.name.trim()) {
     return ElMessage.warning('请选择日期并填写名称')
   }
+  if (!(await confirmAction(`日期：${form.work_date}\n规则：${form.day_type === 'holiday' ? '节假日' : '工作日'} · ${form.name}\n确认保存？将影响该日的预约及计划工时计算。`, '保存日历规则', '确认保存'))) return
   await saveWorkCalendarDay(form.work_date, {
     day_type: form.day_type,
     name: form.name.trim(),
@@ -68,11 +70,11 @@ async function save() {
 }
 
 async function remove(item: WorkCalendarDay) {
-  await ElMessageBox.confirm(
+  if (!(await confirmAction(
     `确认删除 ${item.work_date} 的日历覆盖规则吗？删除后将恢复按周一至周五判断。`,
     '删除日历规则',
-    { type: 'warning' },
-  )
+    '确认删除',
+  ))) return
   await deleteWorkCalendarDay(item.work_date)
   ElMessage.success('日历规则已删除')
   await load()

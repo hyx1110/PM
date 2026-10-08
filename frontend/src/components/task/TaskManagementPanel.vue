@@ -3,8 +3,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { confirmAction } from '@/utils/confirm'
 import { ArrowDown, ArrowRight } from '@element-plus/icons-vue'
-import { createTask, deleteTask, getAllTasks, getTasks, updateTask } from '@/api/task'
+import { approveTask, createTask, deleteTask, getAllTasks, getTask, getTasks, rejectTask, submitTask, updateTask } from '@/api/task'
 import { getAllProjects, getProject, getProjectMembers } from '@/api/project'
 import { getUserOptions } from '@/api/user'
 import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
@@ -35,12 +36,17 @@ const filterScopes = ref<string[]>([])
 const projectMemberOptions = ref<UserOption[]>([])
 const query = reactive({
   page: 1, page_size: 100, project_id: props.projectId as number | undefined,
-  status: '',
+  status: '', approval_status: '',
 })
 const dialogVisible = ref(false)
 const saving = ref(false)
 const editingId = ref<number>()
 const editingProjectName = ref('')
+const reviewTask = ref<Task>()
+const reviewVisible = ref(false)
+const reviewNote = ref('')
+const reviewBusy = ref(false)
+const submittingId = ref<number>()
 const formRef = ref<FormInstance>()
 const emptyForm = (): TaskPayload => ({
   project_id: 0, parent_id: undefined, name: '', owner_ids: [],
@@ -64,10 +70,12 @@ const rules: FormRules = {
 }
 const filterStatuses = ['not_started', 'running', 'completed', 'delayed']
 const statusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', delayed: '已逾期' }
+const approvalLabels: Record<string, string> = { pending: '待部门主管审批', approved: '已通过', rejected: '已驳回', not_required: '子任务免审批' }
+const isExecutable = (task: Task) => ['approved', 'not_required'].includes(task.approval_status)
 const canManageProject = (project?: Project) => Boolean(project?.can_manage)
-const canExecuteTask = (task: Task) => task.owner_ids.includes(userStore.profile?.id || -1)
+const canExecuteTask = (task: Task) => isExecutable(task) && (task.owner_ids.includes(userStore.profile?.id || -1)
   || task.project_manager_id === userStore.profile?.id
-  || Boolean(userStore.profile?.roles.some(role => ['super_admin', 'department_manager'].includes(role)))
+  || Boolean(userStore.profile?.roles.some(role => ['super_admin', 'department_manager'].includes(role))))
 const manageableProjects = computed(() => projects.value.filter(canManageProject))
 const approvedProjects = computed(() => manageableProjects.value.filter((item) => item.approval_status === 'approved' && item.status !== 'completed'))
 const selectedProject = computed(() => projects.value.find((item) => item.id === form.project_id))
@@ -88,6 +96,7 @@ const parentOptions = computed(() => projectTasks.value.filter(
   (item) =>
     item.id !== editingId.value
     && !descendantIds.value.has(item.id)
+    && isExecutable(item)
     && item.status !== 'completed',
 ))
 const ownerOptions = computed(() => {
@@ -161,6 +170,7 @@ async function load() {
       ...query,
       project_id: props.projectId ?? query.project_id,
       status: query.status || undefined,
+      approval_status: query.approval_status || undefined,
       personnel_scope: filterScopes.value.length ? filterScopes.value.join(',') : undefined,
     })
     tasks.value = result.items
@@ -245,12 +255,14 @@ async function save() {
   if (form.planned_end < form.planned_start) return ElMessage.warning('计划结束时间不能早于开始时间')
   saving.value = true
   try {
+    const action = !editingId.value && !form.parent_id ? '提交部门主管审批' : '保存任务'
+    if (!(await confirmAction(`项目：${selectedProject.value?.name || editingProjectName.value}\n任务：${form.name}\n计划：${form.planned_start} 至 ${form.planned_end}\n预计工时：${form.estimated_hours}h\n确认${action}？`, action, `确认${action}`))) return
     const payload = { ...form }
     if (editingId.value) {
       const { project_id: _projectId, ...updatePayload } = payload
       await updateTask(editingId.value, updatePayload)
     } else await createTask(payload)
-    ElMessage.success('任务已保存')
+    ElMessage.success(!editingId.value && !form.parent_id ? '父任务已提交部门主管审批，通过后可安排子任务和预约工时' : '任务已保存')
     dialogVisible.value = false
     await load()
     emit('changed')
@@ -259,7 +271,7 @@ async function save() {
 }
 
 async function remove(row: Task) {
-  await ElMessageBox.confirm(`确认删除任务“${row.name}”吗？`, '删除任务', { type: 'warning' })
+  if (!(await confirmAction(`确认删除任务“${row.name}”吗？`, '删除任务', '确认删除'))) return
   await deleteTask(row.id)
   ElMessage.success('任务已删除')
   await load()
@@ -267,10 +279,50 @@ async function remove(row: Task) {
 }
 
 async function editRemark(row: Task) {
-  const { value } = await ElMessageBox.prompt('任务项目成员可以维护备注；项目成员、计划工时等核心字段由项目负责人维护。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '' })
+  const result = await ElMessageBox.prompt('任务项目成员可以维护备注；项目成员、计划工时等核心字段由项目负责人维护。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '', confirmButtonText: '下一步' }).catch(() => null)
+  if (!result || !(await confirmAction(`确认保存任务“${row.name}”的备注？`, '保存任务备注', '确认保存'))) return
+  const { value } = result
   await updateTask(row.id, { remark: value || '' })
   ElMessage.success('备注已保存')
   await load()
+}
+
+async function openReview(row: Task) {
+  try {
+    reviewTask.value = await getTask(row.id)
+    reviewNote.value = ''
+    reviewVisible.value = true
+  } catch { /* API interceptor displays the error. */ }
+}
+
+async function decide(approved: boolean) {
+  if (!reviewTask.value || reviewBusy.value) return
+  const note = reviewNote.value.trim()
+  if (!approved && !note) return ElMessage.warning('请填写驳回原因')
+  reviewBusy.value = true
+  try {
+    if (!(await confirmAction(`任务：${reviewTask.value.name}\n项目：${reviewTask.value.project_name}\n预计工时：${reviewTask.value.estimated_hours}h\n${approved ? '批准后可创建子任务、预约和执行。' : `驳回原因：${note}`}\n确认${approved ? '批准' : '驳回'}该父任务？`, '父任务审批', approved ? '确认批准' : '确认驳回'))) return
+    if (approved) await approveTask(reviewTask.value.id, note || undefined)
+    else await rejectTask(reviewTask.value.id, note)
+    ElMessage.success(approved ? '父任务审批已通过' : '父任务已驳回')
+    reviewVisible.value = false
+    await load()
+    emit('changed')
+  } catch { /* Keep the dialog open so the user can read the API error. */ }
+  finally { reviewBusy.value = false }
+}
+
+async function resubmit(row: Task) {
+  if (submittingId.value) return
+  if (!(await confirmAction(`确认将父任务“${row.name}”重新提交部门主管审批？`, '重新提交审批'))) return
+  submittingId.value = row.id
+  try {
+    await submitTask(row.id)
+    ElMessage.success('已重新提交部门主管审批')
+    await load()
+    emit('changed')
+  } catch { /* API interceptor displays the error. */ }
+  finally { submittingId.value = undefined }
 }
 
 onMounted(async () => { try { await loadOptions(); await load() } catch { /* API interceptor displays the error. */ } })
@@ -286,6 +338,7 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
       <el-select v-if="!props.projectId" v-model="query.project_id" clearable filterable placeholder="项目" style="width:210px"><el-option v-for="item in projects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
       <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 项目成员（可多选）" />
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:130px"><el-option v-for="item in filterStatuses" :key="item" :label="statusLabel[item]" :value="item"/></el-select>
+      <el-select v-model="query.approval_status" clearable placeholder="审批状态" style="width:170px"><el-option v-for="(label,value) in approvalLabels" :key="value" :label="label" :value="value"/></el-select>
       <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
@@ -304,7 +357,16 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
         <el-table-column label="计划日期" min-width="175" align="center"><template #default="{row}"><span class="period-cell">{{formatDate(row.planned_start)}}<i>至</i>{{formatDate(row.planned_end)}}</span></template></el-table-column>
         <el-table-column label="预计工时" min-width="100" align="center"><template #default="{row}">{{row.estimated_hours}}h</template></el-table-column>
         <el-table-column label="状态" min-width="100" align="center"><template #default="{row}"><el-tooltip :disabled="row.effective_status!=='delayed'" content="已逾期任务只有完成后才会显示已完成" placement="top"><el-tag :type="row.effective_status==='delayed'?'danger':row.effective_status==='completed'?'success':'info'" effect="plain">{{statusLabel[row.effective_status]}}</el-tag></el-tooltip></template></el-table-column>
-        <el-table-column label="操作" fixed="right" min-width="230" align="center"><template #default="{row}"><el-button v-if="row.status!=='completed'&&row.can_manage" link @click="openCreate(row)">添加子任务</el-button><el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button><el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button><el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button><el-button v-if="canExecuteTask(row) && !row.hasChildren" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button></template></el-table-column>
+        <el-table-column label="审批" min-width="145" align="center"><template #default="{row}"><el-tooltip :disabled="!row.approval_note" :content="row.approval_note || ''" placement="top"><el-tag :type="row.approval_status==='pending'?'warning':row.approval_status==='rejected'?'danger':row.approval_status==='approved'?'success':'info'" effect="plain">{{approvalLabels[row.approval_status]}}</el-tag></el-tooltip></template></el-table-column>
+        <el-table-column label="操作" fixed="right" min-width="230" align="center"><template #default="{row}">
+          <el-button v-if="row.can_review" link type="primary" @click="openReview(row)">审批</el-button>
+          <el-button v-if="row.can_manage && row.approval_status==='rejected'" link type="primary" :loading="submittingId===row.id" @click="resubmit(row)">重新提交</el-button>
+          <el-button v-if="row.status!=='completed' && row.can_manage && isExecutable(row)" link @click="openCreate(row)">添加子任务</el-button>
+          <el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button>
+          <el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button>
+          <el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button>
+          <el-button v-if="canExecuteTask(row) && !row.hasChildren" link type="primary" @click="router.push({path:'/executions',query:{task_id:row.id,project_id:row.project_id}})">执行记录</el-button>
+        </template></el-table-column>
       </el-table>
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[50,100,200]" layout="total, sizes, prev, pager, next" @change="load"/></div>
     </section>
@@ -312,7 +374,7 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <div class="form-grid">
           <el-form-item label="所属项目" prop="project_id"><el-input v-if="editingId" :model-value="editingProjectName" disabled/><el-select v-else v-model="form.project_id" filterable style="width:100%" @change="changeProject"><el-option v-for="item in approvedProjects" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
-          <el-form-item label="父任务"><el-select v-model="form.parent_id" clearable style="width:100%" @change="changeParent"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="父任务"><el-select v-model="form.parent_id" :disabled="Boolean(editingId && !form.parent_id)" :clearable="!editingId" placeholder="不选择即新建顶层父任务" style="width:100%" @change="changeParent"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
           <el-alert v-if="selectedProject" class="project-window" type="info" :closable="false" show-icon :title="`项目周期：${formatDate(selectedProject.planned_start)} 至 ${formatDate(selectedProject.planned_end)}；项目总工时：${selectedProject.budget_hours}h；顶级任务已分配：${allocatedProjectHours}h`"/>
           <el-form-item label="任务名称" prop="name"><el-input v-model="form.name"/></el-form-item>
           <el-form-item label="项目成员" prop="owner_ids"><el-select v-model="form.owner_ids" multiple filterable collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in ownerOptions" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
@@ -324,14 +386,36 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2"/></el-form-item>
         <div class="form-hint">项目成员支持多选；子任务只能选择父任务已有的项目成员。顶级任务工时合计不能超过项目工时，同级子任务工时合计不能超过父任务工时。</div>
+        <el-alert v-if="!editingId" class="approval-hint" :closable="false" type="info" show-icon :title="form.parent_id ? '子任务无需单独审批，保存后可预约工时。' : '父任务保存后提交项目所属部门主管审批；审批通过后才能创建子任务、预约和执行。'"/>
       </el-form>
-      <template #footer><el-button :disabled="saving" @click="dialogVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
+      <template #footer><el-button :disabled="saving" @click="dialogVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">{{!editingId && !form.parent_id ? '提交部门主管审批' : '保存'}}</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="reviewVisible" title="父任务审批" width="640px" :close-on-click-modal="!reviewBusy" :close-on-press-escape="!reviewBusy" :show-close="!reviewBusy" destroy-on-close>
+      <template v-if="reviewTask">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="所属项目">{{reviewTask.project_name}}</el-descriptions-item>
+          <el-descriptions-item label="任务名称">{{reviewTask.name}}</el-descriptions-item>
+          <el-descriptions-item label="项目成员">{{reviewTask.owner_names.join('、')}}</el-descriptions-item>
+          <el-descriptions-item label="计划日期">{{formatDate(reviewTask.planned_start)}} 至 {{formatDate(reviewTask.planned_end)}}</el-descriptions-item>
+          <el-descriptions-item label="预计工时">{{reviewTask.estimated_hours}}h</el-descriptions-item>
+          <el-descriptions-item label="描述"><span class="review-text">{{reviewTask.description || '无'}}</span></el-descriptions-item>
+          <el-descriptions-item label="备注"><span class="review-text">{{reviewTask.remark || '无'}}</span></el-descriptions-item>
+        </el-descriptions>
+        <el-input v-model="reviewNote" class="approval-hint" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="审批意见（驳回时必填）"/>
+        <el-alert v-if="!reviewTask.can_review" class="approval-hint" type="info" :closable="false" title="该任务已处理或当前账号不具备审批权限，请刷新任务列表。"/>
+      </template>
+      <template #footer>
+        <el-button :disabled="reviewBusy" @click="reviewVisible=false">关闭</el-button>
+        <el-button v-if="reviewTask?.can_review" type="danger" :loading="reviewBusy" @click="decide(false)">驳回</el-button>
+        <el-button v-if="reviewTask?.can_review" type="primary" :loading="reviewBusy" @click="decide(true)">通过审批</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
 .embedded{gap:16px}.embedded .page-header{margin:4px 0}.embedded .page-title{font-size:18px}.embedded .table-card{box-shadow:none;border:0;padding:0}.embedded .filter-bar{box-shadow:none;background:var(--el-fill-color-light)}
+.approval-hint{margin-top:16px}.review-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.project-window{grid-column:1/-1;margin-bottom:18px}.form-hint{margin-top:-4px;color:#9aa3b1;font-size:11px}
 .project-name{display:block;overflow:hidden;color:#334155;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.task-cell{display:flex;min-width:0;align-items:center;gap:7px;color:#465468}.task-cell>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-toggle{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;border:0;border-radius:7px;background:transparent;color:#718096;cursor:pointer}.tree-toggle:hover{background:#edf3f8;color:#315f8e}.tree-spacer{width:24px;flex:0 0 24px}.period-cell{display:inline-grid;grid-template-columns:auto auto auto;gap:5px;align-items:center;white-space:nowrap}.period-cell i{color:#a0a9b6;font-size:11px;font-style:normal}
 </style>

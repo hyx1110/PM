@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { confirmAction, requestActionReason } from '@/utils/confirm'
 import type { AxiosError } from 'axios'
 import {
   batchCreateSchedules,
@@ -69,6 +70,8 @@ const filter = reactive({
 })
 const bookingDialog = ref(false)
 const bookingSaving = ref(false)
+const personalSaving = ref(false)
+const decisionSaving = ref(false)
 const withdrawingId = ref<number>()
 const detailDialog = ref(false)
 const personalDialog = ref(false)
@@ -490,7 +493,7 @@ async function loadOptions() {
     getOrganizationTree(),
   ])
   const taskGroups = await Promise.all(
-    projectItems.map((project) => getAllTasks({ project_id: project.id })),
+    projectItems.map((project) => getAllTasks({ project_id: project.id, executable_only: true })),
   )
   projects.value = projectItems
   filterProjects.value = scheduleProjectItems
@@ -608,7 +611,10 @@ async function handleBlankSlot(slot: { userId: number; date: string; time: strin
 }
 
 async function savePersonalTime(payload: PersonalTimePayload) {
+  if (personalSaving.value) return
+  personalSaving.value = true
   try {
+    if (!(await confirmAction(`安排：${personalTypeLabel[payload.time_type]}\n时间：${formatDateTime(payload.start_time)} 至 ${formatDateTime(payload.end_time)}\n确认保存？该时段将不允许他人预约。`, '保存个人时间安排', '确认保存'))) return
     await createPersonalTimeBlock(payload)
     personalDialog.value = false
     ElMessage.success('个人时间安排已保存，该时段已设置为不可预约')
@@ -616,6 +622,8 @@ async function savePersonalTime(payload: PersonalTimePayload) {
     if (myTimeDrawer.value) await loadMyTimeBlocks()
   } catch (error) {
     showConflict(error)
+  } finally {
+    personalSaving.value = false
   }
 }
 
@@ -648,11 +656,11 @@ async function openMyTimeDrawer() {
 async function withdrawPersonalBlock(item?: PersonalTimeBlock) {
   const target = item || selectedPersonalBlock.value
   if (!target || target.status !== 'active') return
-  await ElMessageBox.confirm(
+  if (!(await confirmAction(
     `确定撤回 ${personalTypeLabel[target.time_type]}（${formatDateTime(target.start_time)} 至 ${dayjs(target.end_time).format('HH:mm')}）吗？撤回后该时段将重新允许预约。`,
     '撤回个人时间安排',
-    { type: 'warning', confirmButtonText: '确认撤回' },
-  )
+    '确认撤回',
+  ))) return
   await withdrawPersonalTimeBlock(target.id)
   ElMessage.success('个人时间安排已撤回，该时段已释放')
   personalDetailDialog.value = false
@@ -725,6 +733,10 @@ async function save(payload: SchedulePayload) {
   if (bookingSaving.value) return
   bookingSaving.value = true
   try {
+    const userName = users.value.find(item => item.id === payload.user_id)?.name
+      || (selected.value?.user_id === payload.user_id ? selected.value.user_name : '')
+      || (payload.user_id === userStore.profile?.id ? '本人' : `人员 ${payload.user_id}`)
+    if (!(await confirmAction(`项目：${projects.value.find(item => item.id === payload.project_id)?.name || '所选项目'}\n任务：${tasks.value.find(item => item.id === payload.task_id)?.name || '所选任务'}\n人员：${userName}\n时间：${formatDateTime(payload.start_time)} 至 ${formatDateTime(payload.end_time)}\n${payload.user_id === userStore.profile?.id ? '本人预约将自动确认。' : '将提交给被预约人确认。'}\n确认${selected.value ? '修改' : '提交'}预约？`, selected.value ? '修改预约' : '提交预约'))) return
     let result: Schedule
     if (selected.value) {
       result = await updateSchedule(selected.value.id, payload)
@@ -745,25 +757,34 @@ async function save(payload: SchedulePayload) {
 }
 
 async function confirm() {
-  if (!selected.value) return
-  await confirmSchedule(selected.value.id)
-  ElMessage.success('预约已确认')
-  detailDialog.value = false
-  await loadOptions()
-  await load()
+  if (!selected.value || decisionSaving.value) return
+  const item = selected.value
+  decisionSaving.value = true
+  try {
+    if (!(await confirmAction(`项目：${item.project_name}\n任务：${item.task_name}\n时间：${formatDateTime(item.start_time)} 至 ${formatDateTime(item.end_time)}\n确认接受？此时段将被占用，其他重叠的待确认预约可能被拒绝。`, '接受人力预约', '确认接受'))) return
+    await confirmSchedule(item.id)
+    ElMessage.success('预约已确认')
+    detailDialog.value = false
+    await loadOptions()
+    await load()
+  } catch (error) { showConflict(error) }
+  finally { decisionSaving.value = false }
 }
 
 async function reject() {
-  if (!selected.value) return
-  const { value } = await ElMessageBox.prompt('请输入拒绝原因', '拒绝预约', {
-    inputType: 'textarea',
-    inputValidator: (text) => Boolean(text?.trim()) || '请填写拒绝原因',
-  })
-  await rejectSchedule(selected.value.id, value)
-  ElMessage.success('预约已拒绝')
-  detailDialog.value = false
-  await loadOptions()
-  await load()
+  if (!selected.value || decisionSaving.value) return
+  const item = selected.value
+  decisionSaving.value = true
+  try {
+    const value = await requestActionReason('拒绝预约', '请输入拒绝原因')
+    if (value === null || !(await confirmAction(`项目：${item.project_name}\n任务：${item.task_name}\n拒绝原因：${value}\n确认拒绝该预约并通知发起人？`, '拒绝预约', '确认拒绝'))) return
+    await rejectSchedule(item.id, value)
+    ElMessage.success('预约已拒绝')
+    detailDialog.value = false
+    await loadOptions()
+    await load()
+  } catch (error) { showConflict(error) }
+  finally { decisionSaving.value = false }
 }
 
 async function withdraw(item?: Schedule) {
@@ -771,11 +792,9 @@ async function withdraw(item?: Schedule) {
   if (!target || !canWithdrawBooking(target) || withdrawingId.value) return
   withdrawingId.value = target.id
   try {
-    await ElMessageBox.confirm(target.status === 'confirmed'
+    if (!(await confirmAction(target.status === 'confirmed'
       ? '撤回这条本人已确认的预约吗？将释放该时段及任务、项目工时额度，并通知预约发起人。已开始或已有相关执行记录的预约不能撤回。'
-      : '确定撤回这条待确认预约吗？撤回后将释放任务和项目工时额度。', '撤回预约', {
-      type: 'warning', confirmButtonText: '确认撤回', cancelButtonText: '暂不撤回',
-    })
+      : '确定撤回这条待确认预约吗？撤回后将释放任务和项目工时额度。', '撤回预约', '确认撤回'))) return
     await withdrawSchedule(target.id)
     ElMessage.success('预约已撤回，任务和项目工时额度已释放')
     detailDialog.value = false
@@ -792,9 +811,7 @@ async function withdraw(item?: Schedule) {
 
 async function remove() {
   if (!selected.value) return
-  await ElMessageBox.confirm('确认取消这条预约吗？记录会保留在历史中。', '取消预约', {
-    type: 'warning',
-  })
+  if (!(await confirmAction('确认取消这条预约吗？记录会保留在历史中。', '取消预约', '确认取消预约'))) return
   await deleteSchedule(selected.value.id)
   ElMessage.success('预约已取消并保留历史')
   detailDialog.value = false
@@ -820,6 +837,7 @@ async function dropToSlot(payload: {
     return ElMessage.warning('不能把预约移动到已经开始或已经过去的时间段')
   }
   try {
+    if (!(await confirmAction(`人员：${item.user_name}\n任务：${item.task_name}\n原时间：${formatDateTime(item.start_time)} 至 ${formatDateTime(item.end_time)}\n新时间：${start.format('YYYY-MM-DD HH:mm')} 至 ${start.add(duration, 'minute').format('YYYY-MM-DD HH:mm')}\n确认改期？本人预约自动确认，他人预约需重新确认。`, '拖动改期', '确认改期'))) return
     const result = await moveSchedule(item.id, {
       start_time: start.format('YYYY-MM-DD HH:mm:ss'),
       end_time: start.add(duration, 'minute').format('YYYY-MM-DD HH:mm:ss'),
@@ -927,6 +945,7 @@ async function saveBatch() {
   }
   batchSaving.value = true
   try {
+    if (!(await confirmAction(`项目：${bookableProjects.value.find(item => item.id === batchForm.project_id)?.name}\n任务：${batchSelectedTask.value?.name}\n人员：${batchForm.user_ids.map(id => batchUsers.value.find(item => item.id === id)?.name || `人员 ${id}`).join('、')}\n时间：${batchForm.work_date} ${batchForm.start_clock} 至 ${batchForm.end_clock}\n共 ${batchForm.user_ids.length} 人，总工时 ${batchHours.value * batchForm.user_ids.length}h\n确认批量预约？本人预约自动确认，其余人员分别确认。`, '批量预约确认'))) return
     const result = await batchCreateSchedules({
       user_ids: batchForm.user_ids,
       project_id: batchForm.project_id,
@@ -1061,7 +1080,7 @@ onMounted(async () => {
     </section>
     <ScheduleBookingDialog v-model="bookingDialog" :initial="selected" :slot="initialSlot" :projects="bookableProjects" :tasks="tasks" :users="users" :saving="bookingSaving" @save="save"/>
     <ScheduleConflictDialog v-model="conflictDialog" :conflicts="conflicts"/>
-    <PersonalTimeDialog v-model="personalDialog" :slot="personalInitialSlot" @save="savePersonalTime"/>
+    <PersonalTimeDialog v-model="personalDialog" :slot="personalInitialSlot" :saving="personalSaving" @save="savePersonalTime"/>
 
     <el-drawer v-model="myTimeDrawer" size="720px">
       <template #header><div class="my-time-header"><div><strong>我的时间安排</strong><small>培训、会议、休假、外出等个人占用会阻止其他人重复预约。</small></div><el-button type="primary" @click="openPersonalCreate()">新增安排</el-button></div></template>
@@ -1153,8 +1172,8 @@ onMounted(async () => {
         <el-button v-if="canEdit" @click="openEdit">编辑</el-button>
         <el-button v-if="canDelete" type="danger" plain @click="remove">删除</el-button>
         <el-button v-if="canWithdraw" type="warning" plain :loading="Boolean(withdrawingId)" @click="withdraw()">{{ selected?.status==='confirmed' ? '撤回本人已确认预约' : '撤回预约' }}</el-button>
-        <el-button v-if="canDecide" type="danger" plain @click="reject">本人拒绝</el-button>
-        <el-button v-if="canDecide" type="success" @click="confirm">本人同意</el-button>
+        <el-button v-if="canDecide" type="danger" plain :disabled="decisionSaving" @click="reject">本人拒绝</el-button>
+        <el-button v-if="canDecide" type="success" :loading="decisionSaving" @click="confirm">本人同意</el-button>
       </template>
     </el-dialog>
   </div>

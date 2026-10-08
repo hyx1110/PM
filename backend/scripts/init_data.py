@@ -77,10 +77,10 @@ ROLES = {
 }
 
 ROLE_DESCRIPTIONS = {
-    "super_admin": "系统最高权限角色。",
+    "super_admin": "系统管理角色，可兼任其他角色；项目及资源审批仅限所属部门指定的部门主管。",
     "department_manager": "部门主管系统功能角色。",
     "functional_manager": "职能主管系统功能角色。",
-    "project_manager": "项目经理系统功能角色。",
+    "project_manager": "维护本人负责的项目；可查看全系统项目成员日程，预约仍限本人负责项目的成员。",
     "project_member": "项目成员系统功能角色。",
 }
 

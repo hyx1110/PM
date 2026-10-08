@@ -22,6 +22,7 @@ from app.schemas.schedule import (
     ScheduleUpdate,
 )
 from app.services.notification_service import create_notification
+from app.services.task_approval_policy import assert_task_approved
 from app.services.operation_log_service import log_operation
 from app.services.project_service import assert_project_booking_access
 from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
@@ -74,6 +75,7 @@ def _validate_relations(
         raise not_found("task not found")
     if task.project_id != project_id:
         raise bad_request("task does not belong to project")
+    assert_task_approved(db, task)
     if task.status == "completed":
         raise bad_request("已完成的任务不能继续预约人力")
     if db.scalar(
