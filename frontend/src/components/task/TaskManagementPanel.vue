@@ -344,12 +344,16 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
     <section class="surface table-card">
       <el-table v-loading="loading" :data="visibleTaskRows" row-key="id" :span-method="taskSpanMethod" table-layout="fixed">
         <el-table-column prop="project_name" label="项目名称" min-width="145" align="center" show-overflow-tooltip><template #default="{row}"><strong class="project-name">{{row.project_name}}</strong></template></el-table-column>
-        <el-table-column prop="name" label="任务名称" min-width="185">
+        <el-table-column prop="name" label="任务名称" min-width="185" align="center" header-align="center">
           <template #default="{row}">
-            <div class="task-cell" :style="{paddingLeft:`${row.treeLevel*22}px`}">
-              <button v-if="row.hasChildren" class="tree-toggle" :title="expandedTaskIds.has(row.id)?'折叠子任务':'展开子任务'" @click="toggleTask(row)"><el-icon><ArrowDown v-if="expandedTaskIds.has(row.id)"/><ArrowRight v-else/></el-icon></button>
-              <span v-else class="tree-spacer"></span>
-              <span>{{row.name}}</span>
+            <div class="task-cell" :style="{paddingInline:`min(${row.treeLevel*12}px, 16%)`}">
+              <button v-if="row.hasChildren" class="tree-toggle" :title="expandedTaskIds.has(row.id)?'折叠子任务':'展开子任务'" :aria-expanded="expandedTaskIds.has(row.id)" @click="toggleTask(row)"><el-icon><ArrowDown v-if="expandedTaskIds.has(row.id)"/><ArrowRight v-else/></el-icon></button>
+              <span v-else class="tree-spacer" aria-hidden="true"></span>
+              <el-tooltip placement="top" :show-after="250">
+                <template #content><span class="task-name-full">{{row.name}}</span></template>
+                <span class="task-name" tabindex="0">{{row.name}}</span>
+              </el-tooltip>
+              <span class="tree-spacer" aria-hidden="true"></span>
             </div>
           </template>
         </el-table-column>
@@ -417,5 +421,13 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
 .embedded{gap:16px}.embedded .page-header{margin:4px 0}.embedded .page-title{font-size:18px}.embedded .table-card{box-shadow:none;border:0;padding:0}.embedded .filter-bar{box-shadow:none;background:var(--el-fill-color-light)}
 .approval-hint{margin-top:16px}.review-text{white-space:pre-wrap;overflow-wrap:anywhere}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.project-window{grid-column:1/-1;margin-bottom:18px}.form-hint{margin-top:-4px;color:#9aa3b1;font-size:11px}
-.project-name{display:block;overflow:hidden;color:#334155;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.task-cell{display:flex;min-width:0;align-items:center;gap:7px;color:#465468}.task-cell>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-toggle{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;border:0;border-radius:7px;background:transparent;color:#718096;cursor:pointer}.tree-toggle:hover{background:#edf3f8;color:#315f8e}.tree-spacer{width:24px;flex:0 0 24px}.period-cell{display:inline-grid;grid-template-columns:auto auto auto;gap:5px;align-items:center;white-space:nowrap}.period-cell i{color:#a0a9b6;font-size:11px;font-style:normal}
+.project-name{display:block;overflow:hidden;color:#334155;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
+/* Equal side slots keep the name centered under its header even with a tree toggle.
+   Symmetric, capped nesting space keeps deep tasks readable in a narrow column. */
+.task-cell{display:grid;width:100%;min-width:0;grid-template-columns:24px minmax(0,1fr) 24px;align-items:center;gap:7px;color:#465468}
+.task-name{display:block;width:100%;min-width:0;overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap}
+.task-name-full{display:block;max-width:min(420px,calc(100vw - 48px));white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}
+.task-name:focus-visible,.tree-toggle:focus-visible{outline:2px solid #527fa6;outline-offset:-2px;border-radius:4px}
+.tree-toggle{display:grid;width:24px;height:24px;place-items:center;border:0;border-radius:7px;background:transparent;color:#718096;cursor:pointer}.tree-toggle:hover{background:#edf3f8;color:#315f8e}.tree-spacer{width:24px}
+.period-cell{display:inline-grid;grid-template-columns:auto auto auto;gap:5px;align-items:center;white-space:nowrap}.period-cell i{color:#a0a9b6;font-size:11px;font-style:normal}
 </style>

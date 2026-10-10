@@ -34,7 +34,7 @@ const width = (value: number, item: DashboardTaskItem) => `${Math.min(value / Ma
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
 .module-head p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .text-button { border: 0; border-radius: 6px; background: transparent; padding: 8px 0; color: #436d94; font-size: 13px; cursor: pointer; }
-.compare-list { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: auto; margin-top: 16px; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.compare-list { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: auto; margin-top: 16px; overscroll-behavior: contain; }
 .compare-item { width: 100%; flex-shrink: 0; border: 0; border-top: 1px solid #e8edf2; background: transparent; padding: 20px 4px; text-align: left; cursor: pointer; }
 .compare-item:first-child { border-top: 0; }
 .compare-item:last-child { padding-bottom: 4px; }

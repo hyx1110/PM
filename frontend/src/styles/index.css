@@ -14,6 +14,15 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Hide native scroll tracks without disabling wheel, touch or keyboard scrolling.
+   Keep this global so dialogs and dropdowns teleported to body are covered too. */
+* { scrollbar-width: none; -ms-overflow-style: none; }
+*::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* Element Plus renders its own draggable bars above native scroll containers. */
+.el-scrollbar__bar { display: none !important; }
+
 body { margin: 0; min-width: 1180px; background: #f4f6f8; }
 button, input, textarea, select { font: inherit; }
 

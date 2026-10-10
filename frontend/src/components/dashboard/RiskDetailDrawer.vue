@@ -8,7 +8,7 @@ const emit = defineEmits<{ openProject: [id: number]; openTask: [id: number] }>(
 </script>
 
 <template>
-  <el-drawer v-model="visible" title="关注事项" size="min(560px, 100vw)" destroy-on-close>
+  <el-drawer v-model="visible" title="关注事项" size="min(560px, 100vw)" append-to-body destroy-on-close>
     <div v-if="item" class="drawer-content">
       <header><span class="severity" :class="item.severity">{{item.severity==='danger'?'高优先级':'需要关注'}}</span><h2>{{item.title}}</h2><p>{{item.project_name}}{{item.task_name?` · ${item.task_name}`:''}}</p></header>
       <section><span>详细说明</span><p>{{item.detail || '暂无更多说明'}}</p></section><section><span>发现时间</span><p>{{formatDateTime(item.occurred_at)}}</p></section>

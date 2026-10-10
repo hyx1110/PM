@@ -35,7 +35,7 @@ const summary = computed(() => ({
 .health-summary i { width: 7px; height: 7px; border-radius: 50%; background: #57846f; }
 .health-summary i.attention { background: #bd9150; }
 .health-summary i.risk { background: #bb645e; }
-.health-list { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: auto; margin-top: 8px; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.health-list { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: auto; margin-top: 8px; overscroll-behavior: contain; }
 .health-item { display: grid; width: 100%; min-width: 0; flex-shrink: 0; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 8px 10px; border: 0; border-top: 1px solid #e9edf2; background: transparent; padding: 16px 4px; text-align: left; cursor: pointer; }
 .health-main { grid-row: span 2; }
 .health-progress { grid-column: 3; grid-row: 1; }

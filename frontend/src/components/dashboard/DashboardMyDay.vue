@@ -6,7 +6,7 @@ import type { DashboardDayItem, DashboardMyDay } from '@/types/report'
 import { BEIJING_TIMEZONE, beijingNow } from '@/utils/time'
 
 const props = defineProps<{ day?: DashboardMyDay; loading: boolean; failed: boolean }>()
-const emit = defineEmits<{ refresh: [] }>()
+const emit = defineEmits<{ refresh: []; pending: [] }>()
 const now = ref(beijingNow())
 const selected = ref<DashboardDayItem>()
 const drawerVisible = ref(false)
@@ -46,6 +46,7 @@ function fullPeriod(item: DashboardDayItem) {
   return `${parse(item.start_time).format('YYYY-MM-DD HH:mm')} 至 ${parse(item.end_time).format('YYYY-MM-DD HH:mm')}`
 }
 function open(item: DashboardDayItem) { selected.value = item; drawerVisible.value = true }
+function openPendingList() { drawerVisible.value = false; emit('pending') }
 watch(() => props.day, () => {
   now.value = beijingNow()
   if (!selected.value) return
@@ -75,7 +76,7 @@ watch(() => props.day, () => {
         <el-descriptions-item label="时间（北京）">{{fullPeriod(selected)}}</el-descriptions-item>
         <el-descriptions-item label="时段状态">{{phase(selected).label}}</el-descriptions-item>
         <el-descriptions-item label="备注"><span class="detail-remark">{{selected.remark || '—'}}</span></el-descriptions-item>
-      </el-descriptions><p v-if="pending(selected)" class="detail-hint">此预约尚未确认，不代表已占用。请在左侧“待处理事项 → 审批 / 预约”中查看并处理。</p><p class="detail-hint">此处展示日程时间，不代表任务的实际执行状态或实际工时。</p></template>
+      </el-descriptions><p v-if="pending(selected)" class="detail-hint">此预约尚未确认，不代表已占用。请点击首页顶部“待处理事项”，在右侧窗口的“审批 / 预约”中查看并处理。<el-button link type="primary" @click="openPendingList">查看待处理事项</el-button></p><p class="detail-hint">此处展示日程时间，不代表任务的实际执行状态或实际工时。</p></template>
     </el-drawer>
   </section>
 </template>
@@ -89,7 +90,7 @@ header p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .refresh:disabled { cursor: wait; opacity: .6; }
 .day-warning { flex-shrink: 0; margin: 10px 0 0; color: #9d6833; font-size: 13px; }
 .day-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; flex-shrink: 0; margin: 18px 0 10px; padding: 10px 12px; border-radius: 8px; background: #f5f8fa; color: #677c8e; font-size: 12px; }
-.day-list { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.day-list { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 .day-item { display: grid; width: 100%; grid-template-columns: 46px 18px minmax(0,1fr); border: 0; background: transparent; padding: 0 4px; text-align: left; cursor: pointer; }
 .time-column { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding-top: 15px; font-variant-numeric: tabular-nums; }
 .time-column strong { color: #40576f; font-size: 14px; font-weight: 600; }

@@ -10,7 +10,7 @@ const emit = defineEmits<{ approve: [item: DashboardPendingItem]; reject: [item:
 </script>
 
 <template>
-  <el-drawer v-model="visible" title="待处理详情" size="min(560px, 100vw)" destroy-on-close>
+  <el-drawer v-model="visible" title="待处理详情" size="min(560px, 100vw)" append-to-body destroy-on-close>
     <div v-if="item" class="drawer-content">
       <header><el-tag size="small" effect="plain">{{item.type_label}}</el-tag><h2>{{item.title}}</h2><p>{{item.project_name}}</p></header>
       <section class="detail-list"><article><span>申请人</span><strong>{{item.applicant_name}}</strong></article><article v-if="item.booking_user_name"><span>预约人员</span><strong>{{item.booking_user_name}}</strong></article><article><span>发起时间</span><strong>{{formatDateTime(item.created_at)}}</strong></article><article v-if="item.start_time"><span>{{item.type==='overtime_approval'?'加班时间':'预约时间'}}</span><strong>{{dayjs(item.start_time).format('YYYY-MM-DD HH:mm')}} 至 {{dayjs(item.end_time).format('YYYY-MM-DD HH:mm')}}</strong></article><article><span>申请内容</span><p>{{item.content}}</p></article></section>

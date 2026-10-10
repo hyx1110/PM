@@ -9,13 +9,10 @@ import { approveOvertime, rejectOvertime } from '@/api/overtime'
 import { approveTask, rejectTask } from '@/api/task'
 import { getDashboardWorkbench } from '@/api/report'
 import DashboardOverviewStats from '@/components/dashboard/DashboardOverviewStats.vue'
-import DashboardPendingPanel from '@/components/dashboard/DashboardPendingPanel.vue'
+import DashboardPendingDrawer from '@/components/dashboard/DashboardPendingDrawer.vue'
 import DashboardMyDay from '@/components/dashboard/DashboardMyDay.vue'
 import DashboardProjectTimeline from '@/components/dashboard/DashboardProjectTimeline.vue'
-import DashboardTaskExecutionCompare from '@/components/dashboard/DashboardTaskExecutionCompare.vue'
 import DashboardRiskAlerts from '@/components/dashboard/DashboardRiskAlerts.vue'
-import DashboardWorkhourTrend from '@/components/dashboard/DashboardWorkhourTrend.vue'
-import DashboardProjectHealth from '@/components/dashboard/DashboardProjectHealth.vue'
 import TaskDetailDrawer from '@/components/dashboard/TaskDetailDrawer.vue'
 import PendingDetailDrawer from '@/components/dashboard/PendingDetailDrawer.vue'
 import RiskDetailDrawer from '@/components/dashboard/RiskDetailDrawer.vue'
@@ -33,7 +30,9 @@ const selectedTask = ref<DashboardTaskItem>()
 const selectedPending = ref<DashboardPendingItem>()
 const selectedRisk = ref<DashboardRiskAlert>()
 const taskDrawerVisible = ref(false)
+const pendingListDrawerVisible = ref(false)
 const pendingDrawerVisible = ref(false)
+const riskListDrawerVisible = ref(false)
 const riskDrawerVisible = ref(false)
 let dayRefreshTimer: ReturnType<typeof setInterval> | undefined
 let lastAttemptDay = ''
@@ -53,8 +52,12 @@ async function loadDashboard() {
 }
 
 function openOverview(target: 'projects' | 'tasks' | 'pending' | 'risks') {
-  if (target === 'pending' || target === 'risks') {
-    document.getElementById(`dashboard-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  if (target === 'pending') {
+    pendingListDrawerVisible.value = true
+    return
+  }
+  if (target === 'risks') {
+    riskListDrawerVisible.value = true
     return
   }
   router.push(target === 'projects' ? '/projects' : '/tasks')
@@ -163,26 +166,26 @@ onUnmounted(() => {
     <template v-if="dashboard">
       <DashboardOverviewStats :overview="dashboard.overview" @open="openOverview" />
 
-      <section class="workday-grid" aria-label="待办、今日日程与关注事项">
-        <DashboardPendingPanel id="dashboard-pending" :overview="dashboard.overview" :pending-items="dashboard.pending_items" :tasks="dashboard.my_tasks" @pending="openPending" @task="openTask" />
-        <DashboardMyDay :day="dashboard.my_day" :loading="loading" :failed="loadError" @refresh="loadDashboard" />
-        <DashboardRiskAlerts id="dashboard-risks" :items="dashboard.risk_alerts" @select="openRisk" />
-      </section>
-
-      <section class="project-grid" aria-label="项目健康度与项目进度">
-        <DashboardProjectHealth :items="dashboard.project_health" @project="openProject" />
+      <section class="project-grid" aria-label="我的今日日程与项目进度">
+        <DashboardMyDay :day="dashboard.my_day" :loading="loading" :failed="loadError" @refresh="loadDashboard" @pending="openOverview('pending')" />
         <DashboardProjectTimeline :projects="dashboard.timeline" @task="openTask" @project="openProject" />
-      </section>
-
-      <section class="analysis-grid" aria-label="计划与实际、工时趋势">
-        <DashboardTaskExecutionCompare :items="dashboard.execution_comparison" @task="openTask" />
-        <DashboardWorkhourTrend :items="dashboard.workhour_trend" />
       </section>
     </template>
 
     <section v-else-if="loadError" class="surface dashboard-state"><h2>首页数据暂时无法加载</h2><p>请求已安全结束，不会影响其他页面使用。</p><el-button type="primary" plain @click="loadDashboard">重新加载</el-button></section>
-    <section v-else class="dashboard-skeleton" v-loading="loading"><div v-for="index in 8" :key="index" class="surface skeleton-card"></div></section>
+    <section v-else class="dashboard-skeleton" v-loading="loading"><div v-for="index in 6" :key="index" class="surface skeleton-card"></div></section>
 
+    <DashboardPendingDrawer
+      v-if="dashboard" v-model="pendingListDrawerVisible" :overview="dashboard.overview"
+      :pending-items="dashboard.pending_items" :tasks="dashboard.my_tasks" :loading="loading" :failed="loadError"
+      @pending="openPending" @task="openTask" @refresh="loadDashboard"
+    />
+    <el-drawer v-model="riskListDrawerVisible" title="需要关注" direction="rtl" size="min(640px, 100vw)" append-to-body destroy-on-close>
+      <div v-if="dashboard" class="risk-drawer-body">
+        <DashboardRiskAlerts class="drawer-list" embedded :items="dashboard.risk_alerts" @select="openRisk" />
+      </div>
+      <template #footer><el-button @click="riskListDrawerVisible=false">关闭</el-button></template>
+    </el-drawer>
     <TaskDetailDrawer v-model="taskDrawerVisible" :task="selectedTask" @open-executions="openExecutions" />
     <PendingDetailDrawer v-model="pendingDrawerVisible" :item="selectedPending" :loading="actionLoading" @approve="approvePending" @reject="rejectPendingItem" @open-project="openProject" />
     <RiskDetailDrawer v-model="riskDrawerVisible" :item="selectedRisk" @open-project="openProject" @open-task="openRiskTask" />
@@ -192,31 +195,27 @@ onUnmounted(() => {
 <style scoped>
 .dashboard-page { min-width: 0; gap: 24px; font-size: 14px; line-height: 1.6; }
 .dashboard-page :deep(.surface) { border-color: #e1e7ed; border-radius: 16px; box-shadow: 0 4px 18px rgba(38,53,70,.035); }
-.workday-grid,.project-grid,.analysis-grid { display: grid; gap: 24px; align-items: stretch; }
-.workday-grid { grid-template-columns: repeat(3,minmax(0,1fr)); grid-auto-rows: 420px; }
-.project-grid { grid-template-columns: minmax(0,1fr) minmax(0,3fr); }
-.analysis-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-.workday-grid > *,.project-grid > *,.analysis-grid > * { min-width: 0; min-height: 0; box-sizing: border-box; }
+.project-grid { display: grid; grid-template-columns: minmax(300px,1fr) minmax(0,3fr); gap: 24px; align-items: stretch; }
+.project-grid > * { min-width: 0; box-sizing: border-box; }
 /* Grid stretches the two cards to one shared, content-sized row. Only the
    lists scroll after the cap; no project records are removed to fit it. */
-.project-grid > * { max-height: 640px; }
-.analysis-grid > * { max-height: 500px; }
-#dashboard-pending,#dashboard-risks { scroll-margin-top: 90px; }
+.project-grid > * { min-height: 320px; max-height: 640px; }
+.risk-drawer-body { display: flex; height: 100%; min-height: 0; flex-direction: column; }
+.drawer-list { min-height: 0; flex: 1; }
 .dashboard-state { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; }
 .dashboard-state h2 { margin: 0; color: #344256; font-size: 20px; }
 .dashboard-state p { margin: 12px 0 20px; color: #718095; font-size: 14px; }
-.dashboard-skeleton { display: grid; min-height: 640px; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 24px; }
-.skeleton-card { min-height: 116px; background: #f8fafc; }
-.skeleton-card:nth-child(5) { grid-column: 1/-1; min-height: 280px; }
-.skeleton-card:nth-child(n+6) { grid-column: span 2; min-height: 200px; }
+.dashboard-skeleton { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 24px; }
+.skeleton-card { min-height: 132px; background: #f8fafc; }
+.skeleton-card:nth-child(n+5) { min-height: 360px; }
+.skeleton-card:nth-child(6) { grid-column: span 3; }
 @media(max-width:1440px) {
   .dashboard-page { gap: 20px; }
-  .workday-grid,.project-grid,.analysis-grid { gap: 20px; }
+  .project-grid { gap: 20px; }
 }
 @media(max-width:1280px) {
-  .workday-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .workday-grid > :last-child { grid-column: 1/-1; }
-  .project-grid,.analysis-grid { grid-template-columns: minmax(0,1fr); }
+  .project-grid { grid-template-columns: minmax(0,1fr); }
   .dashboard-skeleton { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
+  .skeleton-card:nth-child(n+5) { grid-column: 1/-1; }
 }
 </style>

@@ -15,7 +15,7 @@ const varianceText = computed(() => {
 </script>
 
 <template>
-  <el-drawer v-model="visible" title="任务详情" size="min(560px, 100vw)" destroy-on-close>
+  <el-drawer v-model="visible" title="任务详情" size="min(560px, 100vw)" append-to-body destroy-on-close>
     <div v-if="task" class="drawer-content">
       <header><span>{{task.project_name}}</span><h2>{{task.name}}</h2><div><el-tag size="small" effect="plain">{{statusLabel[task.status] || task.status}}</el-tag><small>{{task.owner_name}}</small></div></header>
       <section class="progress-panel"><div><span>当前进度</span><strong>{{task.progress}}%</strong></div><el-progress :percentage="task.progress" :stroke-width="7" :show-text="false" color="#6488a9"/></section>

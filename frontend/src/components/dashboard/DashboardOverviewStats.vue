@@ -16,7 +16,7 @@ const cards = computed(() => [
     label: '待处理事项',
     value: props.overview.pending_count,
     note: `${props.overview.pending_action_count} 审批/预约 · ${props.overview.pending_task_count} 项任务`,
-    details: '审批、预约确认和我的未完成任务已在下方展开，点击可定位到待处理事项。',
+    details: '点击打开右侧待处理事项窗口，查看审批、预约确认和我的未完成任务。',
     icon: Calendar,
     tone: 'amber',
   },
@@ -43,7 +43,7 @@ const cards = computed(() => [
     label: '需要关注',
     value: props.overview.risk_projects,
     note: `${props.overview.delayed_projects} 延期 · ${props.overview.overrun_tasks} 工时异常`,
-    details: `风险项目综合项目延期、任务延期和实际工时超出预计工时计算。`,
+    details: '风险项目综合项目延期、任务延期和实际工时超出预计工时计算。点击在右侧查看关注事项。',
     icon: Warning,
     tone: 'red',
   },
@@ -57,7 +57,7 @@ const cards = computed(() => [
         <article class="surface overview-card" :class="[`tone-${card.tone}`, {'has-pending':card.key==='pending' && overview.pending_count>0}]" role="button" tabindex="0" @click="emit('open',card.key)" @keydown.enter="emit('open',card.key)" @keydown.space.prevent="emit('open',card.key)">
           <div class="overview-icon"><el-icon><component :is="card.icon" /></el-icon></div>
           <div class="overview-copy"><span>{{card.label}}</span><strong>{{card.value}}</strong><small>{{card.note}}</small></div>
-          <span class="overview-link" :class="{always:card.key==='pending'}"><i v-if="card.key==='pending' && overview.pending_count>0" aria-hidden="true"></i>{{card.key==='pending' ? (overview.pending_count ? '有事项待处理 · 查看下方' : '暂无待办') : '查看'}}</span>
+          <span class="overview-link" :class="{always:card.key==='pending'}"><i v-if="card.key==='pending' && overview.pending_count>0" aria-hidden="true"></i>{{card.key==='pending' ? (overview.pending_count ? '有事项待处理 · 点击查看' : '暂无待办 · 点击查看') : '查看'}}</span>
         </article>
       </el-tooltip>
     </template>

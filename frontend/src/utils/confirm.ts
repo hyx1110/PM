@@ -9,7 +9,7 @@ export async function confirmAction(message: string, title = '操作确认', con
   dialogOpen = true
   try {
     await ElMessageBox.confirm(message, title, {
-      type: 'warning', confirmButtonText, cancelButtonText: '取消，暂不操作',
+      type: 'warning', confirmButtonText, cancelButtonText: '取消',
       closeOnClickModal: false, closeOnPressEscape: true,
       distinguishCancelAndClose: true, autofocus: false,
       dangerouslyUseHTMLString: false, customClass: 'business-action-confirm',
