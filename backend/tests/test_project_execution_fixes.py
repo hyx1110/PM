@@ -100,14 +100,16 @@ def make_project():
                    planned_start=date(2026, 9, 1), planned_end=date(2026, 9, 28))
 
 
-def test_extension_requires_hours_and_blank_reason_is_not_valid():
+def test_plan_request_schema_accepts_partial_dates_and_requires_reason():
     payload = ProjectResourceRequestCreate(requested_planned_end="2026-10-09", requested_hours="8", reason="  延期交付  ")
     assert payload.requested_hours == Decimal("8")
     assert payload.reason == "延期交付"
     with pytest.raises(ValidationError):
         ProjectResourceRequestCreate(requested_planned_end="2026-10-09", requested_hours="8", reason="  ")
+    # Only the service knows if this end date extends or shortens the current plan.
+    assert ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="调整结束日期").requested_hours == 0
     with pytest.raises(ValidationError):
-        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="延期但未填工时")
+        ProjectResourceRequestCreate(requested_planned_start="2026-10-10", requested_planned_end="2026-10-09", reason="倒置日期")
     with pytest.raises(ValidationError):
         ProjectResourceRequestCreate(reason="没有任何变更")
 
@@ -117,7 +119,6 @@ def test_submitting_extension_keeps_original_project_date(monkeypatch):
     db = MagicMock()
     db.scalar.return_value = None  # no pending resource request
     db.scalars.return_value.all.return_value = []
-    monkeypatch.setattr(project_service, "beijing_today", lambda: TODAY)
     monkeypatch.setattr(project_service, "assert_project_owner_for_resource_request", lambda *args: project)
     monkeypatch.setattr(project_service, "get_department_manager", lambda *args: SimpleNamespace(id=9))
     monkeypatch.setattr(project_service, "_validate_initial_project_members", lambda *args: [])
@@ -126,39 +127,46 @@ def test_submitting_extension_keeps_original_project_date(monkeypatch):
     request = project_service.create_resource_request(db, 10,
         ProjectResourceRequestCreate(requested_planned_end="2026-10-09", requested_hours="8", reason="延期"), SimpleNamespace(id=7))
     assert request.status == "pending"
+    assert request.original_planned_start == project.planned_start
     assert request.original_planned_end == project.planned_end == date(2026, 9, 28)
     assert request.requested_planned_end == date(2026, 10, 9)
     assert project.budget_hours == Decimal("8")
 
 
-@pytest.mark.parametrize("new_end", [date(2026, 9, 27), date(2026, 9, 28)])
-def test_extension_rejects_invalid_or_elapsed_dates(monkeypatch, new_end):
-    monkeypatch.setattr(project_service, "beijing_today", lambda: TODAY)
+@pytest.mark.parametrize("start,end", [(None, date(2026, 8, 31)), (date(2026, 10, 1), None)])
+def test_plan_change_validates_partial_dates_against_current_plan(start, end):
     with pytest.raises(BusinessException):
-        project_service._validate_project_extension(make_project(), new_end)
+        project_service._validate_resource_plan_change(MagicMock(), make_project(), start, end, Decimal("8"))
 
 
-def test_only_overdue_open_approved_projects_can_extend(monkeypatch):
-    monkeypatch.setattr(project_service, "beijing_today", lambda: TODAY)
+def test_open_approved_project_can_extend_before_becoming_overdue():
+    db = MagicMock()
+    db.scalar.return_value = None
     project = make_project()
-    project_service._validate_project_extension(project, date(2026, 10, 9))
-    project.planned_end = TODAY
+    project.planned_end = date(2099, 9, 28)
+    project_service._validate_resource_plan_change(db, project, None, date(2099, 10, 9), Decimal("8"))
+    project.approval_status = "pending"
     with pytest.raises(BusinessException):
-        project_service._validate_project_extension(project, date(2026, 10, 9))
-    project.planned_end = date(2026, 9, 28)
+        project_service._validate_resource_plan_change(db, project, None, date(2099, 10, 9), Decimal("8"))
+    project.approval_status = "approved"
     project.status = "completed"
     with pytest.raises(BusinessException):
-        project_service._validate_project_extension(project, date(2026, 10, 9))
+        project_service._validate_resource_plan_change(db, project, None, date(2099, 10, 9), Decimal("8"))
 
 
-def test_direct_project_edit_cannot_bypass_extension_approval(monkeypatch):
+@pytest.mark.parametrize("dates", [
+    {"planned_start": date(2026, 8, 31)}, {"planned_start": date(2026, 9, 2)},
+    {"planned_end": date(2026, 10, 9)}, {"planned_end": date(2026, 9, 27)},
+])
+def test_direct_project_edit_cannot_bypass_date_approval(monkeypatch, dates):
     project = make_project()
     db = MagicMock()
     db.scalar.return_value = project
     monkeypatch.setattr(project_service, "assert_project_manageable", lambda *args: project)
     monkeypatch.setattr(project_service, "_validate_project_manager", lambda *args: None)
     with pytest.raises(BusinessException):
-        project_service.update_project(db, 10, ProjectUpdate(planned_end=date(2026, 10, 9)), SimpleNamespace(id=7))
+        project_service.update_project(db, 10, ProjectUpdate(**dates), SimpleNamespace(id=7))
+    assert project.planned_start == date(2026, 9, 1)
     assert project.planned_end == date(2026, 9, 28)
 
 
@@ -177,9 +185,8 @@ def test_resource_decision_only_changes_dates_when_approved(monkeypatch, approve
         requested_hours=Decimal("8"), original_planned_end=project.planned_end,
         requested_planned_end=date(2026, 10, 9), reason="延期", add_member_ids=[], remove_member_ids=[])
     db = MagicMock()
-    db.scalar.side_effect = [project, request]
+    db.scalar.side_effect = [project, request, None, None]
     db.scalars.return_value.all.return_value = []
-    monkeypatch.setattr(project_service, "beijing_today", lambda: TODAY)
     monkeypatch.setattr(project_service, "_assert_department_manager", lambda *args: None)
     monkeypatch.setattr(project_service, "_validate_initial_project_members", lambda *args: [])
     monkeypatch.setattr(project_service, "create_notification", MagicMock())

@@ -1,6 +1,8 @@
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
+from fastapi import UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
@@ -27,7 +29,7 @@ from app.services.operation_log_service import log_operation
 from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
 from app.services.visibility_service import has_global_project_access, related_project_ids, related_user_ids
 from app.utils.model import model_to_dict
-from app.utils.time import beijing_now, beijing_today
+from app.utils.time import beijing_now
 from app.utils.personnel_scope import resolve_personnel_scope_user_ids
 
 PROJECT_CREATOR_ROLES = {"project_manager", "functional_manager", "department_manager", "super_admin"}
@@ -337,7 +339,27 @@ def project_detail(db: Session, project_id: int, user: User) -> dict:
     return item
 
 
-def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
+def create_project(db: Session, payload: ProjectCreate, user: User, initiation_report: UploadFile | None = None) -> Project:
+    # Create metadata, members and the required report in one transaction.
+    # A local import avoids the report service's project-permission dependency.
+    from app.services.project_report_service import upload_report
+
+    if initiation_report is None:
+        raise bad_request("创建项目必须上传项目立项报告")
+    try:
+        project = _create_project_draft(db, payload, user)
+        upload_report(db, project.id, initiation_report, user, creating_project=True)
+        return project
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if not initiation_report.file.closed:
+            initiation_report.file.close()
+
+
+def _create_project_draft(db: Session, payload: ProjectCreate, user: User) -> Project:
+    """Stage a new project; only the required report upload may commit it."""
     roles = get_role_codes(db, user.id)
     if not (roles & PROJECT_CREATOR_ROLES):
         raise forbidden("只有项目经理、职能主管、部门主管或超级管理员可以创建项目")
@@ -371,8 +393,6 @@ def create_project(db: Session, payload: ProjectCreate, user: User) -> Project:
             "member_ids": payload.member_ids,
         },
     )
-    db.commit()
-    db.refresh(project)
     return project
 
 
@@ -385,6 +405,8 @@ def _generate_project_code(db: Session) -> str:
 
 
 def submit_project(db: Session, project_id: int, user: User) -> Project:
+    from app.services.project_report_service import assert_report_ready
+
     project = db.scalar(
         select(Project)
         .where(Project.id == project_id, Project.is_deleted.is_(False))
@@ -402,6 +424,7 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
     if not project.department_id:
         raise bad_request("项目必须设置所属部门")
     _validate_project_manager(db, project.manager_id, project.department_id)
+    assert_report_ready(db, project.id)
     before = model_to_dict(project)
     project.approval_note = None
     project.approved_by = None
@@ -437,6 +460,30 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
     db.commit()
     db.refresh(project)
     return project
+
+
+def _validate_project_plan_bounds(db: Session, project: Project, planned_start: date, planned_end: date) -> None:
+    """Keep existing task plans and effective bookings inside the project period."""
+    if planned_end < planned_start:
+        raise bad_request("计划结束日期不能早于计划开始日期")
+    if db.scalar(
+        select(Task.id).where(
+            Task.project_id == project.id,
+            Task.is_deleted.is_(False),
+            or_(Task.planned_start < planned_start, Task.planned_end > planned_end),
+        ).limit(1)
+    ):
+        raise bad_request("项目计划日期不能排除已有任务的计划时间，请先调整相关任务")
+    range_start = datetime.combine(planned_start, time.min)
+    range_end = datetime.max if planned_end == date.max else datetime.combine(planned_end + timedelta(days=1), time.min)
+    if db.scalar(
+        select(ScheduleBooking.id).where(
+            ScheduleBooking.project_id == project.id,
+            booked_schedule_predicate(),
+            or_(ScheduleBooking.start_time < range_start, ScheduleBooking.end_time > range_end),
+        ).limit(1)
+    ):
+        raise bad_request("项目计划日期不能排除已有预约时间，请先调整相关预约")
 
 
 def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: User) -> Project:
@@ -475,32 +522,12 @@ def update_project(db: Session, project_id: int, payload: ProjectUpdate, user: U
         get_department_manager(db, department_id)
     planned_start = values.get("planned_start", project.planned_start)
     planned_end = values.get("planned_end", project.planned_end)
-    if project.approval_status == "approved" and planned_end > project.planned_end:
-        raise bad_request("已审批项目不能直接延长计划结束日期，请通过项目资源申请提交延期并由部门主管审批")
+    if project.approval_status == "approved" and (planned_start != project.planned_start or planned_end != project.planned_end):
+        raise bad_request("已审批项目不能直接修改计划开始或结束日期，请通过项目资源申请提交部门主管审批")
     if planned_end < planned_start:
         raise bad_request("planned_end must be on or after planned_start")
     if {"planned_start", "planned_end"} & values.keys():
-        if db.scalar(
-            select(Task.id).where(
-                Task.project_id == project.id,
-                Task.is_deleted.is_(False),
-                or_(Task.planned_start < planned_start, Task.planned_end > planned_end),
-            ).limit(1)
-        ):
-            raise bad_request("项目计划日期不能排除已有任务的计划时间")
-        range_start = datetime.combine(planned_start, time.min)
-        range_end = datetime.combine(planned_end + timedelta(days=1), time.min)
-        if db.scalar(
-            select(ScheduleBooking.id).where(
-                ScheduleBooking.project_id == project.id,
-                booked_schedule_predicate(),
-                or_(
-                    ScheduleBooking.start_time < range_start,
-                    ScheduleBooking.end_time > range_end,
-                ),
-            ).limit(1)
-        ):
-            raise bad_request("项目计划日期不能排除已有预约时间")
+        _validate_project_plan_bounds(db, project, planned_start, planned_end)
     if project.approval_status != "approved":
         if project.manager_id != user.id and not has_global_project_access(db, user):
             raise forbidden("未审批项目只能由项目创建人修改")
@@ -739,8 +766,10 @@ def _resource_member_details(db: Session, items: list[ProjectResourceRequest]) -
 
 def _resource_request_summary(item: ProjectResourceRequest, members: dict | None = None) -> str:
     changes: list[str] = []
+    if item.requested_planned_start:
+        changes.append(f"计划开始日期从 {item.original_planned_start} 调整为 {item.requested_planned_start}")
     if item.requested_planned_end:
-        changes.append(f"计划结束日期从 {item.original_planned_end} 延期至 {item.requested_planned_end}")
+        changes.append(f"计划结束日期从 {item.original_planned_end} 调整为 {item.requested_planned_end}")
     if item.requested_hours > 0:
         changes.append(f"追加 {item.requested_hours} 小时")
     if item.add_member_ids:
@@ -752,16 +781,22 @@ def _resource_request_summary(item: ProjectResourceRequest, members: dict | None
     return "、".join(changes)
 
 
-def _validate_project_extension(project: Project, requested_end: date | None) -> None:
-    if requested_end is None:
+def _validate_resource_plan_change(
+    db: Session, project: Project, requested_start: date | None,
+    requested_end: date | None, requested_hours: Decimal,
+) -> None:
+    if requested_start is None and requested_end is None:
         return
     if project.approval_status != "approved" or project.status in PROJECT_CLOSED_STATUSES:
-        raise bad_request("只有已审批且未完成的项目可以申请延期")
-    today = beijing_today()
-    if project.planned_end >= today:
-        raise bad_request("项目尚未逾期，无需申请逾期延期")
-    if requested_end <= project.planned_end or requested_end < today:
-        raise bad_request("延期后的计划结束日期必须晚于原结束日期，且不能早于今天")
+        raise bad_request("只有已审批且未完成的项目可以申请计划日期变更")
+    planned_start = requested_start or project.planned_start
+    planned_end = requested_end or project.planned_end
+    if planned_end < planned_start:
+        raise bad_request("计划结束日期不能早于计划开始日期")
+    # Extension keeps its existing budget rule, but never depends on being overdue.
+    if planned_end > project.planned_end and requested_hours <= 0:
+        raise bad_request("延长计划结束日期必须填写正数追加工时（以 0.5 小时为单位）")
+    _validate_project_plan_bounds(db, project, planned_start, planned_end)
 
 
 def create_resource_request(
@@ -771,9 +806,11 @@ def create_resource_request(
     user: User,
 ) -> ProjectResourceRequest:
     project = assert_project_owner_for_resource_request(db, project_id, user)
-    _validate_project_extension(project, payload.requested_planned_end)
-    if payload.requested_planned_end and payload.requested_hours <= 0:
-        raise bad_request("延期申请必须填写正数追加工时")
+    requested_start = payload.requested_planned_start if payload.requested_planned_start != project.planned_start else None
+    requested_end = payload.requested_planned_end if payload.requested_planned_end != project.planned_end else None
+    if not requested_start and not requested_end and payload.requested_hours <= 0 and not payload.add_member_ids and not payload.remove_member_ids:
+        raise bad_request("请至少修改一项计划日期、工时或项目成员；所选日期与当前计划相同")
+    _validate_resource_plan_change(db, project, requested_start, requested_end, payload.requested_hours)
     if not project.department_id:
         raise bad_request("项目未设置所属部门，无法申请资源变更")
     if db.scalar(
@@ -800,8 +837,10 @@ def create_resource_request(
     item = ProjectResourceRequest(
         project_id=project.id,
         requested_hours=payload.requested_hours,
-        original_planned_end=project.planned_end if payload.requested_planned_end else None,
-        requested_planned_end=payload.requested_planned_end,
+        original_planned_start=project.planned_start if requested_start or requested_end else None,
+        requested_planned_start=requested_start,
+        original_planned_end=project.planned_end if requested_start or requested_end else None,
+        requested_planned_end=requested_end,
         add_member_ids=payload.add_member_ids,
         remove_member_ids=payload.remove_member_ids,
         reason=payload.reason,
@@ -966,11 +1005,13 @@ def decide_resource_request(
     if approved:
         if project.approval_status != "approved" or project.status in PROJECT_CLOSED_STATUSES:
             raise bad_request("项目未审批或已完成，不能批准资源变更，请驳回该申请")
-        _validate_project_extension(project, item.requested_planned_end)
-        if item.requested_planned_end and item.requested_hours <= 0:
-            raise bad_request("该延期申请未填写追加工时，请驳回后由申请人重新提交")
-        if item.requested_planned_end and project.planned_end != item.original_planned_end:
-            raise bad_request("项目计划结束日期已变化，请驳回后重新提交延期申请")
+        if item.requested_planned_start or item.requested_planned_end:
+            # Old end-only requests have no start snapshot; retain compatibility.
+            if ((item.original_planned_start is not None and project.planned_start != item.original_planned_start)
+                    or (item.original_planned_end is not None and project.planned_end != item.original_planned_end)):
+                raise bad_request("项目计划日期已变化，请驳回后重新提交资源申请")
+        # Recheck under the project lock: tasks/bookings may have changed since submission.
+        _validate_resource_plan_change(db, project, item.requested_planned_start, item.requested_planned_end, item.requested_hours)
     before = model_to_dict(item)
     project_before = model_to_dict(project)
     item.status = "approved" if approved else "rejected"
@@ -979,6 +1020,8 @@ def decide_resource_request(
     item.review_note = payload.note
     if approved:
         project.budget_hours += item.requested_hours
+        if item.requested_planned_start:
+            project.planned_start = item.requested_planned_start
         if item.requested_planned_end:
             project.planned_end = item.requested_planned_end
         added_users = _validate_initial_project_members(db, item.add_member_ids or [])

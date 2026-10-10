@@ -47,9 +47,10 @@ async function upload() {
   if (!selectedFile.value) return ElMessage.warning('请选择 .xlsx 文件')
   importing.value = true
   try {
-    if (!(await confirmAction(`导入类型：${resources.value.find(item => item.value === resource.value)?.label}\n文件：${selectedFile.value.name}\n确认导入？有效数据行将写入系统，失败行不会回滚已成功的行；项目和父任务按现有规则进入审批流程。`, '导入数据', '确认导入'))) return
+    if (!(await confirmAction(`导入类型：${resources.value.find(item => item.value === resource.value)?.label}\n文件：${selectedFile.value.name}\n确认导入？有效数据行将写入系统，失败行不会回滚已成功的行。项目导入后为草稿，须逐项补传立项报告再提交审批；父任务按现有规则进入审批流程。`, '导入数据', '确认导入'))) return
     const job = await uploadImportWorkbook(resource.value, selectedFile.value)
     ElMessage.success(`导入完成：成功 ${job.success_rows}，失败 ${job.failed_rows}`)
+    if (resource.value === 'projects' && job.success_rows > 0) ElMessage.warning('项目已导入为草稿，请到项目管理逐项补传立项报告并提交审批')
     selectedFile.value = undefined
     await load()
   } catch { /* API interceptor displays the error. */ }

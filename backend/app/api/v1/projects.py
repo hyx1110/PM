@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -63,11 +65,18 @@ def list_projects(
 
 @router.post("")
 def create_project(
-    payload: ProjectCreate,
+    payload: str = Form(..., description="项目资料 JSON 字符串，与 file 一起上传"),
+    file: UploadFile = File(..., description="必传：Word、Excel、PPT 或 PDF 立项报告，最大 20 MB"),
     current_user: User = Depends(require_permission("project:edit")),
     db: Session = Depends(get_db),
 ):
-    item = project_service.create_project(db, payload, current_user)
+    try:
+        project_data = ProjectCreate.model_validate_json(payload)
+    except ValidationError as exc:
+        raise RequestValidationError([
+            {**error, "loc": ("body", "payload", *error["loc"])} for error in exc.errors()
+        ]) from exc
+    item = project_service.create_project(db, project_data, current_user, initiation_report=file)
     return success(project_service.project_detail(db, item.id, current_user))
 
 

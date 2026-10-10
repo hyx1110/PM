@@ -1,8 +1,10 @@
 # V2.0 数据库说明
 
-当前最新迁移 `20261008_0020` 为 `tasks` 增加父任务审批字段：`approval_status VARCHAR(20)`、`created_by/approver_id/approved_by INT NULL`（用户外键，删除用户时置空）、`submitted_at/approved_at DATETIME NULL`、`approval_note TEXT NULL`，并建立审批状态索引。历史顶层任务回填 `approved`，历史子任务回填 `not_required`；新记录默认 `pending`，服务创建子任务显式使用 `not_required`。无历史审批人/时间时保留 NULL，不伪造审批记录。详见 [父任务审批说明](ROOT_TASK_APPROVAL.md)。
+当前最新迁移 `20261009_0021` 为 `project_resource_requests` 增加 `original_planned_start DATE NULL`、`requested_planned_start DATE NULL`；与已有原结束日期/申请结束日期一起保存计划日期变更。新日期申请记录完整原计划快照，审批通过才更新 `projects.planned_start/planned_end`；不回填旧申请的开始日期，不改写历史项目、任务或预约。详见 [项目计划日期调整说明](PROJECT_PLAN_CHANGES.md)。
 
-此前迁移 `20261008_0019` 新建 `project_initiation_reports`：以 `project_id` 为主键及项目外键，每个项目一份当前立项报告；保存 `original_filename`、`storage_name`（UUID 文件名）、`media_type`、`size_bytes`、`uploaded_by` 和创建/更新时间。报告文件保存在服务器私有目录，不写入 MySQL。历史项目无需补录；数据库与附件目录须配套备份。详见 [立项报告附件说明](PROJECT_INITIATION_REPORT.md)。
+此前迁移 `20261008_0020` 为 `tasks` 增加父任务审批字段：`approval_status VARCHAR(20)`、`created_by/approver_id/approved_by INT NULL`（用户外键，删除用户时置空）、`submitted_at/approved_at DATETIME NULL`、`approval_note TEXT NULL`，并建立审批状态索引。历史顶层任务回填 `approved`，历史子任务回填 `not_required`；新记录默认 `pending`，服务创建子任务显式使用 `not_required`。无历史审批人/时间时保留 NULL，不伪造审批记录。详见 [父任务审批说明](ROOT_TASK_APPROVAL.md)。
+
+此前迁移 `20261008_0019` 新建 `project_initiation_reports`：以 `project_id` 为主键及项目外键，每个项目一份当前立项报告；保存 `original_filename`、`storage_name`（UUID 文件名）、`media_type`、`size_bytes`、`uploaded_by` 和创建/更新时间。报告文件保存在服务器私有目录，不写入 MySQL。10 月 9 日调整为新建必传并支持 Word/Excel/PPT/PDF，不新增列或迁移；数据库仍允许历史项目/待补传导入草稿没有报告，但服务层禁止无报告送审。历史待审批/已审批项目不追溯补录；数据库与附件目录须配套备份。详见 [立项报告附件说明](PROJECT_INITIATION_REPORT.md)。
 
 此前迁移 `20260929_0018` 为 `project_resource_requests` 增加 `original_planned_end DATE NULL` 和 `requested_planned_end DATE NULL`：分别保存申请时原截止日及申请的新截止日。只有资源审批通过才更新 `projects.planned_end`，不自动修改任务计划或实际工时；旧申请字段为 NULL。详见 [延期迁移说明](BUGFIX_20260929.md)。
 
@@ -50,7 +52,7 @@ work_calendar_days             法定节假日/调休日期覆盖
 | `notification_preferences` | 历史兼容表 | 当前版本不再读写，保留仅用于兼容既有迁移历史 |
 | `import_jobs` | 新表 | 文件名、对象、总计/成功/失败、最多 500 条错误 JSON、操作人 |
 | `projects` | 增加 `budget_hours`、审批状态/创建人/部门审批人字段；删除 `project_type` | 所有项目由项目所属部门主管审批，不自动通过；额度控制预约总工时 |
-| `project_resource_requests` | 由追加工时表升级 | `requested_hours/add_member_ids/remove_member_ids` 统一保存工时与成员资源变更及部门主管审批结果 |
+| `project_resource_requests` | 由追加工时表升级 | 工时、增删成员、原计划起止日期和申请计划起止日期，以及部门主管审批结果 |
 | `work_calendar_days` | 新表 | `holiday/workday` 日期覆盖；迁移内置 2026 法定安排 |
 | `personal_time_blocks` | 新表 | 用户本人的培训/会议/休假/出差/其他占用，支持生效与撤回状态 |
 | `tasks` | 增加 `is_deleted` 与独立审批字段，删除 `task_type` | 执行状态为未开始、进行中、已完成，已逾期按日期动态计算；审批状态为 pending/approved/rejected/not_required |

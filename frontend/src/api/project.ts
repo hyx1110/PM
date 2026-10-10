@@ -26,7 +26,12 @@ export function uploadProjectInitiationReport(id: number, file: File) {
 }
 export const downloadProjectInitiationReport = (id: number) =>
   api.download(`/projects/${id}/initiation-report/download`, { timeout: 120000 })
-export const createProject = (payload: ProjectPayload) => api.post<Project>('/projects', payload)
+export function createProject(payload: ProjectPayload, file: File) {
+  const data = new FormData()
+  data.append('payload', JSON.stringify(payload))
+  data.append('file', file)
+  return api.post<Project>('/projects', data, { timeout: 120000 })
+}
 export const submitProject = (id: number) => api.post<Project>(`/projects/${id}/submit`)
 export const completeProject = (id: number) => api.post<Project>(`/projects/${id}/complete`)
 export const updateProject = (id: number, payload: Partial<ProjectPayload>) => api.put<Project>(`/projects/${id}`, payload)

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_role_codes
 from app.models.project import Project, ProjectMember
+from app.models.rbac import Role, UserRole
 from app.models.task import Task, TaskAssignee
 from app.models.user import User
 
@@ -66,16 +67,19 @@ def visible_schedule_user_ids(db: Session, user: User) -> set[int] | None:
     if "functional_manager" in roles:
         visible.update(descendant_user_ids(db, user.id))
     if "project_manager" in roles:
-        # Read-only calendar scope covers every project's current members,
-        # including other managers' projects. Booking authorization is separate.
+        # A system role, not past/present project membership, grants visibility.
+        # Includes multi-role users and people who have never joined a project.
+        # Booking authorization remains a separate project/task membership check.
         visible.update(db.scalars(
-            select(ProjectMember.user_id).join(Project, Project.id == ProjectMember.project_id)
-            .where(ProjectMember.left_at.is_(None), Project.is_deleted.is_(False))
-        ).all())
-        # Ownership also establishes membership for legacy projects whose
-        # manager was not written into project_members during initialization.
-        visible.update(db.scalars(
-            select(Project.manager_id).where(Project.is_deleted.is_(False))
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(
+                Role.code == "project_member",
+                User.status == "active",
+                User.is_deleted.is_(False),
+            )
+            .distinct()
         ).all())
     elif "functional_manager" in roles:
         managed_project_ids = select(Project.id).where(

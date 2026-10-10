@@ -151,6 +151,7 @@ def create_template(resource_type: str) -> bytes:
     notes.append(["数字", "工时等数值请使用真实数字单元格，不要添加单位。"])
     if resource_type == "projects":
         notes.append(["项目成员", "创建项目时必须填写至少一名项目成员；多个员工号使用英文逗号分隔，项目经理无需重复填写。"])
+        notes.append(["立项报告必传", "Excel 项目导入仅保存为草稿；请到项目管理逐项上传 Word、Excel、PPT 或 PDF 立项报告后，再提交部门主管审批。"])
     if resource_type == "tasks":
         notes.append(["任务项目成员", "至少填写一名当前有效项目成员；多个员工号使用英文逗号分隔。"])
     notes.append(["导入策略", "按行校验并导入；失败行会保留错误明细，成功行不会被回滚。"])
@@ -339,32 +340,22 @@ def _import_project(db: Session, row: dict[str, Any], operator: User) -> Project
         remark=row.get("remark") or None,
     )
     try:
-        approver = get_department_manager(db, department.id)
+        get_department_manager(db, department.id)
     except BusinessException as exc:
         raise ValueError(exc.message) from exc
     item = Project(
         **payload.model_dump(exclude={"member_ids"}),
         code=_generate_project_code(db),
         status="not_started",
-        approval_status="pending",
+        approval_status="draft",
         created_by=operator.id,
-        approver_id=approver.id,
     )
     db.add(item)
     db.flush()
     _add_initial_project_members(db, item, manager, ordered_member_users)
     db.flush()
-    create_notification(
-        db,
-        approver.id,
-        "project_approval_required",
-        "导入项目等待部门主管审批",
-        f"{operator.name} 导入了项目 {item.code} - {item.name}，"
-        f"请审核项目与 {item.budget_hours} 小时工时额度。",
-        level="warning",
-        related_type="project",
-        related_id=item.id,
-    )
+    # The workbook cannot carry one private report per row. Imported projects
+    # stay as incomplete drafts; submit_project checks the report before review.
     return item
 
 

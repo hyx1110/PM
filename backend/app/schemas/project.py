@@ -102,6 +102,7 @@ class ProjectDecision(ORMModel):
 
 class ProjectResourceRequestCreate(ORMModel):
     requested_hours: Decimal = Field(default=0, ge=0, decimal_places=2, multiple_of=Decimal("0.5"))
+    requested_planned_start: date | None = None
     requested_planned_end: date | None = None
     add_member_ids: list[int] = Field(default_factory=list)
     remove_member_ids: list[int] = Field(default_factory=list)
@@ -111,14 +112,16 @@ class ProjectResourceRequestCreate(ORMModel):
     def validate_resources(self):
         self.reason = self.reason.strip()
         if not self.reason:
-            raise ValueError("请填写资源变更或延期原因")
-        if self.requested_planned_end is not None and self.requested_hours <= 0:
-            raise ValueError("项目延期必须填写追加工时，且须为正数（以 0.5 小时为单位）")
+            raise ValueError("请填写资源变更原因")
+        if self.requested_planned_start and self.requested_planned_end and self.requested_planned_end < self.requested_planned_start:
+            raise ValueError("计划结束日期不能早于计划开始日期")
+        # Whether an end date extends the current plan is validated against the
+        # locked project in the service, not inferred from this partial payload.
         self.add_member_ids = list(dict.fromkeys(self.add_member_ids))
         self.remove_member_ids = list(dict.fromkeys(self.remove_member_ids))
         if set(self.add_member_ids) & set(self.remove_member_ids):
             raise ValueError("the same member cannot be added and removed")
-        if self.requested_hours <= 0 and not self.add_member_ids and not self.remove_member_ids and self.requested_planned_end is None:
+        if self.requested_hours <= 0 and not self.add_member_ids and not self.remove_member_ids and self.requested_planned_start is None and self.requested_planned_end is None:
             raise ValueError("at least one resource change is required")
         return self
 
@@ -127,6 +130,8 @@ class ProjectResourceRequestResponse(ORMModel):
     id: int
     project_id: int
     requested_hours: Decimal
+    original_planned_start: date | None = None
+    requested_planned_start: date | None = None
     original_planned_end: date | None = None
     requested_planned_end: date | None = None
     add_member_ids: list[int] = Field(default_factory=list)

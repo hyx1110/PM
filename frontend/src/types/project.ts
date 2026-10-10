@@ -91,6 +91,8 @@ export interface ProjectResourceRequest {
   id: number
   project_id: number
   requested_hours: number
+  original_planned_start?: string | null
+  requested_planned_start?: string | null
   original_planned_end?: string | null
   requested_planned_end?: string | null
   add_member_ids: number[]
@@ -113,6 +115,7 @@ export interface ProjectResourceRequest {
 
 export interface ProjectResourceRequestPayload {
   requested_hours: number
+  requested_planned_start?: string | null
   requested_planned_end?: string | null
   add_member_ids: number[]
   remove_member_ids: number[]

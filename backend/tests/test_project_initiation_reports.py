@@ -10,7 +10,9 @@ import pytest
 from app.core.exceptions import BusinessException, forbidden
 from app.models.project import Project
 from app.models.project_report import ProjectInitiationReport
+from app.schemas.project import ProjectCreate
 from app.services import project_report_service as service
+from app.services import import_export_service
 
 
 PDF = b"%PDF-1.4\nreport fixture\n%%EOF"
@@ -161,21 +163,26 @@ def test_invalid_stored_path_is_rejected(storage):
         service._stored_path(10, "../../secret.pdf")
 
 
+@pytest.mark.parametrize("extension,main_part", [
+    ("docx", "word/document.xml"), ("xlsx", "xl/workbook.xml"), ("pptx", "ppt/presentation.xml"),
+])
 @pytest.mark.parametrize("contains_macro", [False, True])
-def test_docx_container_validation(storage, database, contains_macro):
+def test_office_container_validation(storage, database, extension, main_part, contains_macro):
     buffer = BytesIO()
     with ZipFile(buffer, "w") as document:
         document.writestr("[Content_Types].xml", "<Types/>")
-        document.writestr("word/document.xml", "<document/>")
+        document.writestr(main_part, "<document/>")
         if contains_macro:
-            document.writestr("word/vbaProject.bin", b"macro")
+            document.writestr(main_part.split("/")[0] + "/vbaProject.bin", b"macro")
     if contains_macro:
         with pytest.raises(BusinessException):
-            service.upload_report(database, 10, upload("报告.docx", buffer.getvalue()), USER)
+            service.upload_report(database, 10, upload(f"报告.{extension}", buffer.getvalue()), USER)
         database.commit.assert_not_called()
     else:
-        result = service.upload_report(database, 10, upload("报告.docx", buffer.getvalue()), USER)
-        assert result["filename"] == "报告.docx"
+        result = service.upload_report(database, 10, upload(f"报告.{extension}", buffer.getvalue()), USER)
+        assert result["filename"] == f"报告.{extension}"
+        files = list((storage / "10").iterdir())
+        assert len(files) == 1 and files[0].suffix == f".{extension}"
 
 
 def test_io_failure_reports_a_clear_message_and_keeps_draft(storage, database, monkeypatch):
@@ -185,3 +192,133 @@ def test_io_failure_reports_a_clear_message_and_keeps_draft(storage, database, m
     assert error.value.status_code == 503
     assert "项目草稿已保留" in error.value.message
     assert list((storage / "10").iterdir()) == []
+
+
+@pytest.mark.parametrize("extension", ["doc", "xls", "ppt"])
+def test_legacy_office_container_signature(storage, database, extension):
+    # Minimal signature fixture; this check is not a complete Office parser.
+    content = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"fixture"
+    result = service.upload_report(database, 10, upload(f"report.{extension}", content), USER)
+    assert result["filename"] == f"report.{extension}"
+    report = database.add.call_args.args[0]
+    assert report.media_type == service.MEDIA_TYPES[f".{extension}"]
+    assert service._stored_path(10, report.storage_name).read_bytes() == content
+
+
+@pytest.mark.parametrize("extension", ["xlsx", "pptx"])
+def test_docx_renamed_to_other_office_format_is_rejected(storage, database, extension):
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as document:
+        document.writestr("[Content_Types].xml", "<Types/>")
+        document.writestr("word/document.xml", "<document/>")
+    with pytest.raises(BusinessException):
+        service.upload_report(database, 10, upload(f"report.{extension}", buffer.getvalue()), USER)
+    database.commit.assert_not_called()
+    assert not list(storage.rglob(f"*.{extension}"))
+
+
+@pytest.mark.parametrize("extension", ["docm", "xlsm", "pptm", "exe", "zip"])
+def test_unapproved_extensions_are_rejected(extension):
+    with pytest.raises(BusinessException):
+        service._validated_filename(f"report.{extension}")
+
+
+def project_payload():
+    return ProjectCreate(name="必传报告项目", manager_id=7, department_id=1, member_ids=[8],
+                         budget_hours=8, planned_start="2026-10-09", planned_end="2026-10-10")
+
+
+def test_new_project_requires_file_even_when_called_without_http(database):
+    with pytest.raises(BusinessException) as error:
+        service.project_service.create_project(database, project_payload(), USER)
+    assert "必须上传" in error.value.message
+    database.add.assert_not_called()
+    database.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("content,valid", [(PDF, True), (b"fake pdf", False)])
+def test_new_project_and_report_share_one_commit(storage, database, monkeypatch, content, valid):
+    project_service = service.project_service
+    monkeypatch.setattr(project_service, "get_role_codes", lambda *args: {"project_manager"})
+    monkeypatch.setattr(project_service, "_validate_project_manager", lambda *args: USER)
+    monkeypatch.setattr(project_service, "get_department_manager", lambda *args: SimpleNamespace(id=9))
+    monkeypatch.setattr(project_service, "_validate_initial_project_members", lambda *args: [SimpleNamespace(id=8)])
+    monkeypatch.setattr(project_service, "_add_initial_project_members", MagicMock())
+    monkeypatch.setattr(project_service, "_generate_project_code", lambda *args: "P-REPORT-TEST")
+    monkeypatch.setattr(project_service, "log_operation", MagicMock())
+
+    def add(item):
+        if isinstance(item, Project):
+            item.id = 10
+            database.scalar.return_value = item
+    database.add.side_effect = add
+    item = upload(content=content)
+    if valid:
+        project = project_service.create_project(database, project_payload(), USER, item)
+        assert project.id == 10 and project.approval_status == "draft"
+        database.commit.assert_called_once()
+        database.rollback.assert_not_called()
+        assert len(list(storage.rglob("*.pdf"))) == 1
+    else:
+        with pytest.raises(BusinessException):
+            project_service.create_project(database, project_payload(), USER, item)
+        database.commit.assert_not_called()
+        database.rollback.assert_called()
+        assert not list(storage.rglob("*.pdf"))
+    assert item.file.closed
+
+
+def test_submit_draft_without_report_is_blocked_before_notifications(database, monkeypatch):
+    project = database.scalar.return_value
+    project.manager_id, project.department_id = USER.id, 1
+    monkeypatch.setattr(service.project_service, "get_role_codes", lambda *args: {"project_manager"})
+    monkeypatch.setattr(service.project_service, "_validate_project_manager", MagicMock())
+    notify = MagicMock()
+    monkeypatch.setattr(service.project_service, "create_notification", notify)
+    with pytest.raises(BusinessException) as error:
+        service.project_service.submit_project(database, 10, USER)
+    assert "必传" in error.value.message
+    assert project.approval_status == "draft"
+    notify.assert_not_called()
+    database.commit.assert_not_called()
+
+
+@pytest.mark.parametrize("stored_bytes", [None, b"", b"incorrect size", PDF])
+def test_report_must_exist_on_server_before_submission(storage, database, stored_bytes):
+    name = "a" * 32 + ".pdf"
+    database.get.return_value = ProjectInitiationReport(project_id=10, storage_name=name, size_bytes=len(PDF))
+    if stored_bytes is not None:
+        directory = storage / "10"
+        directory.mkdir()
+        (directory / name).write_bytes(stored_bytes)
+    if stored_bytes == PDF:
+        service.assert_report_ready(database, 10)
+    else:
+        with pytest.raises(BusinessException):
+            service.assert_report_ready(database, 10)
+    database.get.assert_called_with(ProjectInitiationReport, 10, with_for_update=True, populate_existing=True)
+
+
+def test_project_import_stays_draft_until_report_is_uploaded(monkeypatch):
+    module = import_export_service
+    db = MagicMock()
+    manager = SimpleNamespace(id=7, employee_no="E7", department_id=1)
+    department = SimpleNamespace(id=1, status="active")
+    member = SimpleNamespace(id=8, employee_no="E8")
+    db.scalars.return_value.all.return_value = [member]
+    monkeypatch.setattr(module, "_required_lookup", lambda db, model, *args: manager if model is module.User else department)
+    monkeypatch.setattr(module, "get_role_codes", lambda *args: {"project_manager"})
+    monkeypatch.setattr(module, "has_global_project_access", lambda *args: False)
+    monkeypatch.setattr(module, "_validate_project_manager", MagicMock())
+    monkeypatch.setattr(module, "_validate_initial_project_members", MagicMock())
+    monkeypatch.setattr(module, "_add_initial_project_members", MagicMock())
+    monkeypatch.setattr(module, "get_department_manager", lambda *args: SimpleNamespace(id=9))
+    monkeypatch.setattr(module, "_generate_project_code", lambda *args: "P-IMPORT-REPORT")
+    notify = MagicMock()
+    monkeypatch.setattr(module, "create_notification", notify)
+    item = module._import_project(db, {
+        "name": "导入草稿", "manager_employee_no": "E7", "department_code": "D1", "member_employee_nos": "E8",
+        "budget_hours": 8, "planned_start": "2026-10-09", "planned_end": "2026-10-10",
+    }, USER)
+    assert item.approval_status == "draft" and item.approver_id is None
+    notify.assert_not_called()

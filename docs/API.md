@@ -1,5 +1,13 @@
 # V2.0 API 清单
 
+## 2026-10-09：项目计划日期变更
+
+- `PUT /api/v1/projects/{id}`：已审批项目禁止修改 `planned_start/planned_end`（提前、推迟均禁止）；兼容携带未变化日期的请求。待审批仍不可编辑，草稿和驳回修改后重送审保持原流程。
+- `POST /api/v1/projects/{id}/resource-requests`：增加可选 `requested_planned_start`，保留可选 `requested_planned_end`，格式均为 `YYYY-MM-DD`；省略或 NULL 表示该日期不变。允许只改一个或同时修改两个日期，不再要求逾期。仅已审批、未完成的项目可申请；与当前日期相同的字段被归一为 NULL，若没有任何实际资源变化则拒绝。
+- 延长原结束日期必须提交正数 `requested_hours`，仍为 0.5h 的整数倍；仅调整开始日期、提前结束日期或变更成员，可填 0h。结束不得早于生效后的开始日期，且必须覆盖已有非删除任务计划及有效预约。提交/批准各校验一次；新请求的原计划快照不一致时拒绝批准。
+- 资源申请响应和 GET 列表增加 `original_planned_start/requested_planned_start`；日期变更申请同时记录原起止日期，旧申请新增字段为 NULL。批准后才同时应用日期/预算/成员，驳回或撤回不变更项目。首页待办、通知和操作日志同步显示起止日期变化。
+- 权限不变：项目可管理人员发起，项目所属部门当前指定的部门主管审批；纯超级管理员不能代批。先迁移到 `20261009_0021` 再部署后端。详见 [完整规则](PROJECT_PLAN_CHANGES.md)。
+
 ## 2026-10-08：父任务审批
 
 - `POST /tasks`：无 `parent_id` 或为 NULL 时创建 `pending` 顶层任务并通知项目所属部门主管；有父任务时须其祖先已通过审批，创建 `not_required` 子任务。无法确定有效部门主管则不创建父任务，不自动放行。
@@ -18,7 +26,7 @@
 ## 2026-09-29 接口补充
 
 - `GET /api/v1/work-calendar/planned-hours?start_date=2026-09-01&end_date=2026-09-30&member_count=3`：登录鉴权，返回 `workdays`、`member_count`、`hours_per_day`（8）和 `planned_hours`，按系统工作日历计算默认计划工时，不修改数据库。
-- `POST /api/v1/projects/{id}/resource-requests`：可选字段 `requested_planned_end`（YYYY-MM-DD）；只要申请延期，`requested_hours` 就必须大于 0，否则拒绝。所有追加工时按 0.5h 校验，非延期的成员变更可填 0h，`reason` 必填。响应及列表包含 `original_planned_end` 与 `requested_planned_end`，批准才更新项目结束日期及预算。前端复用工作日历估算接口，仅计算原结束日次日至新结束日的新增区间，成员数使用本次增删后的有效成员并去重、含项目经理；默认值可手动调整。
+- `POST /api/v1/projects/{id}/resource-requests`：原先只支持结束日期延期，已于 10 月 9 日扩展为开始/结束日期调整，具体见本页顶部。延长结束日期时，前端复用工作日历估算接口，计算原结束日次日（如新开始更晚则从新开始日计）至新结束日的新增区间，人数使用本次增删后的有效成员并去重、含项目经理；默认值可手动调整，不重复计算原预算。
 
 资源申请两个 GET 列表同时返回 `add_members/remove_members`（每项为 `id/name/employee_no`），供审批展示；人员已停用或退出项目也保留名称解析，不从候选下拉框猜测姓名。资料不存在时返回明确占位，不删除该项影响人数统计。新增 `POST /projects/{id}/resource-requests/{request_id}/withdraw`，需要 `project:edit` 且申请人本人、申请状态为 `pending`，无需请求体。成功返回状态 `withdrawn`；审批/驳回接口会拒绝已撤回请求。
 - `GET /api/v1/executions` 及单条详情：项目负责人可读自己负责项目的成员记录；普通用户仍只读本人记录，全局角色维持原范围。`mine=true` 进一步收窄到本人。读权限不授予代写权限。
@@ -97,9 +105,9 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 
 | Method | Path | 权限 | 说明 |
 |---|---|---|---|
-| GET/POST | `/projects` | `project:view/edit` | GET 按全局角色、管理链条及本人负责/参与关系返回；POST 自动生成 `code`，创建者须为项目经理/职能主管/部门主管/超管并传至少一名 `member_ids` |
+| GET/POST | `/projects` | `project:view/edit` | GET 按全局角色、管理链条及本人负责/参与关系返回；POST 使用 multipart，必填 `payload`（ProjectCreate JSON 字符串）及 `file`（立项报告），自动生成 `code`；创建者须为项目经理/职能主管/部门主管/超管并传至少一名 `member_ids` |
 | GET | `/projects/approvals/pending` | 当前审批人 | 独立返回本人待审批项目，不扩大常规项目列表 |
-| POST | `/projects/{id}/submit` | 项目创建人 | 所有项目统一提交给项目所属部门当前配置的部门主管，不自动通过 |
+| POST | `/projects/{id}/submit` | 项目创建人 | 先核对立项报告元数据及实际文件；所有项目统一提交给项目所属部门当前配置的部门主管，不自动通过 |
 | GET/PUT/DELETE | `/projects/{id}` | `project:view/edit` | 详情/更新/草稿逻辑删除 |
 | POST | `/projects/{id}/complete` | 项目负责人/部门主管/超管 | 所有未取消任务完成且无待办依赖后，手动确认项目完成 |
 | POST | `/projects/{id}/approve` | `approver_id` 对应的部门主管 | 批准项目和初始工时额度 |
@@ -118,6 +126,8 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | GET/PUT | `/projects/{id}/evaluation` | `process_report:view` / `evaluation:edit` | 本项目负责人、部门主管或超管在项目完成后进行一次项目级评价 |
 
 项目创建必须传入 `department_id` 和大于 0 的 `budget_hours`；非全局角色的 `manager_id` 必须是当前创建人本人。项目编号不由客户端传入。所有项目统一由项目所属部门主管审批。追加工时、添加成员和移除成员统一使用项目资源申请，`requested_hours/add_member_ids/remove_member_ids` 至少一项有变化；成员不再包含投入比例。
+
+2026-10-09 起，新建项目必须将项目 JSON 放入 multipart 的 `payload` 字段，同时上传 `file`，不再接受原 JSON-only 请求。报告支持 DOC/DOCX、XLS/XLSX、PPT/PPTX、PDF，最大 20 MiB；无效文件使本次创建回滚。Excel 项目导入只创建草稿，补传报告后才能送审。既有附件查询、补传与下载接口见 [立项报告说明](PROJECT_INITIATION_REPORT.md)。
 
 ```json
 {
@@ -205,7 +215,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 
 点击共享看板人员姓名时，前端使用 `user_id`、`sort_order=desc` 单独查询该人员的全部预约，不携带当前看板日期或项目筛选，并通过 `page/page_size` 分页。后端人员范围为：项目经理的自己项目组、部门主管/超管全量、职能主管的本人及全部层级下属、普通成员本人；一旦人员可见，就返回其跨项目时间占用。
 
-项目和任务列表统一按权限范围过滤：部门主管/超管全量，职能主管为本人及全部下属相关数据，项目经理和项目成员为本人负责、参与或承担任务的数据；成员身份只读，项目负责人及全局角色可维护。执行记录默认只返回本人，超级管理员/部门主管可查看和维护全部。日程查看使用部门主管/超管全员、职能主管全部下属及本人负责项目成员、项目经理全系统项目有效成员、普通成员本人的人员关系范围。多角色范围取并集；项目经理日程范围扩大不赋予跨项目预约权，也不会公开其他人的待确认预约。
+项目和任务列表统一按权限范围过滤：部门主管/超管全量，职能主管为本人及全部下属相关数据，项目经理和项目成员为本人负责、参与或承担任务的数据；成员身份只读，项目负责人及全局角色可维护。执行记录默认只返回本人，超级管理员/部门主管可查看和维护全部。日程查看使用部门主管/超管全员、职能主管全部下属及本人负责项目成员、项目经理本人及系统角色含 `project_member` 的全部启用且未删除用户、普通成员本人的人员范围。项目经理查看不再依赖项目成员或负责人关系，目标用户兼任其他角色也可见；主动传入项目等筛选条件仍会缩小结果。多角色范围取并集；查看不赋予跨项目预约权，也不会公开其他人的待确认预约。
 
 时间冲突返回 `40901` 和 `data.conflicts`；其中 `conflict_type=project_booking|personal_time` 用于区分项目预约和个人安排。版本冲突返回 `40903` 和 `data.current_version`。
 

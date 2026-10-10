@@ -1,4 +1,4 @@
-"""2026-10-08 permission regressions. Source only; not run by the coding agent."""
+"""2026-10-08/09 permission regressions. Source only; not run by the coding agent."""
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -18,36 +18,73 @@ def sql(statement):
     return str(statement.compile(compile_kwargs={"literal_binds": True}))
 
 
-def test_manager_sees_other_projects_current_members_and_legacy_owners(monkeypatch):
+def test_manager_sees_system_members_without_any_project_relationship(monkeypatch):
     monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {"project_manager"})
     db = MagicMock()
-    db.scalars.side_effect = [result([2, 3]), result([4])]
+    db.scalars.return_value = result([2, 3, 4])
     assert visibility_service.visible_schedule_user_ids(db, SimpleNamespace(id=1)) == {1, 2, 3, 4}
-    query = sql(db.scalars.call_args_list[0].args[0])
-    assert "project_members.left_at IS NULL" in query
-    assert "projects.is_deleted IS false" in query
-    assert "projects.manager_id = 1" not in query
-    assert "approval_status" not in query and "projects.status" not in query
+    db.scalars.assert_called_once()
+    query = sql(db.scalars.call_args.args[0])
+    assert "roles.code = 'project_member'" in query
+    assert "user_roles.user_id = users.id" in query
+    assert "roles.id = user_roles.role_id" in query
+    assert "users.status = 'active'" in query
+    assert "users.is_deleted IS false" in query
+    assert "project_members" not in query and "projects" not in query
+    # No department restriction or single-role requirement: mixed-role users
+    # qualify by having a project_member assignment, regardless of other roles.
+    assert "GROUP BY" not in query and "HAVING" not in query
+    assert "users.department_id" not in query
 
 
-def test_manager_does_not_fall_back_to_all_users_when_no_project_members_exist(monkeypatch):
+def test_manager_does_not_fall_back_to_project_members_or_owners_without_member_role(monkeypatch):
     monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {"project_manager"})
     db = MagicMock()
     db.scalars.return_value.all.return_value = []
     assert visibility_service.visible_schedule_user_ids(db, SimpleNamespace(id=1)) == {1}
+    db.scalars.assert_called_once()
 
 
-def test_combined_manager_roles_union_members_and_subordinates(monkeypatch):
+def test_combined_manager_roles_union_system_members_and_subordinates(monkeypatch):
     monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {"project_manager", "functional_manager", "project_member"})
     monkeypatch.setattr(visibility_service, "descendant_user_ids", lambda *args: {8})
     db = MagicMock()
-    db.scalars.side_effect = [result([2]), result([3])]
+    db.scalars.return_value = result([2, 3])
     assert visibility_service.visible_schedule_user_ids(db, SimpleNamespace(id=1)) == {1, 2, 3, 8}
+
+
+def test_member_role_changes_are_read_on_each_calendar_request(monkeypatch):
+    monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {"project_manager"})
+    db = MagicMock()
+    db.scalars.side_effect = [result([2]), result([2, 3]), result([3])]
+    user = SimpleNamespace(id=1)
+    assert visibility_service.visible_schedule_user_ids(db, user) == {1, 2}
+    assert visibility_service.visible_schedule_user_ids(db, user) == {1, 2, 3}
+    assert visibility_service.visible_schedule_user_ids(db, user) == {1, 3}
+
+
+@pytest.mark.parametrize("role", ["super_admin", "department_manager"])
+def test_global_calendar_roles_keep_full_scope(monkeypatch, role):
+    monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {role, "project_manager"})
+    db = MagicMock()
+    assert visibility_service.visible_schedule_user_ids(db, SimpleNamespace(id=1)) is None
+    db.scalars.assert_not_called()
 
 
 def test_plain_member_still_only_sees_self(monkeypatch):
     monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {"project_member"})
     assert visibility_service.visible_schedule_user_ids(MagicMock(), SimpleNamespace(id=1)) == {1}
+
+
+def test_functional_manager_without_project_manager_keeps_existing_scope(monkeypatch):
+    monkeypatch.setattr(visibility_service, "get_role_codes", lambda *args: {"functional_manager"})
+    monkeypatch.setattr(visibility_service, "descendant_user_ids", lambda *args: {8})
+    db = MagicMock()
+    db.scalars.return_value = result([9])
+    assert visibility_service.visible_schedule_user_ids(db, SimpleNamespace(id=1)) == {1, 8, 9}
+    query = sql(db.scalars.call_args.args[0])
+    assert "project_members" in query and "projects.manager_id = 1" in query
+    assert "roles.code" not in query
 
 
 def test_wider_calendar_scope_does_not_allow_booking_for_other_project(monkeypatch):
@@ -60,7 +97,10 @@ def test_wider_calendar_scope_does_not_allow_booking_for_other_project(monkeypat
     assert error.value.status_code == 403
 
 
-@pytest.mark.parametrize("state,allowed", [("pending", False), ("changed", False), ("confirmed", True)])
+@pytest.mark.parametrize("state,allowed", [
+    ("pending", False), ("changed", False),
+    ("confirmed", True), ("running", True), ("completed", True),
+])
 def test_other_managers_unconfirmed_bookings_remain_private(monkeypatch, state, allowed):
     monkeypatch.setattr(schedule_service, "synchronize_schedule_statuses", lambda *args: {})
     monkeypatch.setattr(schedule_service, "visible_schedule_user_ids", lambda *args: {1, 2})
@@ -72,6 +112,15 @@ def test_other_managers_unconfirmed_bookings_remain_private(monkeypatch, state, 
         with pytest.raises(BusinessException) as error:
             schedule_service.schedule_detail(MagicMock(), 3, SimpleNamespace(id=1))
         assert error.value.status_code == 403
+
+
+def test_confirmed_booking_outside_role_scope_is_not_public(monkeypatch):
+    monkeypatch.setattr(schedule_service, "synchronize_schedule_statuses", lambda *args: {})
+    monkeypatch.setattr(schedule_service, "visible_schedule_user_ids", lambda *args: {1})
+    monkeypatch.setattr(schedule_service.schedule_repository, "get", lambda *args: SimpleNamespace(user_id=2, created_by=9, status="confirmed"))
+    with pytest.raises(BusinessException) as error:
+        schedule_service.schedule_detail(MagicMock(), 3, SimpleNamespace(id=1))
+    assert error.value.status_code == 403
 
 
 @pytest.mark.parametrize("roles,assigned,allowed", [

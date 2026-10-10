@@ -227,6 +227,8 @@ def _pending_items(db: Session, user: User, now: datetime) -> list[dict]:
         })
     for request in project_service.list_pending_resource_requests(db, user):
         changes = []
+        if request.get("requested_planned_start"):
+            changes.append(f"计划开始日期 {request.get('original_planned_start')} → {request['requested_planned_start']}")
         if request.get("requested_planned_end"):
             changes.append(f"计划结束日期 {request.get('original_planned_end')} → {request['requested_planned_end']}")
         if request.get("requested_hours"):

@@ -155,6 +155,19 @@ def test_historical_zero_hour_extension_still_shows_old_new_dates_and_reason(mon
     assert "延期交付" in item["content"]
 
 
+def test_resource_approval_shows_start_and_end_date_changes(monkeypatch):
+    stub_pending_sources(monkeypatch, resources=[{
+        "id": 12, "project_id": 2, "project_name": "项目", "requester_name": "经理",
+        "requested_hours": 0, "add_member_ids": [], "remove_member_ids": [],
+        "original_planned_start": "2026-09-01", "requested_planned_start": "2026-09-02",
+        "original_planned_end": "2026-09-30", "requested_planned_end": "2026-09-29",
+        "reason": "调整周期", "created_at": "2026-09-01T09:00:00",
+    }])
+    item = dashboard_service._pending_items(object(), SimpleNamespace(id=9), datetime(2026, 9, 1, 12))[0]
+    assert "计划开始日期 2026-09-01 → 2026-09-02" in item["content"]
+    assert "计划结束日期 2026-09-30 → 2026-09-29" in item["content"]
+
+
 def test_resource_approval_content_includes_member_counts_names_and_employee_numbers(monkeypatch):
     stub_pending_sources(monkeypatch, resources=[{
         "id": 12, "project_id": 2, "project_name": "交付项目", "requester_name": "经理",

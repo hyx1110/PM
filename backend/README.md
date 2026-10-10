@@ -4,6 +4,7 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 
 ## 主要模块
 
+- `alembic/versions/20261009_0021_project_plan_changes.py`：资源申请新增原开始日期和申请开始日期，支持未逾期项目申请起止日期调整；先备份并迁移再部署后端。详见 [项目计划日期调整说明](../docs/PROJECT_PLAN_CHANGES.md)。
 - `alembic/versions/20260929_0018_project_extension.py`：在资源申请增加原结束日期与申请结束日期；项目延期批准后才生效。需维护者先执行迁移再部署新版后端，详见 [9 月 29 日修复与验收说明](../docs/BUGFIX_20260929.md)。
 - `GET /api/v1/work-calendar/planned-hours`：登录用户可读取包含节假日/调休规则的默认计划工时；`execution_service.py` 支持本人/本人负责项目的执行记录读取，并强制已完成工时必填和半小时校验。
 - `app/services/overtime_service.py` 与 `app/api/v1/overtime.py`：非工作时间加班申请、项目经理/部门主管审批、撤回和实际工时凭证；普通成员由项目经理审批，项目经理为自己负责项目申请时由项目所属部门主管审批。
@@ -17,7 +18,7 @@ FastAPI 后端沿用 `Router → Service → Repository → Model` 分层，并�
 - `app/services/import_export_service.py`：标准模板、逐行导入和业务报表导出。
 - `app/tasks`：风险扫描、临期提醒、外部通知和预约状态推进的 Celery 任务。
 - `alembic/versions/20260910_0002_v2_features.py`：V1.0 到 V2.0 增量迁移。
-- `app/services/project_service.py`：所有项目提交所属部门主管审批，工时/成员/逾期延期通过资源申请审批；延期追加工时必填，资源申请可由本人在待审批时撤回；基本信息编辑不绕过资源审批。资源 GET 列表同时返回人数与成员姓名/工号。
+- `app/services/project_service.py`：所有项目提交所属部门主管审批；已审批项目的起止计划日期、工时和成员变更通过资源申请审批，不要求项目逾期；延长结束日期需追加正数工时。资源申请可由本人在待审批时撤回，普通编辑不可绕过日期审批。资源 GET 列表返回原/新计划日期、人数与成员姓名/工号。
 - `app/services/business_text_service.py`：预约通知与操作日志共用的业务名称解析；新通知/日志保存事件时可读信息，历史数据只读补全，不重发通知。0930 变更无新增迁移，见 [修复说明](../docs/BUGFIX_20260930.md)。
 - `app/services/work_calendar_service.py`：工作日、法定节假日、上午/下午时段与自动工时校验。
 - `alembic/versions/20260911_0004_project_approval_and_work_calendar.py`：项目审批、额度、工作日历及 L3/L4 增量迁移。

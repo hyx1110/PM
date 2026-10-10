@@ -27,7 +27,17 @@ MEDIA_TYPES = {
     ".pdf": "application/pdf",
     ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
+OOXML_PARTS = {
+    ".docx": "word/document.xml",
+    ".xlsx": "xl/workbook.xml",
+    ".pptx": "ppt/presentation.xml",
+}
+FORMAT_HINT = "Word（DOC/DOCX）、Excel（XLS/XLSX）、PPT（PPT/PPTX）或 PDF"
 
 
 def _storage_root() -> Path:
@@ -44,7 +54,7 @@ def _project_directory(project_id: int) -> Path:
 
 
 def _stored_path(project_id: int, storage_name: str) -> Path:
-    if not re.fullmatch(r"[0-9a-f]{32}\.(pdf|doc|docx)", storage_name):
+    if not re.fullmatch(r"[0-9a-f]{32}\.[a-z0-9]+", storage_name) or Path(storage_name).suffix not in MEDIA_TYPES:
         raise bad_request("项目附件存储信息无效，请联系管理员")
     directory = _project_directory(project_id)
     path = (directory / storage_name).resolve()
@@ -60,7 +70,7 @@ def _validated_filename(filename: str | None) -> tuple[str, str]:
         raise bad_request("附件文件名无效，文件名不能超过 255 个字符或包含控制字符")
     extension = Path(name).suffix.lower()
     if extension not in MEDIA_TYPES:
-        raise bad_request("立项报告仅支持 PDF、DOC、DOCX 文件")
+        raise bad_request(f"立项报告仅支持 {FORMAT_HINT} 文件")
     return name, extension
 
 
@@ -70,18 +80,20 @@ def _validate_document(path: Path, extension: str) -> None:
     valid = False
     if extension == ".pdf":
         valid = signature.startswith(b"%PDF-")
-    elif extension == ".doc":
+    elif extension in {".doc", ".xls", ".ppt"}:
+        # Legacy Office formats share the OLE container signature. This is a
+        # basic format check, not macro detection or a malware scanner.
         valid = signature == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
-    elif extension == ".docx":
+    elif extension in OOXML_PARTS:
         try:
             with ZipFile(path) as archive:
                 entries = set(archive.namelist())
-                valid = {"[Content_Types].xml", "word/document.xml"}.issubset(entries)
+                valid = {"[Content_Types].xml", OOXML_PARTS[extension]}.issubset(entries)
                 valid = valid and not any(name.lower().endswith("vbaproject.bin") for name in entries)
         except BadZipFile:
             valid = False
     if not valid:
-        raise bad_request("文件内容与报告格式不匹配，请上传有效的 PDF 或 Word 文档（DOCX 不允许含宏）")
+        raise bad_request(f"文件内容与报告格式不匹配，请上传有效的 {FORMAT_HINT} 文件（DOCX/XLSX/PPTX 不允许含 VBA 宏）")
 
 
 def report_metadata(report: ProjectInitiationReport | None) -> dict | None:
@@ -100,6 +112,19 @@ def report_metadata(report: ProjectInitiationReport | None) -> dict | None:
 def get_report(db: Session, project_id: int, user: User) -> dict | None:
     project_service.assert_project_visible(db, project_id, user)
     return report_metadata(db.get(ProjectInitiationReport, project_id))
+
+
+def assert_report_ready(db: Session, project_id: int) -> None:
+    """Called under the project lock before a draft can enter approval."""
+    report = db.get(ProjectInitiationReport, project_id, with_for_update=True, populate_existing=True)
+    if report is None:
+        raise bad_request("项目立项报告为必传项，请先编辑项目上传报告，再提交审批")
+    path = _stored_path(project_id, report.storage_name)
+    try:
+        if not path.is_file() or report.size_bytes <= 0 or path.stat().st_size != report.size_bytes:
+            raise bad_request("立项报告文件缺失或大小异常，请重新上传有效报告后提交审批")
+    except OSError as exc:
+        raise BusinessException(503, 50321, "无法读取立项报告，请联系管理员检查附件存储") from exc
 
 
 def _assert_report_editable(db: Session, project_id: int, user: User) -> Project:
@@ -124,7 +149,7 @@ def _cleanup_failed_file(path: Path | None) -> None:
             logger.exception("Failed to clean uncommitted project report: %s", path)
 
 
-def upload_report(db: Session, project_id: int, upload: UploadFile, user: User) -> dict:
+def upload_report(db: Session, project_id: int, upload: UploadFile, user: User, *, creating_project: bool = False) -> dict:
     temporary_path: Path | None = None
     saved_path: Path | None = None
     committed = False
@@ -182,7 +207,8 @@ def upload_report(db: Session, project_id: int, upload: UploadFile, user: User) 
     except OSError as exc:
         db.rollback()
         logger.exception("Unable to save initiation report for project %s", project_id)
-        raise BusinessException(503, 50321, "立项报告保存失败，请联系管理员检查服务器附件目录权限及磁盘空间；项目草稿已保留") from exc
+        outcome = "本次项目创建已回滚，请保留表单和文件重试" if creating_project else "项目草稿已保留，原报告不变，请重新上传"
+        raise BusinessException(503, 50321, f"立项报告保存失败，请联系管理员检查服务器附件目录权限及磁盘空间；{outcome}") from exc
     except Exception:
         db.rollback()
         raise

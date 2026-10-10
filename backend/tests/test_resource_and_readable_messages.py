@@ -15,11 +15,10 @@ from app.services import project_service, notification_service, operation_log_se
 from app.services.business_text_service import booking_contexts, readable_booking_notification
 
 
-@pytest.mark.parametrize("hours", [None, "0", "-0.5", "0.3", "NaN", "Infinity"])
-def test_extension_rejects_missing_or_invalid_hours(hours):
-    values = {} if hours is None else {"requested_hours": hours}
+@pytest.mark.parametrize("hours", [None, "-0.5", "0.3", "NaN", "Infinity"])
+def test_resource_rejects_null_or_invalid_hours(hours):
     with pytest.raises(ValidationError):
-        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="项目延期", **values)
+        ProjectResourceRequestCreate(requested_planned_end="2026-10-09", reason="调整计划", requested_hours=hours)
 
 
 def test_extension_positive_half_hours_and_member_only_request_are_valid():

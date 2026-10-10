@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { confirmAction, requestActionReason } from '@/utils/confirm'
@@ -10,6 +10,7 @@ import {
   deleteProject,
   getAllProjects,
   getProjects,
+  getProjectInitiationReport,
   rejectProject,
   submitProject,
   updateProject,
@@ -48,6 +49,7 @@ const editingProject = ref<Project>()
 const saving = ref(false)
 const reportFile = ref<File | null>(null)
 const reportField = ref<InstanceType<typeof ProjectReportField>>()
+const reportRequired = computed(() => !editingProject.value || ['draft', 'rejected'].includes(editingProject.value.approval_status))
 const formRef = ref<FormInstance>()
 const privileged = computed(() => (userStore.profile?.roles || []).some(role => ['super_admin', 'department_manager'].includes(role)))
 const canCreateProject = computed(() => userStore.hasPermission('project:edit') && (privileged.value || userStore.profile?.roles.includes('project_manager') || userStore.profile?.roles.includes('functional_manager')))
@@ -248,42 +250,49 @@ async function save(submitAfterSave = false) {
   let stage: 'project' | 'report' | 'submit' | 'finished' = 'project'
   try {
     if (!(await formRef.value?.validate().catch(() => false))) return
+    if (reportRequired.value && !reportField.value?.validateRequired()) return
     if (!editingId.value && !hoursManual.value && (hoursLoading.value || !hoursEstimate.value)) return ElMessage.warning('请等待默认工时计算完成，或手动填写工时')
     if (!Number.isFinite(form.budget_hours) || form.budget_hours <= 0) return ElMessage.warning('项目总工时必须大于 0')
-    if (editingProject.value?.approval_status === 'approved' && form.planned_end > editingProject.value.planned_end) return ElMessage.warning('项目延期请通过项目资源申请提交部门主管审批')
+    if (editingProject.value?.approval_status === 'approved' && (form.planned_start !== editingProject.value.planned_start || form.planned_end !== editingProject.value.planned_end)) return ElMessage.warning('计划开始和结束日期请通过项目资源申请提交部门主管审批')
     if (form.planned_end < form.planned_start) return ElMessage.warning('计划结束日期不能早于开始日期')
     if (!(await confirmAction(
       `项目：${form.name}\n计划日期：${form.planned_start} 至 ${form.planned_end}\n项目工时：${form.budget_hours}h`
       + (reportFile.value ? `\n立项报告：${reportFile.value.name}（将上传到服务器）` : '')
-      + (submitAfterSave ? '\n确认保存并提交部门主管审批？' : '\n确认保存项目及已选附件？'),
+      + (submitAfterSave ? '\n确认保存项目及立项报告，并提交部门主管审批？' : reportRequired.value ? '\n确认保存项目及立项报告？' : '\n确认保存项目基本信息？立项报告保持不变。'),
       submitAfterSave ? '提交项目审批' : '保存项目', submitAfterSave ? '确认提交审批' : '确认保存',
     ))) return
     let saved: Project
     if (editingId.value) {
       const { member_ids: _memberIds, ...payload } = form
       if (editingProject.value?.approval_status === 'approved') {
-        const { manager_id: _managerId, department_id: _departmentId, budget_hours: _budgetHours, ...editable } = payload
+        const { manager_id: _managerId, department_id: _departmentId, budget_hours: _budgetHours, planned_start: _plannedStart, planned_end: _plannedEnd, ...editable } = payload
         saved = await updateProject(editingId.value, editable)
       } else {
         saved = await updateProject(editingId.value, payload)
       }
     } else {
-      saved = await createProject(form)
+      if (!reportFile.value) return ElMessage.warning('创建项目必须上传项目立项报告')
+      saved = await createProject(form, reportFile.value)
+      reportFile.value = null
     }
-    // Keep the saved ID on upload/submit failure: retry updates the same draft.
+    // New projects and reports are saved together. Once an ID is returned,
+    // retries update the same draft instead of creating another project.
     editingId.value = saved.id
     editingProject.value = saved
     if (reportFile.value) {
       stage = 'report'
       await uploadProjectInitiationReport(saved.id, reportFile.value)
       reportFile.value = null
+    }
+    if (reportRequired.value) {
+      await nextTick() // Let the report component receive a newly created ID.
       await reportField.value?.refresh()
     }
     if (submitAfterSave && saved.approval_status !== 'approved') {
       stage = 'submit'
       await submitProject(saved.id)
-      ElMessage.success('项目及已选附件已保存，已提交部门主管审批')
-    } else ElMessage.success('项目及已选附件已保存')
+      ElMessage.success('项目及立项报告已保存，已提交部门主管审批')
+    } else ElMessage.success(reportRequired.value ? '项目及立项报告已保存' : '项目基本信息已保存')
     stage = 'finished'
     dialogVisible.value = false
   } catch {
@@ -300,6 +309,15 @@ async function refreshAfterEdit() {
 }
 
 async function submitExisting(row: Project) {
+  try {
+    if (!(await getProjectInitiationReport(row.id))) {
+      ElMessage.warning('请先编辑项目并上传立项报告，再提交审批')
+      openEdit(row)
+      return
+    }
+  } catch {
+    return // The request interceptor displays the error.
+  }
   if (!(await confirmAction(`确认提交项目“${row.name}”给部门主管审批？`, '提交项目审批'))) return
   await submitProject(row.id)
   ElMessage.success('项目已提交部门主管审批')
@@ -468,8 +486,8 @@ onMounted(async () => {
               style="width:100%"
             />
           </el-form-item>
-          <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
-          <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
+          <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" :disabled="editingProject?.approval_status==='approved'" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
+          <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" :disabled="editingProject?.approval_status==='approved'" value-format="YYYY-MM-DD" type="date" style="width:100%"/></el-form-item>
           <el-form-item label="所属部门" prop="department_id">
             <el-select v-model="form.department_id" :disabled="editingProject?.approval_status==='approved'" style="width:100%">
               <el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"/>
@@ -480,11 +498,11 @@ onMounted(async () => {
           </el-form-item>
         </div>
         <PlannedHoursHint v-if="!editingId" :estimate="hoursEstimate" :loading="hoursLoading" :manual="hoursManual" :error="hoursError" includes-manager @reset="useDefaultHours"/>
-        <div v-if="editingProject?.approval_status==='approved'" class="field-hint">已审批项目的延期、成员和工时变更，请在项目详情的“项目资源申请”中提交部门主管审批。</div>
+        <div v-if="editingProject?.approval_status==='approved'" class="field-hint">计划开始、结束日期已锁定。日期、成员和工时变更，请在项目详情的“项目资源申请”中提交部门主管审批，无需等到项目逾期。</div>
         <div class="field-hint">项目实际起止日期由任务执行记录自动汇总，无需手工填写。</div>
         <el-form-item label="项目描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>
-        <el-form-item label="项目立项报告">
-          <ProjectReportField ref="reportField" v-model="reportFile" :project-id="editingId" :editable="!editingProject || ['draft', 'rejected'].includes(editingProject.approval_status)" :disabled="saving"/>
+        <el-form-item label="项目立项报告" :required="reportRequired">
+          <ProjectReportField ref="reportField" v-model="reportFile" :project-id="editingId" :editable="reportRequired" :required="reportRequired" :disabled="saving"/>
         </el-form-item>
         <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2"/></el-form-item>
       </el-form>
