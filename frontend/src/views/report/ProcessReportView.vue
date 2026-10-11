@@ -8,6 +8,7 @@ import { getAllProjects } from '@/api/project'
 import { getDepartmentOptions, getOrganizationTree } from '@/api/organization'
 import { getUserOptions } from '@/api/user'
 import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
+import DateRangeFilter from '@/components/common/DateRangeFilter.vue'
 import type { DepartmentOption, OrganizationNode } from '@/types/organization'
 import type { Project } from '@/types/project'
 import type { EvaluationPayload, ProcessReportItem } from '@/types/report'
@@ -103,6 +104,8 @@ async function loadProcess() {
   try {
     const result = await getProcessReport({
       ...query,
+      start_date: query.start_date || undefined,
+      end_date: query.end_date || undefined,
       personnel_scope: filterScopes.value.length ? filterScopes.value.join(',') : undefined,
     })
     items.value = result.items
@@ -160,24 +163,24 @@ onMounted(async () => {
 <template>
   <div class="page-shell">
     <header class="page-header">
-      <div><h1 class="page-title">项目过程报表</h1><p class="page-subtitle">按当前账号可见项目展示任务过程数据；项目完成后由本项目经理、部门主管或超级管理员进行一次项目级评价。</p></div>
+      <div><h1 class="page-title">项目过程报表</h1></div>
     </header>
     <section class="surface report-card">
       <div class="report-filter">
         <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select>
-        <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 项目成员（可多选）" />
-        <el-date-picker v-model="query.start_date" type="date" value-format="YYYY-MM-DD" placeholder="开始日期"/>
-        <el-date-picker v-model="query.end_date" type="date" value-format="YYYY-MM-DD" placeholder="结束日期"/>
+        <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="项目成员" />
+        <DateRangeFilter v-model:start-date="query.start_date" v-model:end-date="query.end_date" @change="query.page=1" />
         <el-button @click="query.page=1;loadProcess()">查询</el-button>
       </div>
-      <el-table v-loading="loading" :data="visibleReportRows" stripe :span-method="spanMethod" row-key="task_id" table-layout="fixed">
+      <el-table v-loading="loading" :data="visibleReportRows" stripe :span-method="spanMethod" row-key="task_id" table-layout="fixed" :header-cell-style="{ textAlign: 'center' }" :cell-style="{ textAlign: 'center' }">
         <el-table-column prop="project_name" label="项目名称" fixed min-width="145" align="center" show-overflow-tooltip><template #default="{row}"><strong class="project-name">{{row.project_name}}</strong></template></el-table-column>
         <el-table-column prop="task_name" label="任务名称" fixed min-width="190">
           <template #default="{row}">
-            <div class="task-cell" :style="{paddingLeft:`${row.treeLevel*22}px`}">
-              <button v-if="row.hasChildren" class="tree-toggle" :title="expandedTaskIds.has(row.task_id)?'折叠子任务':'展开子任务'" @click="toggleTask(row)"><el-icon><ArrowDown v-if="expandedTaskIds.has(row.task_id)"/><ArrowRight v-else/></el-icon></button>
-              <span v-else class="tree-spacer"></span>
-              <span :title="row.task_path">{{row.task_name}}</span>
+            <div class="task-cell" :style="{paddingInline:`min(${row.treeLevel*12}px, 16%)`}">
+              <button v-if="row.hasChildren" class="tree-toggle" :title="expandedTaskIds.has(row.task_id)?'折叠子任务':'展开子任务'" :aria-expanded="expandedTaskIds.has(row.task_id)" @click="toggleTask(row)"><el-icon><ArrowDown v-if="expandedTaskIds.has(row.task_id)"/><ArrowRight v-else/></el-icon></button>
+              <span v-else class="tree-spacer" aria-hidden="true"></span>
+              <span class="task-name" :title="row.task_path || row.task_name">{{row.task_name}}</span>
+              <span class="tree-spacer" aria-hidden="true"></span>
             </div>
           </template>
         </el-table-column>
@@ -205,6 +208,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.report-card{padding:18px;overflow:hidden}.report-filter{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 18px}
-.project-name{display:block;overflow:hidden;color:#334155;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.task-cell{display:flex;min-width:0;align-items:center;gap:7px}.task-cell>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tree-toggle{display:grid;width:24px;height:24px;flex:0 0 24px;place-items:center;border:0;border-radius:7px;background:transparent;color:#718096;cursor:pointer}.tree-toggle:hover{background:#edf3f8;color:#315f8e}.tree-spacer{width:24px;flex:0 0 24px}
+.report-card{padding:18px;overflow:hidden}.report-filter{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0 0 18px}
+.project-name{display:block;overflow:hidden;color:#334155;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
+/* Match task management: balanced toggle slots and capped, symmetric nesting
+   space keep each task name centered beneath the column header. */
+.task-cell{display:grid;width:100%;min-width:0;grid-template-columns:24px minmax(0,1fr) 24px;align-items:center;gap:7px}
+.task-name{display:block;width:100%;min-width:0;overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap}
+.tree-toggle{display:grid;width:24px;height:24px;place-items:center;border:0;border-radius:7px;background:transparent;color:#718096;cursor:pointer}.tree-toggle:hover{background:#edf3f8;color:#315f8e}.tree-toggle:focus-visible{outline:2px solid #527fa6;outline-offset:-2px}.tree-spacer{width:24px}
 </style>

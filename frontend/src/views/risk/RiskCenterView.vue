@@ -47,7 +47,7 @@ onMounted(async () => { const [p, u] = await Promise.all([getProjects({ page: 1,
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">风险中心</h1><p class="page-subtitle">集中发现人力冲突、负载超限、任务/项目延期和长期未更新事项。</p></div><el-button v-if="userStore.hasPermission('risk:handle')" type="primary" :loading="syncing" @click="scan">立即扫描</el-button></header>
+    <header class="page-header"><div><h1 class="page-title">风险中心</h1></div><el-button v-if="userStore.hasPermission('risk:handle')" type="primary" :loading="syncing" @click="scan">立即扫描</el-button></header>
     <section class="risk-metrics">
       <article class="surface metric"><span>风险总数</span><strong>{{ stats.total }}</strong></article>
       <article class="surface metric open"><span>未关闭</span><strong>{{ stats.open }}</strong></article>

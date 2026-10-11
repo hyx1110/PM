@@ -115,7 +115,10 @@ const batchForm = reactive({
   end_clock: '09:30',
   remark: '',
 })
-const cellWidth = 46
+const personColumnWidth = 170
+const minimumCellWidth = 46
+const boardScrollRef = ref<HTMLDivElement | null>(null)
+const boardViewportWidth = ref(0)
 const slots = [
   '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
   '12:00', '12:30', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30',
@@ -175,6 +178,13 @@ const days = computed(() =>
     ? [dayjs(anchorDate.value).format('YYYY-MM-DD')]
     : weekDays.value,
 )
+// Fill the viewport after the fixed personnel column without squeezing the
+// half-hour slots. Header ticks, booking bars and drop targets share this scale.
+const cellWidth = computed(() => Math.max(
+  minimumCellWidth,
+  (boardViewportWidth.value - personColumnWidth) / Math.max(days.value.length * slots.length, 1),
+))
+const boardContentWidth = computed(() => personColumnWidth + days.value.length * slots.length * cellWidth.value)
 const monthDays = computed(() => {
   const first = dayjs(anchorDate.value).startOf('month')
   const start = first.subtract((first.day() + 6) % 7, 'day')
@@ -969,6 +979,22 @@ async function saveBatch() {
   }
 }
 
+watch(boardScrollRef, (element, _previous, onCleanup) => {
+  boardViewportWidth.value = element?.clientWidth || 0
+  if (!element) return
+
+  const measure = () => { boardViewportWidth.value = element.clientWidth }
+  const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure)
+  observer?.observe(element)
+  window.addEventListener('resize', measure)
+  // The timeline is removed in month view; rebind when day/week view returns.
+  // Vue also runs this cleanup when navigating away from the board.
+  onCleanup(() => {
+    observer?.disconnect()
+    window.removeEventListener('resize', measure)
+  })
+}, { flush: 'post' })
+
 watch(
   () => batchForm.session,
   (session) => {
@@ -1003,7 +1029,6 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">任务共享看板</h1>
-        <p class="page-subtitle">每个人都可安排自己的培训、会议、休假、外出或其他时间；个人占用时段不可预约。项目负责人预约本人项目工时自动确认，预约他人仍由被预约人审批。</p>
       </div>
       <div class="header-actions">
         <el-button v-if="userStore.profile" @click="openPersonSchedules({userId:userStore.profile.id,userName:'我'})">我的项目预约</el-button>
@@ -1014,7 +1039,7 @@ onMounted(async () => {
     <section class="surface board-tools">
       <div class="filters">
         <el-select v-model="filter.project_id" clearable filterable placeholder="项目" style="width:190px"><el-option v-for="item in filterProjects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-        <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 人员（可多选）" />
+      <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="人员" />
         <el-button @click="applyFilters">查询</el-button>
       </div>
       <div class="date-nav">
@@ -1027,9 +1052,14 @@ onMounted(async () => {
     <section class="surface board-card" v-loading="loading">
       <div class="board-caption">
         <strong>{{ dateTitle }}</strong>
-        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>未通过预约（灰色）</span><span><i class="legend-accepted"></i>已接受预约（按项目配色）</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span><span class="drag-tip">⋮⋮ 按住预约条中间拖动改期</span></span>
+        <span class="time-legend"><span><i class="legend-work"></i>可用工作时间</span><span><i class="legend-pending"></i>未通过预约（灰色）</span><span><i class="legend-accepted"></i>已接受预约（按项目配色）</span><span><i class="legend-off"></i>午休/非工作时间</span><span><i class="legend-holiday"></i>法定节假日</span><span><i class="legend-personal"></i>个人安排</span></span>
       </div>
-      <div v-if="viewMode!=='month'" class="board-scroll">
+      <div
+        v-if="viewMode!=='month'"
+        ref="boardScrollRef"
+        class="board-scroll"
+        :style="{ '--schedule-person-width': `${personColumnWidth}px`, '--schedule-board-width': `${boardContentWidth}px` }"
+      >
         <div class="sticky-header">
           <div class="person-head">人员</div>
           <ScheduleTimelineHeader :days="days" :slots="slots" :cell-width="cellWidth" :day-meta="timelineDayMeta"/>
@@ -1180,10 +1210,10 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.header-actions,.filters,.date-nav{display:flex;align-items:center;gap:10px}.board-tools{display:flex;align-items:center;justify-content:space-between;padding:14px 16px}.board-card{overflow:hidden}.board-caption{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #e9edf1;color:#657083;font-size:12px}.time-legend,.time-legend>span{display:flex;align-items:center}.time-legend{gap:16px}.time-legend>span{gap:5px}.time-legend i{display:block;width:15px;height:10px;border:1px solid #dfe4e9;border-radius:3px}.legend-work{background:#fff}.legend-off{background:#e9edf1}.legend-holiday{border-color:#f1cccc!important;background:#fde8e8}.legend-personal{border-color:#cfc2e2!important;background:#eee7f7}.board-scroll{max-height:calc(100vh - 290px);overflow:auto}.sticky-header{position:sticky;top:0;z-index:10;display:flex;width:max-content;min-width:100%;box-shadow:0 2px 6px rgba(39,52,70,.06)}.person-head{position:sticky;left:0;z-index:12;display:grid;width:170px;flex:0 0 170px;place-items:center;border-right:1px solid #e2e6eb;background:#fafbfc;color:#7b8595;font-size:11px}.month-grid{display:grid;grid-template-columns:repeat(7,1fr);max-height:calc(100vh - 290px);overflow:auto}.weekday{position:sticky;top:0;z-index:4;border-right:1px solid #edf0f3;border-bottom:1px solid #e5e9ed;background:#fafbfc;padding:9px;text-align:center;color:#7c8796;font-size:11px}.month-day{min-height:125px;border-right:1px solid #edf0f3;border-bottom:1px solid #edf0f3;padding:7px;background:#fff}.month-day.outside,.month-day.weekend{background:#f2f4f6;color:#9da6b1}.month-day.holiday{background:#fff0f0;color:#a75b5b}.month-day.adjusted-workday{box-shadow:inset 0 3px #79ad8d}.month-day.today .day-number{background:#3d6c98;color:#fff}.month-day-head{display:flex;align-items:center;justify-content:space-between;gap:6px}.month-day-head small{overflow:hidden;color:inherit;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.day-number{display:grid;width:23px;height:23px;flex:0 0 23px;place-items:center;border-radius:7px;font-size:11px}.month-booking{display:block;width:100%;overflow:hidden;margin-top:4px;border:0;border-radius:5px;background:#e5edf5;padding:4px 5px;text-align:left;color:#486987;font-size:9px;text-overflow:ellipsis;white-space:nowrap;cursor:grab}.month-booking b{font-weight:650}.month-personal{cursor:pointer}.month-personal.personal-training{background:#eee7f7;color:#694f85}.month-personal.personal-meeting{background:#f7edd9;color:#806238}.month-personal.personal-leave{background:#f9e2e2;color:#985353}.month-personal.personal-other{background:#e9edf1;color:#596573}.month-day>small{display:block;margin-top:4px;color:#8d98a6;font-size:9px}.my-time-header{display:flex;width:100%;align-items:center;justify-content:space-between;gap:18px}.my-time-header>div{display:flex;min-width:0;flex-direction:column}.my-time-header strong{color:#344256;font-size:15px}.my-time-header small{margin-top:4px;color:#8d98a6;font-size:10px}.my-time-filter{display:flex;justify-content:flex-end;margin-bottom:14px}.person-overview{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;border-radius:12px;background:#f6f8fa;padding:13px 15px}.person-summary{display:flex;min-width:0;align-items:center;gap:11px}.overview-avatar{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:11px;background:#dde8f2;color:#315f8e;font-size:14px;font-weight:700}.person-summary>div{display:flex;min-width:0;flex-direction:column}.person-summary strong{color:#344256;font-size:13px}.person-summary small{margin-top:4px;color:#8d98a6;font-size:10px}.person-schedule-table{width:100%}.time-range{display:flex;flex-direction:column}.time-range strong{color:#435166;font-size:11px}.time-range span{margin-top:3px;color:#8190a2;font-size:10px}.person-pagination{display:flex;justify-content:flex-end;padding-top:16px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.header-actions,.filters,.date-nav{display:flex;align-items:center;gap:10px}.board-tools{display:flex;align-items:center;justify-content:space-between;padding:14px 16px}.board-card{min-width:0;overflow:hidden}.board-caption{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid #e9edf1;color:#657083;font-size:12px}.time-legend,.time-legend>span{display:flex;align-items:center}.time-legend{gap:16px}.time-legend>span{gap:5px}.time-legend i{display:block;width:15px;height:10px;border:1px solid #dfe4e9;border-radius:3px}.legend-work{background:#fff}.legend-off{background:#e9edf1}.legend-holiday{border-color:#f1cccc!important;background:#fde8e8}.legend-personal{border-color:#cfc2e2!important;background:#eee7f7}.board-scroll{max-height:calc(100vh - 290px);overflow:auto}.sticky-header{position:sticky;top:0;z-index:10;display:flex;width:var(--schedule-board-width);min-width:100%;box-shadow:0 2px 6px rgba(39,52,70,.06)}.person-head{position:sticky;left:0;z-index:12;display:grid;width:var(--schedule-person-width,170px);flex:0 0 var(--schedule-person-width,170px);place-items:center;border-right:1px solid #e2e6eb;background:#fafbfc;color:#7b8595;font-size:11px}.month-grid{display:grid;grid-template-columns:repeat(7,1fr);max-height:calc(100vh - 290px);overflow:auto}.weekday{position:sticky;top:0;z-index:4;border-right:1px solid #edf0f3;border-bottom:1px solid #e5e9ed;background:#fafbfc;padding:9px;text-align:center;color:#7c8796;font-size:11px}.month-day{min-height:125px;border-right:1px solid #edf0f3;border-bottom:1px solid #edf0f3;padding:7px;background:#fff}.month-day.outside,.month-day.weekend{background:#f2f4f6;color:#9da6b1}.month-day.holiday{background:#fff0f0;color:#a75b5b}.month-day.adjusted-workday{box-shadow:inset 0 3px #79ad8d}.month-day.today .day-number{background:#3d6c98;color:#fff}.month-day-head{display:flex;align-items:center;justify-content:space-between;gap:6px}.month-day-head small{overflow:hidden;color:inherit;font-size:8px;text-overflow:ellipsis;white-space:nowrap}.day-number{display:grid;width:23px;height:23px;flex:0 0 23px;place-items:center;border-radius:7px;font-size:11px}.month-booking{display:block;width:100%;overflow:hidden;margin-top:4px;border:0;border-radius:5px;background:#e5edf5;padding:4px 5px;text-align:left;color:#486987;font-size:9px;text-overflow:ellipsis;white-space:nowrap;cursor:grab}.month-booking b{font-weight:650}.month-personal{cursor:pointer}.month-personal.personal-training{background:#eee7f7;color:#694f85}.month-personal.personal-meeting{background:#f7edd9;color:#806238}.month-personal.personal-leave{background:#f9e2e2;color:#985353}.month-personal.personal-other{background:#e9edf1;color:#596573}.month-day>small{display:block;margin-top:4px;color:#8d98a6;font-size:9px}.my-time-header{display:flex;width:100%;align-items:center;justify-content:space-between;gap:18px}.my-time-header>div{display:flex;min-width:0;flex-direction:column}.my-time-header strong{color:#344256;font-size:15px}.my-time-header small{margin-top:4px;color:#8d98a6;font-size:10px}.my-time-filter{display:flex;justify-content:flex-end;margin-bottom:14px}.person-overview{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;border-radius:12px;background:#f6f8fa;padding:13px 15px}.person-summary{display:flex;min-width:0;align-items:center;gap:11px}.overview-avatar{display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:11px;background:#dde8f2;color:#315f8e;font-size:14px;font-weight:700}.person-summary>div{display:flex;min-width:0;flex-direction:column}.person-summary strong{color:#344256;font-size:13px}.person-summary small{margin-top:4px;color:#8d98a6;font-size:10px}.person-schedule-table{width:100%}.time-range{display:flex;flex-direction:column}.time-range strong{color:#435166;font-size:11px}.time-range span{margin-top:3px;color:#8190a2;font-size:10px}.person-pagination{display:flex;justify-content:flex-end;padding-top:16px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .month-day{border-right-width:2px;border-right-color:#d3d9e0}.month-personal.personal-business_trip{background:#e3f0f7;color:#426b83}
 .month-personal.personal-out_of_office{background:#e4f1e8;color:#4f755a}
 .time-legend{flex-wrap:wrap;justify-content:flex-end}.legend-pending{border-color:#cbd1d8!important;background:#e7eaee}.legend-accepted{border-color:#9db9d2!important;background:#dfeaf4}.month-booking.status-pending,.month-booking.status-changed{border:1px solid #cbd1d8;background:#e7eaee;color:#66717f}.month-booking.status-confirmed,.month-booking.status-running,.month-booking.status-completed{border-width:1px;border-style:solid}
 .status-with-reason{display:flex;min-width:0;flex-direction:column;align-items:flex-start;gap:4px}.status-with-reason small{max-width:100%;overflow:hidden;color:#8d98a6;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
-.month-booking:not(.can-drag){cursor:pointer}.month-booking.can-drag{cursor:grab}.month-booking.can-drag:active{cursor:grabbing}.drag-tip{color:#5f7690;font-weight:600}
+.month-booking:not(.can-drag){cursor:pointer}.month-booking.can-drag{cursor:grab}.month-booking.can-drag:active{cursor:grabbing}
 </style>

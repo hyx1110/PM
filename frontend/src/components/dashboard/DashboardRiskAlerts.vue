@@ -11,7 +11,7 @@ const visibleItems = computed(() => expanded.value ? props.items : props.items.s
 
 <template>
   <section class="risk-card" :class="{surface:!embedded,embedded}">
-    <header class="module-head"><div><h2 v-if="!embedded">需要关注</h2><p>优先查看延期、超时和待处理异常。</p></div><div class="head-actions"><span v-if="items.length" class="risk-count">{{items.length}}</span><button v-if="items.length>3" class="text-button" :aria-expanded="expanded" @click="expanded=!expanded">{{expanded?'收起':'查看更多'}}</button></div></header>
+    <header v-if="!embedded || items.length" class="module-head"><h2 v-if="!embedded">需要关注</h2><div class="head-actions"><span v-if="items.length" class="risk-count">{{items.length}}</span><button v-if="items.length>3" class="text-button" :aria-expanded="expanded" @click="expanded=!expanded">{{expanded?'收起':'查看更多'}}</button></div></header>
     <div v-if="visibleItems.length" class="risk-list" tabindex="0" role="region" aria-label="需要关注的事项，可滚动查看">
       <el-tooltip v-for="item in visibleItems" :key="item.id" :content="item.detail || item.title" placement="top" :show-after="280">
         <button class="risk-item" @click="emit('select',item)"><span class="risk-icon" :class="item.severity"><el-icon><Warning /></el-icon></span><span><strong>{{item.title}}</strong><small>{{item.project_name || '系统事项'}}{{item.task_name?` · ${item.task_name}`:''}}</small></span></button>
@@ -24,11 +24,10 @@ const visibleItems = computed(() => expanded.value ? props.items : props.items.s
 <style scoped>
 .risk-card { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 24px; }
 .risk-card.embedded { padding: 0; }
-.embedded .module-head p { margin-top: 0; }
+.embedded .module-head { justify-content: flex-end; }
 .module-head { flex-shrink: 0; }
 .module-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
-.module-head p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .head-actions { display: flex; align-items: center; gap: 12px; }
 .risk-count { display: grid; min-width: 28px; height: 28px; place-items: center; padding: 0 7px; border-radius: 14px; background: #fbecea; color: #aa504b; font-size: 13px; font-weight: 650; }
 .text-button { border: 0; border-radius: 6px; background: transparent; padding: 8px 0; color: #436d94; font-size: 13px; cursor: pointer; }

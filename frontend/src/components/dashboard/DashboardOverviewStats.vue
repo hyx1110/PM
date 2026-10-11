@@ -65,7 +65,7 @@ const cards = computed(() => [
 </template>
 
 <style scoped>
-.overview-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 20px; }
+.overview-grid { display: grid; grid-template-columns: repeat(var(--dashboard-grid-columns,4),minmax(0,1fr)); gap: var(--dashboard-grid-gap,20px); }
 .overview-card { position: relative; display: flex; min-width: 0; min-height: 132px; align-items: center; gap: 16px; padding: 22px 22px 30px; cursor: pointer; transition: border-color .15s,box-shadow .15s; }
 .overview-card:hover { border-color: #bacddd; box-shadow: 0 6px 22px rgba(36,53,72,.07); }
 .overview-card:focus-visible { outline: 2px solid #527fa6; outline-offset: 3px; }
@@ -85,5 +85,4 @@ const cards = computed(() => [
 .overview-link.always,.overview-card:hover .overview-link,.overview-card:focus-visible .overview-link { opacity: 1; }
 .has-pending .overview-link { color: #ad4d47; }
 .overview-link i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: middle; }
-@media(max-width:1500px) { .overview-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 </style>

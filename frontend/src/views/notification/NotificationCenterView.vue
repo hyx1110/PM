@@ -53,7 +53,7 @@ onMounted(async () => {
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">通知中心</h1><p class="page-subtitle">排期新增/变更、确认提醒、临期任务、延期和冲突消息统一归档。</p></div><div><el-button type="primary" plain @click="readAll">全部已读</el-button><el-button type="danger" plain @click="clearRead">清空已读</el-button></div></header>
+    <header class="page-header"><div><h1 class="page-title">通知中心</h1></div><div><el-button type="primary" plain @click="readAll">全部已读</el-button><el-button type="danger" plain @click="clearRead">清空已读</el-button></div></header>
     <section class="surface filter-bar"><el-radio-group v-model="query.status" @change="query.page=1;load()"><el-radio-button value="">全部</el-radio-button><el-radio-button value="unread">未读</el-radio-button><el-radio-button value="read">已读</el-radio-button></el-radio-group></section>
     <section class="surface notifications" v-loading="loading">
       <article v-for="item in rows" :key="item.id" class="notification" :class="[{ unread: item.status==='unread' }, levelClass(item.level)]" role="button" tabindex="0" @click="read(item)" @keydown.enter="read(item)">

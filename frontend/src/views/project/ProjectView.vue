@@ -368,7 +368,6 @@ onMounted(async () => {
     <header class="page-header">
       <div>
         <h1 class="page-title">项目管理</h1>
-        <p class="page-subtitle">展示权限范围内的项目；项目负责人维护自己的项目，超级管理员与部门主管可管理全部项目。</p>
       </div>
       <el-button v-if="canCreateProject" type="primary" @click="openCreate">新建项目</el-button>
     </header>
@@ -393,11 +392,11 @@ onMounted(async () => {
       <el-select v-model="query.status" clearable placeholder="项目状态" style="width:150px">
         <el-option v-for="item in statuses" :key="item" :label="statusLabel[item]" :value="item"/>
       </el-select>
-      <PersonnelScopeCascader v-model="filterScopes" :users="projectManagerOptions" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 项目经理（可多选）" />
+        <PersonnelScopeCascader v-model="filterScopes" :users="projectManagerOptions" :departments="departments" :organizations="organizations" placeholder="项目经理" />
       <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
-      <el-table v-loading="loading" :data="projects" stripe>
+      <el-table v-loading="loading" :data="projects" stripe :header-cell-style="{ textAlign: 'center' }" :cell-style="{ textAlign: 'center' }">
         <el-table-column prop="code" label="项目编号" width="130"/>
         <el-table-column label="项目名称" min-width="180">
           <template #default="{row}">

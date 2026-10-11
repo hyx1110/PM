@@ -17,6 +17,7 @@ import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/stores/user'
 import { beijingNow } from '@/utils/time'
 import PersonnelScopeCascader from '@/components/common/PersonnelScopeCascader.vue'
+import DateRangeFilter from '@/components/common/DateRangeFilter.vue'
 import OvertimePanel from '@/components/execution/OvertimePanel.vue'
 import { getOvertime } from '@/api/overtime'
 import type { OvertimeRequest } from '@/types/overtime'
@@ -90,16 +91,26 @@ onMounted(async()=>{try{await loadOptions();await load()}catch{/* The request in
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">任务执行</h1><p class="page-subtitle">正常工作先确认预约；非工作时段先申请加班并通过审批，再填报实际执行。</p></div><el-button v-if="activeTab==='records' && userStore.hasPermission('execution:edit')" type="primary" @click="openCreate">填写执行记录</el-button></header>
+    <header class="page-header"><div><h1 class="page-title">任务执行</h1></div><el-button v-if="activeTab==='records' && userStore.hasPermission('execution:edit')" type="primary" @click="openCreate">填写执行记录</el-button></header>
     <el-radio-group v-model="activeTab"><el-radio-button value="records">执行记录</el-radio-button><el-radio-button value="overtime">加班申请</el-radio-button></el-radio-group>
     <OvertimePanel v-if="activeTab==='overtime'" :tasks="tasks" :refresh-key="overtimeRefreshKey" @record="openOvertimeExecution" />
     <template v-else>
-    <section class="surface filter-bar"><el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:190px" @change="query.task_id=undefined"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/></el-select><el-select v-model="query.task_id" clearable filterable placeholder="任务" style="width:190px"><el-option v-for="item in tasks.filter(t=>!query.project_id||t.project_id===query.project_id)" :key="item.id" :label="item.name" :value="item.id"/></el-select><el-date-picker v-model="query.start_date" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" style="width:140px"/><el-date-picker v-model="query.end_date" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" style="width:140px"/><el-button-group><el-button @click="setQuickRange('today')">今天</el-button><el-button @click="setQuickRange('week')">本周</el-button><el-button @click="setQuickRange('month')">本月</el-button></el-button-group><el-button type="primary" plain @click="query.page=1;load()">查询</el-button></section>
     <section class="surface filter-bar">
-      <el-switch v-model="query.mine" active-text="只看本人" @change="query.page=1;load()"/>
-      <span class="field-hint">默认显示权限范围内的记录；项目负责人可查看本项目所有成员的记录，不能修改他人记录。</span>
-      <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 执行人（可多选）" />
-      <el-button @click="query.page=1;load()">筛选执行人</el-button>
+      <el-select v-model="query.project_id" clearable filterable placeholder="项目" style="width:190px" @change="query.task_id=undefined;query.page=1">
+        <el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id"/>
+      </el-select>
+      <el-select v-model="query.task_id" clearable filterable placeholder="任务" style="width:190px">
+        <el-option v-for="item in tasks.filter(t=>!query.project_id||t.project_id===query.project_id)" :key="item.id" :label="item.name" :value="item.id"/>
+      </el-select>
+      <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="执行人" />
+      <DateRangeFilter v-model:start-date="query.start_date" v-model:end-date="query.end_date" @change="query.page=1" />
+      <el-button-group>
+        <el-button @click="setQuickRange('today')">今天</el-button>
+        <el-button @click="setQuickRange('week')">本周</el-button>
+        <el-button @click="setQuickRange('month')">本月</el-button>
+      </el-button-group>
+      <el-switch v-model="query.mine" active-text="只看本人" @change="query.page=1;load()" />
+      <el-button type="primary" plain @click="query.page=1;load()">查询</el-button>
     </section>
     <section class="surface table-card"><el-table v-loading="loading" :data="records" stripe table-layout="fixed"><el-table-column prop="project_name" label="项目" min-width="135" show-overflow-tooltip/><el-table-column prop="task_name" label="任务" min-width="150" show-overflow-tooltip/><el-table-column prop="user_name" label="执行人" min-width="105" align="center" show-overflow-tooltip/><el-table-column label="计划日期" min-width="170" align="center"><template #default="{row}"><span class="period-cell">{{formatDate(row.planned_start)}}<i>至</i>{{formatDate(row.planned_end)}}</span></template></el-table-column><el-table-column label="实际日期" min-width="170" align="center"><template #default="{row}"><span class="period-cell">{{formatDate(row.actual_start)}}<i>至</i>{{formatDate(row.actual_end)}}</span></template></el-table-column><el-table-column label="预计 / 实际工时" min-width="140" align="center"><template #default="{row}"><div class="hours-comparison" :class="{over:Number(row.task_actual_hours)>Number(row.estimated_hours)}"><strong>{{row.estimated_hours}}h</strong><span>/</span><strong>{{row.task_actual_hours}}h</strong></div></template></el-table-column><el-table-column label="状态" min-width="95" align="center"><template #default="{row}">{{statusLabel[row.status]||row.status}}<el-tag v-if="row.overtime_request_id" type="warning" size="small" style="margin-left:5px">加班</el-tag></template></el-table-column><el-table-column prop="description" label="执行说明" min-width="155" show-overflow-tooltip/><el-table-column v-if="userStore.hasPermission('execution:edit')" label="操作" fixed="right" min-width="120" align="center"><template #default="{row}"><template v-if="canEditRecord(row)"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></template></el-table-column></el-table><div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" layout="total, sizes, prev, pager, next" @change="load"/></div></section>
     </template>

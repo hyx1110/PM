@@ -314,11 +314,10 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
         </el-tab-pane>
         <el-tab-pane name="members">
           <template #label>项目成员 <el-badge :value="members.length" type="info" /></template>
-          <div class="tab-tools">
-            <span>仅展示当前有效成员；成员增删统一通过“项目资源申请”并由部门主管审批</span>
-            <el-button v-if="canRequestResources" type="primary" size="small" @click="openResourceRequest">申请成员变更</el-button>
+          <div v-if="canRequestResources" class="tab-tools">
+            <el-button type="primary" size="small" @click="openResourceRequest">申请成员变更</el-button>
           </div>
-          <el-table :data="members">
+          <el-table :data="members" :header-cell-style="{ textAlign: 'center' }" :cell-style="{ textAlign: 'center' }">
             <el-table-column prop="user_name" label="成员"/>
             <el-table-column label="项目角色"><template #default="{row}">{{ row.project_role === 'manager' ? '项目经理' : row.project_role }}</template></el-table-column>
             <el-table-column label="加入时间"><template #default="{row}">{{ formatDate(row.joined_at) }}</template></el-table-column>
@@ -328,8 +327,8 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
           <TaskManagementPanel v-if="activeTab==='tasks'" :key="projectId" :project-id="projectId" @changed="refreshTaskSummary"/>
         </el-tab-pane>
         <el-tab-pane :label="`人力预约 (${schedules.length})`" name="schedules">
-          <div class="tab-tools"><span>提交即预占任务及项目额度，确认后占用人员时段；拒绝或撤回后释放额度</span><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
-          <el-table :data="schedules">
+          <div class="tab-tools"><el-button size="small" @click="router.push('/schedules')">进入共享看板</el-button></div>
+          <el-table :data="schedules" :header-cell-style="{ textAlign: 'center' }" :cell-style="{ textAlign: 'center' }">
             <el-table-column prop="user_name" label="人员"/>
             <el-table-column prop="task_name" label="任务" min-width="180"/>
             <el-table-column label="预约时间" width="290"><template #default="{row}">{{ formatDateTime(row.start_time) }} 至 {{ formatDateTime(row.end_time) }}</template></el-table-column>
@@ -338,8 +337,8 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
           </el-table>
         </el-tab-pane>
         <el-tab-pane v-if="canManageProject" :label="`资源申请 (${resourceRequests.length})`" name="resources">
-          <div class="tab-tools"><span>计划日期、工时和成员变更均由项目所属部门主管审批后生效</span><el-button v-if="canRequestResources" size="small" type="primary" @click="openResourceRequest">发起申请</el-button></div>
-          <el-table :data="resourceRequests">
+          <div v-if="canRequestResources" class="tab-tools"><el-button size="small" type="primary" @click="openResourceRequest">发起申请</el-button></div>
+          <el-table :data="resourceRequests" :header-cell-style="{ textAlign: 'center' }" :cell-style="{ textAlign: 'center' }">
             <el-table-column prop="requester_name" label="申请人" width="110"/>
             <el-table-column label="资源变更（含成员名单）" min-width="300"><template #default="{row}">{{ resourceSummary(row) }}</template></el-table-column>
             <el-table-column prop="reason" label="申请原因" min-width="180"/>
@@ -384,5 +383,5 @@ onMounted(async () => { try { await load() } catch { /* API interceptor displays
 
 <style scoped>
 .extension-hint{margin-top:6px;color:var(--el-text-color-secondary);font-size:12px;line-height:1.6}
-.detail-title{margin-top:8px}.detail-card{padding:12px 24px 24px}.tab-tools{display:flex;align-items:center;justify-content:space-between;margin:8px 0 16px;color:#8b95a3;font-size:12px}.quota-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.quota{padding:18px}.quota span{display:block;color:#8b95a3;font-size:12px}.quota strong{display:block;margin-top:8px;color:#34445b;font-size:23px}.quota strong.danger{color:#c45656}
+.detail-title{margin-top:8px}.detail-card{padding:12px 24px 24px}.tab-tools{display:flex;align-items:center;justify-content:flex-end;margin:8px 0 16px;color:#8b95a3;font-size:12px}.quota-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.quota{padding:18px}.quota span{display:block;color:#8b95a3;font-size:12px}.quota strong{display:block;margin-top:8px;color:#34445b;font-size:23px}.quota strong.danger{color:#c45656}
 </style>

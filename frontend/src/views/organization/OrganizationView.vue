@@ -189,7 +189,7 @@ onMounted(load)
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">组织管理</h1><p class="page-subtitle">本地测试数据可维护；标记为 HRDB 的部门和组织只能由同步任务更新。</p></div><div v-if="userStore.hasPermission('organization:edit')"><el-button @click="editDepartment()">新增部门</el-button><el-button type="primary" :disabled="!activeDepartment" @click="editOrganization()">新增组织</el-button></div></header>
+    <header class="page-header"><div><h1 class="page-title">组织管理</h1></div><div v-if="userStore.hasPermission('organization:edit')"><el-button @click="editDepartment()">新增部门</el-button><el-button type="primary" :disabled="!activeDepartment" @click="editOrganization()">新增组织</el-button></div></header>
     <section v-if="departments.length" class="surface org-overview">
       <div class="department-identity">
         <span class="department-icon"><el-icon><OfficeBuilding /></el-icon></span>
@@ -197,14 +197,14 @@ onMounted(load)
           <small>当前部门</small>
           <div class="department-picker-row">
             <el-select v-model="activeDepartment" filterable placeholder="选择当前部门" @change="switchDepartment">
-              <el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id"><span>{{item.name}}</span><small>{{item.code}}</small></el-option>
+              <el-option v-for="item in departments" :key="item.id" :label="item.name" :value="item.id" />
             </el-select>
             <div v-if="userStore.hasPermission('organization:edit') && activeDepartmentInfo?.data_source!=='hrdb'" class="current-department-actions">
               <el-button link type="primary" @click="editActiveDepartment">编辑</el-button>
               <el-button link type="danger" @click="removeActiveDepartment">删除</el-button>
             </div>
           </div>
-          <p>{{activeDepartmentInfo?.code}} · 部门主管：{{departmentManagerName}}</p>
+          <p>部门主管：{{departmentManagerName}}</p>
         </div>
       </div>
       <div class="org-metrics">
@@ -214,13 +214,13 @@ onMounted(load)
       </div>
     </section>
     <section class="surface tree-card" v-loading="loading">
-      <div class="tree-head"><div><span class="eyebrow">ORGANIZATION</span><h3>组织与人员</h3><p>组织层级最多维护到 L4，展开节点即可查看下级组织和所属人员。</p></div><el-button v-if="userStore.hasPermission('organization:edit')" plain :disabled="!activeDepartment" @click="editOrganization()">新增根组织</el-button></div>
+      <div class="tree-head"><h3>组织与人员</h3><el-button v-if="userStore.hasPermission('organization:edit')" plain :disabled="!activeDepartment" @click="editOrganization()">新增根组织</el-button></div>
       <div v-if="displayTree.length" class="tree-shell">
         <el-tree :data="displayTree" node-key="id" default-expand-all :expand-on-click-node="false">
           <template #default="{ data }">
             <div v-if="data.node_type==='user'" class="tree-node user-node"><div><span class="user-avatar">{{data.name.slice(0,1)}}</span><strong>{{ data.name }}</strong><span>{{ data.employee_no }}</span><el-tag v-if="data.status==='disabled'" size="small" type="info">已停用</el-tag></div></div>
             <div v-else-if="data.node_type==='user_group'" class="tree-node group-node"><div><strong>{{ data.name }}</strong><span>{{ data.children.length }} 人</span></div></div>
-            <div v-else class="tree-node organization-node"><div><el-tag size="small" effect="plain">{{ data.level }}</el-tag><strong>{{ data.name }}</strong><span>{{ data.code }}</span><el-tag v-if="data.data_source==='hrdb'" size="small" type="info" effect="plain">HRDB 只读</el-tag><span v-if="data.manager_name">主管：{{ data.manager_name }}</span><span>{{ data.users?.length || 0 }} 人</span></div><div v-if="userStore.hasPermission('organization:edit') && data.data_source!=='hrdb'" class="node-actions"><el-button v-if="data.level!=='L4'" link @click.stop="editOrganization(undefined,data)">添加下级</el-button><el-button link @click.stop="editOrganization(data)">编辑</el-button><el-button link type="danger" @click.stop="removeOrganization(data)">删除</el-button></div></div>
+            <div v-else class="tree-node organization-node"><div><el-tag size="small" effect="plain">{{ data.level }}</el-tag><strong>{{ data.name }}</strong><el-tag v-if="data.data_source==='hrdb'" size="small" type="info" effect="plain">HRDB 只读</el-tag><span v-if="data.manager_name">主管：{{ data.manager_name }}</span><span>{{ data.users?.length || 0 }} 人</span></div><div v-if="userStore.hasPermission('organization:edit') && data.data_source!=='hrdb'" class="node-actions"><el-button v-if="data.level!=='L4'" link @click.stop="editOrganization(undefined,data)">添加下级</el-button><el-button link @click.stop="editOrganization(data)">编辑</el-button><el-button link type="danger" @click.stop="removeOrganization(data)">删除</el-button></div></div>
           </template>
         </el-tree>
       </div>
@@ -240,8 +240,8 @@ onMounted(load)
 
 <style scoped>
 .org-overview{display:flex;align-items:center;justify-content:space-between;gap:28px;padding:22px 26px;background:linear-gradient(135deg,#fff 0%,#f7fafe 100%)}
-.department-identity{display:flex;min-width:320px;align-items:center;gap:15px}.department-icon{display:grid;width:46px;height:46px;flex:0 0 46px;place-items:center;border-radius:14px;background:#e7f0f8;color:#416d96;font-size:21px}.department-summary{min-width:0}.department-summary>small,.eyebrow{color:#9aa6b4;font-size:9px;font-weight:700;letter-spacing:.13em}.department-picker-row{display:flex;align-items:center;gap:10px;margin-top:4px}.department-picker-row>.el-select{width:230px}.department-picker-row :deep(.el-select__wrapper){border-radius:10px;background:#fff;box-shadow:0 0 0 1px #dfe7ee inset}.department-picker-row :deep(.el-select__selected-item){color:#263348;font-size:15px;font-weight:650}.department-picker-row :deep(.el-select-dropdown__item){display:flex;justify-content:space-between}.department-picker-row :deep(.el-select-dropdown__item small){color:#9aa6b4;font-size:10px}.current-department-actions{display:flex;align-items:center;white-space:nowrap}.department-identity p{margin:5px 0 0;color:#8995a5;font-size:11px}.org-metrics{display:grid;grid-template-columns:repeat(3,minmax(120px,1fr));gap:12px}.org-metrics article{min-width:128px;border-left:1px solid #e8edf2;padding:3px 18px}.org-metrics span{display:flex;align-items:center;gap:6px;color:#8995a5;font-size:10px}.org-metrics strong{display:inline-block;margin-top:5px;color:#2f3c50;font-size:22px;font-weight:650}.org-metrics small{margin-left:4px;color:#9ca6b3;font-size:11px}
-.tree-card{min-width:0;min-height:560px;padding:22px 24px}.tree-head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid #edf0f3;padding:0 2px 18px}.tree-head h3{margin:4px 0 0;color:#273448;font-size:15px}.tree-head p{margin:6px 0 0;color:#98a2b0;font-size:11px}.tree-shell{margin-top:14px;border:1px solid #edf0f3;border-radius:14px;background:#fbfcfd;padding:8px 10px 14px}.tree-shell :deep(.el-tree){background:transparent}.tree-shell :deep(.el-tree-node__content){height:auto;min-height:44px;border-radius:9px}.tree-shell :deep(.el-tree-node__content:hover){background:#f2f6f9}
+.department-identity{display:flex;min-width:320px;align-items:center;gap:15px}.department-icon{display:grid;width:46px;height:46px;flex:0 0 46px;place-items:center;border-radius:14px;background:#e7f0f8;color:#416d96;font-size:21px}.department-summary{min-width:0}.department-summary>small{color:#9aa6b4;font-size:9px;font-weight:700;letter-spacing:.13em}.department-picker-row{display:flex;align-items:center;gap:10px;margin-top:4px}.department-picker-row>.el-select{width:230px}.department-picker-row :deep(.el-select__wrapper){border-radius:10px;background:#fff;box-shadow:0 0 0 1px #dfe7ee inset}.department-picker-row :deep(.el-select__selected-item){color:#263348;font-size:15px;font-weight:650}.current-department-actions{display:flex;align-items:center;white-space:nowrap}.department-identity p{margin:5px 0 0;color:#8995a5;font-size:11px}.org-metrics{display:grid;grid-template-columns:repeat(3,minmax(120px,1fr));gap:12px}.org-metrics article{min-width:128px;border-left:1px solid #e8edf2;padding:3px 18px}.org-metrics span{display:flex;align-items:center;gap:6px;color:#8995a5;font-size:10px}.org-metrics strong{display:inline-block;margin-top:5px;color:#2f3c50;font-size:22px;font-weight:650}.org-metrics small{margin-left:4px;color:#9ca6b3;font-size:11px}
+.tree-card{min-width:0;min-height:560px;padding:22px 24px}.tree-head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid #edf0f3;padding:0 2px 18px}.tree-head h3{margin:0;color:#273448;font-size:15px}.tree-shell{margin-top:14px;border:1px solid #edf0f3;border-radius:14px;background:#fbfcfd;padding:8px 10px 14px}.tree-shell :deep(.el-tree){background:transparent}.tree-shell :deep(.el-tree-node__content){height:auto;min-height:44px;border-radius:9px}.tree-shell :deep(.el-tree-node__content:hover){background:#f2f6f9}
 .tree-node{display:flex;min-width:0;flex:1;align-items:center;justify-content:space-between;padding:8px 8px}.tree-node>div{display:flex;min-width:0;align-items:center;gap:11px}.tree-node strong{overflow:hidden;color:#384559;text-overflow:ellipsis;white-space:nowrap}.tree-node span{color:#8c96a5;font-size:11px}.organization-node{border-bottom:1px solid rgba(230,235,240,.72)}.user-node{padding-block:5px}.user-node strong{font-weight:500}.user-avatar{display:grid!important;width:25px;height:25px;flex:0 0 25px;place-items:center;border-radius:9px;background:#e8f0f7;color:#4c7195!important;font-size:9px!important;font-weight:700}.group-node{border-radius:8px;background:#f1f4f7;padding-inline:11px}.node-actions{opacity:.42;transition:opacity .18s}.tree-node:hover .node-actions{opacity:1}
 .form-grid { display:grid;grid-template-columns:1fr 1fr;gap:0 16px; }
 @media (max-width:900px){.org-overview{align-items:flex-start;flex-direction:column}.org-metrics{width:100%}.org-metrics article:first-child{border-left:0}.department-picker-row{align-items:flex-start;flex-direction:column}.department-picker-row>.el-select{width:min(70vw,280px)}}

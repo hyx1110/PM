@@ -17,8 +17,8 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   width?: string
 }>(), {
-  placeholder: '部门 / 组织 / 人员（可多选）',
-  width: '320px',
+  placeholder: '人员',
+  width: '200px',
 })
 
 const emit = defineEmits<{
@@ -94,7 +94,7 @@ function update(value: unknown) {
     collapse-tags-tooltip
     filterable
     :placeholder="placeholder"
-    :style="{ width }"
+    :style="{ width, maxWidth: '100%', flexShrink: 0 }"
     @update:model-value="update"
   />
 </template>

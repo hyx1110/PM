@@ -88,7 +88,6 @@ onMounted(load)
     <header class="page-header">
       <div>
         <h1 class="page-title">工作日历</h1>
-        <p class="page-subtitle">部门主管维护法定节假日和调休工作日；未配置日期默认周一至周五可预约。</p>
       </div>
       <el-button type="primary" @click="openCreate">新增日期规则</el-button>
     </header>

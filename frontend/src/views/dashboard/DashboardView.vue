@@ -193,10 +193,20 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.dashboard-page { min-width: 0; gap: 24px; font-size: 14px; line-height: 1.6; }
+.dashboard-page {
+  --dashboard-grid-columns: 4;
+  --dashboard-grid-gap: 20px;
+  --dashboard-day-span: 1;
+  --dashboard-project-span: 3;
+  min-width: 0; gap: 24px; font-size: 14px; line-height: 1.6;
+}
 .dashboard-page :deep(.surface) { border-color: #e1e7ed; border-radius: 16px; box-shadow: 0 4px 18px rgba(38,53,70,.035); }
-.project-grid { display: grid; grid-template-columns: minmax(300px,1fr) minmax(0,3fr); gap: 24px; align-items: stretch; }
+/* Match the overview's four tracks, including gaps: a 1fr/3fr two-column grid
+   does not line up with a four-column grid because it subtracts fewer gaps. */
+.project-grid { display: grid; grid-template-columns: repeat(var(--dashboard-grid-columns),minmax(0,1fr)); gap: var(--dashboard-grid-gap); align-items: stretch; }
 .project-grid > * { min-width: 0; box-sizing: border-box; }
+.project-grid > :first-child { grid-column: span var(--dashboard-day-span); }
+.project-grid > :last-child { grid-column: span var(--dashboard-project-span); }
 /* Grid stretches the two cards to one shared, content-sized row. Only the
    lists scroll after the cap; no project records are removed to fit it. */
 .project-grid > * { min-height: 320px; max-height: 640px; }
@@ -205,17 +215,18 @@ onUnmounted(() => {
 .dashboard-state { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; }
 .dashboard-state h2 { margin: 0; color: #344256; font-size: 20px; }
 .dashboard-state p { margin: 12px 0 20px; color: #718095; font-size: 14px; }
-.dashboard-skeleton { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 24px; }
+.dashboard-skeleton { display: grid; grid-template-columns: repeat(var(--dashboard-grid-columns),minmax(0,1fr)); gap: var(--dashboard-grid-gap); }
 .skeleton-card { min-height: 132px; background: #f8fafc; }
 .skeleton-card:nth-child(n+5) { min-height: 360px; }
-.skeleton-card:nth-child(6) { grid-column: span 3; }
+.skeleton-card:nth-child(5) { grid-column: span var(--dashboard-day-span); }
+.skeleton-card:nth-child(6) { grid-column: span var(--dashboard-project-span); }
+@media(max-width:1500px) {
+  .dashboard-page { --dashboard-grid-columns: 2; --dashboard-project-span: 1; }
+}
 @media(max-width:1440px) {
   .dashboard-page { gap: 20px; }
-  .project-grid { gap: 20px; }
 }
 @media(max-width:1280px) {
-  .project-grid { grid-template-columns: minmax(0,1fr); }
-  .dashboard-skeleton { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 20px; }
-  .skeleton-card:nth-child(n+5) { grid-column: 1/-1; }
+  .dashboard-page { --dashboard-day-span: 2; --dashboard-project-span: 2; }
 }
 </style>

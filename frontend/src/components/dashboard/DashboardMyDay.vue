@@ -59,16 +59,15 @@ watch(() => props.day, () => {
   <section class="surface day-card">
     <header><div><h2>我的今日日程</h2><p>{{dateLabel}} · 北京时间</p></div><button class="refresh" :disabled="loading" aria-label="刷新首页及今日日程" @click="emit('refresh')"><el-icon :class="{'is-loading':loading}"><Refresh /></el-icon></button></header>
     <p v-if="failed || stale || !day" class="day-warning" role="status">{{failed ? '刷新失败，当前可能为旧数据，请重试。' : stale ? '显示的是上一日数据，请刷新。' : '日程数据暂未提供，请刷新。'}}</p>
-    <div v-if="day" class="day-summary"><span>{{items.length}} 项安排</span><span v-if="pendingCount">含 {{pendingCount}} 项待确认，尚未占用时间</span><span v-else>仅本人日程</span></div>
+    <div v-if="day" class="day-summary"><span>{{items.length}} 项安排</span><span v-if="pendingCount">含 {{pendingCount}} 项待确认，尚未占用时间</span></div>
     <div v-if="items.length" class="day-list" tabindex="0" role="region" aria-label="今日日程，按时间从上到下排列，可滚动查看">
       <button v-for="item in items" :key="item.id" class="day-item" :class="phase(item).tone" @click="open(item)">
         <span class="time-column"><strong>{{timeLabel(item)}}</strong><small>{{timeLabel(item,true)}}</small></span>
         <span class="timeline-rail" aria-hidden="true"><i></i></span>
-        <span class="event-body"><span class="event-meta"><span>{{item.kind==='booking' ? '项目预约' : '个人安排'}}</span><span class="event-state">{{phase(item).label}}</span></span><strong>{{item.title}}</strong><small>{{item.project_name || item.remark || '点击查看详情'}}</small></span>
+        <span class="event-body"><span class="event-meta"><span>{{item.kind==='booking' ? '项目预约' : '个人安排'}}</span><span class="event-state">{{phase(item).label}}</span></span><strong>{{item.title}}</strong><small v-if="item.project_name || item.remark">{{item.project_name || item.remark}}</small></span>
       </button>
     </div>
-    <div v-else class="compact-empty"><strong>{{day ? '今天暂无日程安排' : '暂无日程数据'}}</strong><span>项目预约和个人安排会按时间展示在这里。</span></div>
-    <footer>从早到晚排列 · 点击查看详情</footer>
+    <div v-else class="compact-empty"><strong>{{day ? '今天暂无日程安排' : '暂无日程数据'}}</strong></div>
     <el-drawer v-model="drawerVisible" title="我的日程详情" size="min(520px, 100vw)" append-to-body>
       <template v-if="selected"><h3 class="detail-title">{{selected.title}}</h3><el-descriptions :column="1" border>
         <el-descriptions-item label="来源">{{selected.kind==='booking' ? '项目预约' : '个人安排'}}</el-descriptions-item>
@@ -113,7 +112,6 @@ header p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .past .event-body { background: #fff; }
 .compact-empty { display: flex; min-height: 0; flex: 1; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 16px; color: #708095; font-size: 13px; text-align: center; }
 .compact-empty strong { color: #62768b; font-size: 14px; font-weight: 500; }
-footer { flex-shrink: 0; border-top: 1px solid #edf1f4; padding-top: 12px; color: #748396; font-size: 12px; }
 .detail-title { margin: 0 0 20px; color: #25394f; overflow-wrap: anywhere; }
 .detail-remark { white-space: pre-wrap; overflow-wrap: anywhere; }
 .detail-hint { color: #6f7f92; font-size: 14px; line-height: 1.7; }

@@ -46,11 +46,11 @@ onMounted(load)
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">角色权限</h1><p class="page-subtitle">统一维护超级管理员、部门主管、职能主管、项目经理和项目成员五类系统角色的功能权限。</p></div><el-button v-if="userStore.hasPermission('role:edit')" type="primary" :loading="saving" :disabled="!selectedRole" @click="save">保存权限</el-button></header>
+    <header class="page-header"><div><h1 class="page-title">角色权限</h1></div><el-button v-if="userStore.hasPermission('role:edit')" type="primary" :loading="saving" :disabled="!selectedRole" @click="save">保存权限</el-button></header>
     <section class="permission-layout" v-loading="loading">
       <aside class="surface role-list"><button v-for="role in roles" :key="role.id" :class="{active:selectedRoleId===role.id}" @click="selectRole(role)"><div><strong>{{ role.name }}</strong><small>{{ role.code }}</small></div><span>{{ role.permission_ids.length }}</span></button></aside>
       <main class="surface permission-card">
-        <div class="permission-head"><div><h2>{{ selectedRole?.name || '请选择角色' }}</h2><p>{{ selectedRole?.description || '勾选该角色可以访问的功能。' }}</p></div><el-tag v-if="selectedRole?.is_system" effect="plain">系统角色</el-tag></div>
+        <div class="permission-head"><div><h2>{{ selectedRole?.name || '请选择角色' }}</h2><p v-if="selectedRole?.description">{{ selectedRole.description }}</p></div><el-tag v-if="selectedRole?.is_system" effect="plain">系统角色</el-tag></div>
         <el-alert title="角色可兼任；菜单权限不等于业务审批权。项目及项目资源申请仅由项目所属部门指定的部门主管审批，超级管理员无代批特权。项目经理可查看全系统项目成员日程，但仅能预约本人负责项目的成员。" type="info" :closable="false" show-icon />
         <el-checkbox-group v-model="selectedPermissions" :disabled="!userStore.hasPermission('role:edit') || selectedRole?.code==='super_admin'">
           <section v-for="(items,module) in groups" :key="module" class="permission-group"><h3>{{ module }}</h3><div class="permission-grid"><label v-for="item in items" :key="item.id" class="permission-item"><el-checkbox :value="item.id"><span>{{ item.name }}</span><small>{{ item.code }}</small></el-checkbox></label></div></section>

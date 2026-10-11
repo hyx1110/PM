@@ -18,7 +18,7 @@ onMounted(load)
 
 <template>
   <div class="page-shell" v-loading="loading">
-    <header class="page-header"><div><h1 class="page-title">人员负载分析</h1><p class="page-subtitle">按日、周、月查看计划工时、人员利用率、项目投入占比和空闲/超负载状态。</p></div></header>
+    <header class="page-header"><div><h1 class="page-title">人员负载分析</h1></div></header>
     <section class="surface filter-bar"><el-date-picker v-model="form.range" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始" end-placeholder="结束"/><el-segmented v-model="form.granularity" :options="[{label:'日',value:'day'},{label:'周',value:'week'},{label:'月',value:'month'}]"/><el-button type="primary" @click="load">分析</el-button></section>
     <section class="summary"><article class="surface"><span>统计人员</span><strong>{{ data.users.length }}</strong></article><article class="surface danger"><span>超负载</span><strong>{{ counts.overloaded }}</strong></article><article class="surface idle"><span>空闲</span><strong>{{ counts.idle }}</strong></article><article class="surface normal"><span>负载正常</span><strong>{{ counts.normal }}</strong></article></section>
     <section class="analysis-grid">

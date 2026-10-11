@@ -236,9 +236,9 @@ onMounted(async () => { await loadOptions(); await load() })
 
 <template>
   <div class="page-shell">
-    <header class="page-header"><div><h1 class="page-title">用户管理</h1><p class="page-subtitle">员工号同时作为登录账号；用户只维护基础身份、组织关系和五类系统角色。</p></div><el-button v-if="userStore.hasPermission('user:edit')" type="primary" @click="openCreate">新增用户</el-button></header>
+    <header class="page-header"><div><h1 class="page-title">用户管理</h1></div><el-button v-if="userStore.hasPermission('user:edit')" type="primary" @click="openCreate">新增用户</el-button></header>
     <section class="surface filter-bar">
-      <PersonnelScopeCascader v-model="filterScopes" :users="userOptions" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 用户（可多选）" />
+      <PersonnelScopeCascader v-model="filterScopes" :users="userOptions" :departments="departments" :organizations="organizations" placeholder="用户" />
       <el-select v-model="query.status" clearable placeholder="账号状态" style="width:140px"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select>
       <el-button @click="query.page=1;load()">查询</el-button>
     </section>

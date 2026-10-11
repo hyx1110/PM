@@ -67,7 +67,7 @@ function tooltip(item: DashboardTaskItem | DashboardProjectTimelineItem) {
 <template>
   <section class="surface timeline-card">
     <header class="module-head">
-      <div><h2>项目进度 <span class="project-count">{{projects.length}} 个项目</span></h2><p>展示本人及下属相关的已审批项目；展开查看重点任务，点击任务可查看详情。</p></div>
+      <h2>项目进度</h2>
       <div class="timeline-tools">
         <div class="timeline-legend"><span><i class="plan"></i>计划</span><span><i class="actual"></i>实际</span><span><i class="today"></i>今天</span></div>
         <button v-if="expandableProjects.length" class="expand-all" :aria-label="allExpanded?'收起全部项目的重点任务':'展开全部项目的重点任务'" @click="toggleAll">{{allExpanded?'全部收起':'全部展开'}}</button>
@@ -118,8 +118,6 @@ function tooltip(item: DashboardTaskItem | DashboardProjectTimelineItem) {
 .module-head { flex-shrink: 0; }
 .module-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px 24px; }
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
-.project-count { margin-left: 10px; color: #6f7f92; font-size: 13px; font-weight: 500; white-space: nowrap; }
-.module-head p { margin: 8px 0 0; color: #6f7f92; font-size: 14px; line-height: 1.6; }
 .timeline-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
 .timeline-legend { display: flex; align-items: center; gap: 18px; color: #5c6d81; font-size: 13px; }
 .timeline-legend span { display: flex; align-items: center; gap: 7px; }

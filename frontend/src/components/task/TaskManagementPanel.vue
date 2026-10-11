@@ -331,18 +331,18 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
 <template>
   <div class="page-shell" :class="{embedded: props.projectId}">
     <header class="page-header">
-      <div><h1 class="page-title">{{props.projectId ? '项目任务' : '任务管理'}}</h1><p class="page-subtitle">{{props.projectId ? '管理当前项目的多级任务；操作权限与任务管理一致。' : '展示本人、参与项目及权限范围内的任务；任务状态以最新执行记录为准，项目完成由负责人手动确认。'}}</p></div>
+      <div><h1 class="page-title">{{props.projectId ? '项目任务' : '任务管理'}}</h1></div>
       <el-button v-if="approvedProjects.length" type="primary" @click="openCreate()">新增任务</el-button>
     </header>
     <section class="surface filter-bar">
       <el-select v-if="!props.projectId" v-model="query.project_id" clearable filterable placeholder="项目" style="width:210px"><el-option v-for="item in projects" :key="item.id" :label="`${item.code} · ${item.name}`" :value="item.id"/></el-select>
-      <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="部门 / 组织 / 项目成员（可多选）" />
+        <PersonnelScopeCascader v-model="filterScopes" :users="users" :departments="departments" :organizations="organizations" placeholder="项目成员" />
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:130px"><el-option v-for="item in filterStatuses" :key="item" :label="statusLabel[item]" :value="item"/></el-select>
       <el-select v-model="query.approval_status" clearable placeholder="审批状态" style="width:170px"><el-option v-for="(label,value) in approvalLabels" :key="value" :label="label" :value="value"/></el-select>
       <el-button @click="applyFilters">查询</el-button>
     </section>
     <section class="surface table-card">
-      <el-table v-loading="loading" :data="visibleTaskRows" row-key="id" :span-method="taskSpanMethod" table-layout="fixed">
+      <el-table v-loading="loading" :data="visibleTaskRows" row-key="id" :span-method="taskSpanMethod" table-layout="fixed" :header-cell-style="{ textAlign: 'center' }" :cell-style="{ textAlign: 'center' }">
         <el-table-column prop="project_name" label="项目名称" min-width="145" align="center" show-overflow-tooltip><template #default="{row}"><strong class="project-name">{{row.project_name}}</strong></template></el-table-column>
         <el-table-column prop="name" label="任务名称" min-width="185" align="center" header-align="center">
           <template #default="{row}">

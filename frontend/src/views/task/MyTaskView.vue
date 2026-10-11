@@ -37,7 +37,7 @@ onMounted(load)
 <template>
   <div class="page-shell">
     <header class="page-header">
-      <div><h1 class="page-title">我的任务</h1><p class="page-subtitle">只展示由你负责的任务，无需浏览完整项目管理结构。</p></div>
+      <div><h1 class="page-title">我的任务</h1></div>
     </header>
     <section class="surface filter-bar">
       <el-select v-model="query.status" clearable placeholder="任务状态" style="width:160px">
