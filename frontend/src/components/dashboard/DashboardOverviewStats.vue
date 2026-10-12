@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Calendar, Collection, TrendCharts, Warning } from '@element-plus/icons-vue'
-import type { DashboardWorkbench } from '@/types/report'
+import type { DashboardRiskAlert, DashboardWorkbench } from '@/types/report'
 
 const props = defineProps<{
   overview: DashboardWorkbench['overview']
+  riskAlerts: DashboardRiskAlert[]
 }>()
 const emit = defineEmits<{
   open: [target: 'projects' | 'tasks' | 'pending' | 'risks']
@@ -33,17 +34,17 @@ const cards = computed(() => [
     key: 'tasks' as const,
     label: '任务完成率',
     value: `${props.overview.task_completion_rate}%`,
-    note: `${props.overview.completed_tasks} / ${props.overview.total_tasks} 个任务`,
-    details: `按当前账号可见任务统计，已完成 ${props.overview.completed_tasks} 个，共 ${props.overview.total_tasks} 个。`,
+    note: `${props.overview.completed_tasks} / ${props.overview.total_tasks} 个本人任务`,
+    details: `仅统计任务成员包含本人的有效任务，已完成 ${props.overview.completed_tasks} 个，共 ${props.overview.total_tasks} 个。完成率 = 本人已完成任务数 ÷ 本人任务总数 × 100%。`,
     icon: TrendCharts,
     tone: 'green',
   },
   {
     key: 'risks' as const,
     label: '需要关注',
-    value: props.overview.risk_projects,
-    note: `${props.overview.delayed_projects} 延期 · ${props.overview.overrun_tasks} 工时异常`,
-    details: '风险项目综合项目延期、任务延期和实际工时超出预计工时计算。点击在右侧查看关注事项。',
+    value: props.riskAlerts.length,
+    note: '项目、任务异常及超时待办',
+    details: '按关注事项逐条统计，同一项目的不同异常分别计数，与点击后打开的列表一致。',
     icon: Warning,
     tone: 'red',
   },

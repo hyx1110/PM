@@ -164,7 +164,7 @@ onUnmounted(() => {
 <template>
   <div class="page-shell dashboard-page">
     <template v-if="dashboard">
-      <DashboardOverviewStats :overview="dashboard.overview" @open="openOverview" />
+      <DashboardOverviewStats :overview="dashboard.overview" :risk-alerts="dashboard.risk_alerts" @open="openOverview" />
 
       <section class="project-grid" aria-label="我的今日日程与项目进度">
         <DashboardMyDay :day="dashboard.my_day" :loading="loading" :failed="loadError" @refresh="loadDashboard" @pending="openOverview('pending')" />

@@ -297,6 +297,12 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         Task.approval_status.in_(EXECUTABLE_TASK_APPROVALS),
         Task.project_id.in_(visible_project_ids_query),
     ]
+    # Personal task metrics share the same assignment scope as "my tasks".
+    # Project membership or visibility alone must not count a colleague's task.
+    my_task_filters = [
+        *task_filters,
+        Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
+    ]
     execution_agg = _execution_aggregate(visible_project_ids_query)
 
     project_priority = case(
@@ -335,8 +341,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
 
     my_rows = db.execute(
         task_select.where(
-            *task_filters,
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
+            *my_task_filters,
         ).order_by(
             case(
                 (and_(Task.status != "completed", Task.planned_end < today), 0),
@@ -349,6 +354,8 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         ).limit(40)
     ).all()
 
+    # Keep all qualifying rows for attention alerts; only the legacy comparison
+    # preview is limited when serializing the response below.
     comparison_rows = db.execute(
         task_select.where(
             *task_filters,
@@ -359,7 +366,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         ).order_by(
             (func.coalesce(execution_agg.c.actual_hours, 0) - Task.estimated_hours).desc(),
             Task.planned_end.asc(),
-        ).limit(12)
+        )
     ).all()
 
     all_task_ids = {
@@ -452,10 +459,21 @@ def dashboard_workbench(db: Session, user: User) -> dict:
             case((RiskRecord.risk_level == "critical", 0), (RiskRecord.risk_level == "high", 1), else_=2),
             RiskRecord.detected_at.desc(),
         )
-        .limit(8)
     ).all()
-    risk_alerts = [
-        {
+    risk_alerts = []
+    existing_alert_keys = set()
+    for risk, project_name, task_name in risk_rows:
+        # Persisted detector records and live delay checks describe one issue.
+        if risk.risk_type == "task_delay" and risk.task_id is not None:
+            alert_key = ("delayed_task", risk.task_id)
+        elif risk.risk_type == "project_delay" and risk.project_id is not None:
+            alert_key = ("delayed_project", risk.project_id)
+        else:
+            alert_key = ("risk_record", risk.id)
+        if alert_key in existing_alert_keys:
+            continue
+        existing_alert_keys.add(alert_key)
+        risk_alerts.append({
             "id": f"risk-{risk.id}",
             "type": "risk_record",
             "severity": "danger" if risk.risk_level in {"critical", "high"} else "warning",
@@ -466,10 +484,23 @@ def dashboard_workbench(db: Session, user: User) -> dict:
             "task_id": risk.task_id,
             "task_name": task_name,
             "occurred_at": risk.detected_at,
-        }
-        for risk, project_name, task_name in risk_rows
-    ]
-    existing_alert_keys = {(item.get("type"), item.get("task_id")) for item in risk_alerts}
+        })
+    for project, _manager_name in project_rows:
+        alert_key = ("delayed_project", project.id)
+        if project.status != "completed" and project.planned_end < today and alert_key not in existing_alert_keys:
+            risk_alerts.append({
+                "id": f"delayed-project-{project.id}",
+                "type": "delayed_project",
+                "severity": "danger",
+                "title": f"{project.name} 已延期 {(today - project.planned_end).days} 天",
+                "detail": f"计划结束日为 {project.planned_end}，当前项目仍未完成。",
+                "project_id": project.id,
+                "project_name": project.name,
+                "task_id": None,
+                "task_name": None,
+                "occurred_at": datetime.combine(project.planned_end, datetime.min.time()),
+            })
+            existing_alert_keys.add(alert_key)
     for item in [task_cache[row[0].id] for row in comparison_rows]:
         if item["status"] == "delayed" and ("delayed_task", item["id"]) not in existing_alert_keys:
             risk_alerts.append({
@@ -484,7 +515,8 @@ def dashboard_workbench(db: Session, user: User) -> dict:
                 "task_name": item["name"],
                 "occurred_at": datetime.combine(item["planned_end"], datetime.min.time()),
             })
-        elif item["variance"] in {"warning", "severe"} and ("overrun_task", item["id"]) not in existing_alert_keys:
+            existing_alert_keys.add(("delayed_task", item["id"]))
+        if item["variance"] in {"warning", "severe"} and ("overrun_task", item["id"]) not in existing_alert_keys:
             risk_alerts.append({
                 "id": f"overrun-task-{item['id']}",
                 "type": "overrun_task",
@@ -497,6 +529,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
                 "task_name": item["name"],
                 "occurred_at": datetime.combine(item["actual_end"], datetime.min.time()) if item.get("actual_end") else now,
             })
+            existing_alert_keys.add(("overrun_task", item["id"]))
     for item in pending_items:
         created_at = item.get("created_at")
         if isinstance(created_at, datetime) and created_at < now - timedelta(hours=24):
@@ -512,7 +545,6 @@ def dashboard_workbench(db: Session, user: User) -> dict:
                 "task_name": item.get("title") if item.get("task_id") else None,
                 "occurred_at": created_at,
             })
-    risk_alerts = risk_alerts[:12]
 
     trend_start = today - timedelta(days=30)
     trend_start_time = datetime.combine(trend_start, datetime.min.time())
@@ -559,7 +591,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         select(
             func.count(Task.id),
             func.coalesce(func.sum(case((Task.status == "completed", 1), else_=0)), 0),
-        ).where(*task_filters)
+        ).where(*my_task_filters)
     ).one()
     running_projects = db.scalar(
         select(func.count(Project.id)).where(
@@ -617,8 +649,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
             func.count(Task.id),
             func.coalesce(func.sum(case((Task.planned_start <= today, 1), else_=0)), 0),
         ).where(
-            *task_filters,
-            Task.id.in_(select(TaskAssignee.task_id).where(TaskAssignee.user_id == user.id)),
+            *my_task_filters,
             Task.status != "completed",
         )
     ).one()
@@ -645,7 +676,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         "scope_label": scope_label,
         "overview": overview,
         "timeline": timeline,
-        "execution_comparison": [task_cache[row[0].id] for row in comparison_rows],
+        "execution_comparison": [task_cache[row[0].id] for row in comparison_rows[:12]],
         "pending_items": pending_items,
         "my_tasks": [task_cache[row[0].id] for row in my_rows],
         "my_day": _my_day(db, user.id, now),

@@ -47,9 +47,15 @@ function open(row: Row) {
   <section class="pending-card" :class="{surface:!embedded,embedded}">
     <header v-if="!embedded"><h2>待处理事项</h2></header>
     <nav class="pending-tabs" aria-label="待办分类">
-      <button :class="{active:tab==='all'}" :aria-pressed="tab==='all'" @click="tab='all'">全部</button>
-      <button :class="{active:tab==='action'}" :aria-pressed="tab==='action'" @click="tab='action'">审批 / 预约</button>
-      <button :class="{active:tab==='task'}" :aria-pressed="tab==='task'" @click="tab='task'">我的任务</button>
+      <button :class="{active:tab==='all'}" :aria-pressed="tab==='all'" :aria-label="`全部，共 ${overview.pending_count} 项待处理`" @click="tab='all'">
+        <span>全部</span><span class="pending-tab-count" :class="{empty:overview.pending_count===0}" aria-hidden="true">{{overview.pending_count}}</span>
+      </button>
+      <button :class="{active:tab==='action'}" :aria-pressed="tab==='action'" :aria-label="`审批 / 预约，共 ${overview.pending_action_count} 项待处理`" @click="tab='action'">
+        <span>审批 / 预约</span><span class="pending-tab-count" :class="{empty:overview.pending_action_count===0}" aria-hidden="true">{{overview.pending_action_count}}</span>
+      </button>
+      <button :class="{active:tab==='task'}" :aria-pressed="tab==='task'" :aria-label="`我的任务，共 ${overview.pending_task_count} 项未完成`" @click="tab='task'">
+        <span>我的任务</span><span class="pending-tab-count" :class="{empty:overview.pending_task_count===0}" aria-hidden="true">{{overview.pending_task_count}}</span>
+      </button>
     </nav>
     <div v-if="rows.length" class="pending-list" tabindex="0" role="region" aria-label="待处理事项列表，可滚动查看">
       <el-tooltip v-for="row in rows" :key="row.id" :content="`${row.title} · ${row.meta} · ${row.time} · ${row.status}`" :show-after="350" placement="top">
@@ -70,9 +76,11 @@ function open(row: Row) {
 .embedded .pending-tabs { margin-top: 0; }
 header,nav,footer { flex-shrink: 0; }
 h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
-.pending-tabs { display: flex; gap: 4px; margin: 18px 0 8px; padding: 4px; border: 1px solid #e7ecf1; border-radius: 9px; background: #f4f6f8; }
-.pending-tabs button { flex: 1; min-height: 34px; border: 0; border-radius: 6px; background: transparent; padding: 6px; color: #5d7088; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.pending-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 18px 0 8px; padding: 4px; border: 1px solid #e7ecf1; border-radius: 9px; background: #f4f6f8; }
+.pending-tabs button { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; gap: 6px; min-height: 34px; border: 0; border-radius: 6px; background: transparent; padding: 6px; color: #5d7088; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .pending-tabs button.active { background: #fff; color: #2f628f; font-weight: 600; box-shadow: 0 1px 5px #314c6714; }
+.pending-tab-count { display: inline-flex; min-width: 20px; height: 20px; flex-shrink: 0; align-items: center; justify-content: center; box-sizing: border-box; border-radius: 999px; background: #b2453f; padding: 0 6px; color: #fff; font-size: 12px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.pending-tab-count.empty { background: #e6ebf0; color: #5d7088; }
 .pending-list { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 .pending-row { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 14px 4px; border: 0; border-bottom: 1px solid #e9edf2; background: transparent; text-align: left; cursor: pointer; }
 .pending-row:hover { background: #f5f8fb; border-radius: 8px; }

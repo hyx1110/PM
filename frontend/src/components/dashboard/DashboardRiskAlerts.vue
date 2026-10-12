@@ -1,19 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
 import { Warning } from '@element-plus/icons-vue'
 import type { DashboardRiskAlert } from '@/types/report'
 
-const props = defineProps<{ items: DashboardRiskAlert[]; embedded?: boolean }>()
+defineProps<{ items: DashboardRiskAlert[]; embedded?: boolean }>()
 const emit = defineEmits<{ select: [item: DashboardRiskAlert] }>()
-const expanded = ref(false)
-const visibleItems = computed(() => expanded.value ? props.items : props.items.slice(0, 3))
 </script>
 
 <template>
   <section class="risk-card" :class="{surface:!embedded,embedded}">
-    <header v-if="!embedded || items.length" class="module-head"><h2 v-if="!embedded">需要关注</h2><div class="head-actions"><span v-if="items.length" class="risk-count">{{items.length}}</span><button v-if="items.length>3" class="text-button" :aria-expanded="expanded" @click="expanded=!expanded">{{expanded?'收起':'查看更多'}}</button></div></header>
-    <div v-if="visibleItems.length" class="risk-list" tabindex="0" role="region" aria-label="需要关注的事项，可滚动查看">
-      <el-tooltip v-for="item in visibleItems" :key="item.id" :content="item.detail || item.title" placement="top" :show-after="280">
+    <header class="module-head"><h2 v-if="!embedded">需要关注</h2><span class="risk-count">共 {{items.length}} 项关注事项</span></header>
+    <div v-if="items.length" class="risk-list" tabindex="0" role="region" aria-label="需要关注的事项，可滚动查看">
+      <el-tooltip v-for="item in items" :key="item.id" :content="item.detail || item.title" placement="top" :show-after="280">
         <button class="risk-item" @click="emit('select',item)"><span class="risk-icon" :class="item.severity"><el-icon><Warning /></el-icon></span><span><strong>{{item.title}}</strong><small>{{item.project_name || '系统事项'}}{{item.task_name?` · ${item.task_name}`:''}}</small></span></button>
       </el-tooltip>
     </div>
@@ -28,9 +25,7 @@ const visibleItems = computed(() => expanded.value ? props.items : props.items.s
 .module-head { flex-shrink: 0; }
 .module-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .module-head h2 { margin: 0; color: #1f2f43; font-size: 20px; font-weight: 650; line-height: 1.5; }
-.head-actions { display: flex; align-items: center; gap: 12px; }
 .risk-count { display: grid; min-width: 28px; height: 28px; place-items: center; padding: 0 7px; border-radius: 14px; background: #fbecea; color: #aa504b; font-size: 13px; font-weight: 650; }
-.text-button { border: 0; border-radius: 6px; background: transparent; padding: 8px 0; color: #436d94; font-size: 13px; cursor: pointer; }
 .risk-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: auto; margin-top: 16px; overscroll-behavior: contain; }
 .risk-item { display: flex; width: 100%; min-width: 0; flex-shrink: 0; align-items: flex-start; gap: 12px; border: 0; border-top: 1px solid #e9edf2; background: transparent; padding: 16px 4px; text-align: left; cursor: pointer; }
 .risk-item:first-child { border-top: 0; }

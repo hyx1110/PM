@@ -1,5 +1,11 @@
 # V2.0 API 清单
 
+## 2026-10-12：首页需要关注数量
+
+- `GET /dashboard/workbench` 的 `risk_alerts` 是顶部“需要关注”和右侧抽屉共用的数据源；展示数量为 `risk_alerts.length`，单位为关注事项，不再使用去重项目数 `overview.risk_projects` 作为该卡片数字。
+- 风险记录和最终关注列表不再限制为 8/12 条；任务异常检测使用完整查询结果，`execution_comparison` 仅在序列化预览时保留前 12 条。`risk_alerts` 包括原权限范围内的未处理风险、已审批项目延期、有效任务延期/工时超额、当前待办摘要中等待超过 24 小时的事项。
+- 历史风险 `project_delay` / `task_delay` 与即时检测的同一项目/任务延期去重；不同问题分别计数。旧 `overview.risk_projects`、`delayed_projects`、`overrun_tasks` 保留原汇总含义，不用于推导关注列表条数。无新增字段或迁移。
+
 ## 2026-10-09：项目计划日期变更
 
 - `PUT /api/v1/projects/{id}`：已审批项目禁止修改 `planned_start/planned_end`（提前、推迟均禁止）；兼容携带未变化日期的请求。待审批仍不可编辑，草稿和驳回修改后重送审保持原流程。
@@ -17,6 +23,7 @@
 - `POST /tasks/{id}/submit`：需 `task:edit` 和项目管理权限，仅允许驳回的父任务重新提交，无请求体；记录新的提交时间，清空上一轮最终审批字段，历史决定保留在操作日志中。
 - `PUT /tasks/{id}`：待审批任务不可修改；驳回后可编辑并重新提交。禁止顶层任务与子任务互相转换绕过审批。审批通过任务的后续编辑仍遵循原权限及时间/工时校验。
 - `GET /dashboard/workbench`：待办新增 `type=task_approval`，包含任务成员、计划周期、工时、描述及备注，`source_id` 为任务 ID。待审批及已驳回任务不进入执行进度、个人任务统计或执行过程报表。
+  - `overview.total_tasks`、`overview.completed_tasks` 和 `overview.task_completion_rate` 仅统计任务成员包含当前登录用户的有效任务（`task_assignees.user_id = 当前用户 ID`），保留项目可见、任务未删除及已审批/无需审批条件。仅有项目成员关系不计入其他人的任务；多人任务计一次，统计不受 `my_tasks` 摘要数量上限影响。完成率为本人已完成任务数除以本人任务总数乘以 100，保留一位小数，总数为 0 时返回 0。
 - 预约、执行、加班接口均校验任务及其祖先的审批状态；导入接口同样执行审批规则。任务进度状态仍是原有四种，审批状态是单独维度。
 
 首页 `/api/v1/dashboard/workbench` 与兼容的 `/api/v1/dashboard/summary` 统一按本人及全部层级下属的项目关系过滤；部门主管/超级管理员的首页不再默认全量。`workbench.timeline` 返回全部相关已审批项目，取消 5 个项目上限，仍保持每项目最多 6 条任务摘要。其他业务模块权限及待办审批规则不变，无新增接口、依赖或数据库迁移。
