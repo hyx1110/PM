@@ -97,8 +97,8 @@ const statusLabel: Record<string, string> = {
   completed: '已完成',
   delayed: '已逾期',
 }
-const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已审批', rejected: '已驳回' }
-const approvalType = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' } as const
+const approvalLabel: Record<string, string> = { draft: '草稿', pending: '待部门主管审批', approved: '已审批', rejected: '已驳回' }
+const approvalType: Record<string, 'info' | 'warning' | 'success' | 'danger'> = { draft: 'info', pending: 'warning', approved: 'success', rejected: 'danger' }
 const statusTypeMap: Record<string, 'primary' | 'success' | 'warning' | 'danger' | 'info'> = {
   running: 'primary',
   completed: 'success',
@@ -444,7 +444,7 @@ onMounted(async () => {
                 type="primary"
                 @click="openEdit(row)"
               >编辑</el-button>
-              <el-button v-if="['draft','rejected'].includes(row.approval_status) && canManageProject(row)" link type="danger" @click="remove(row)">删除</el-button>
+              <el-button v-if="['draft','pending','rejected'].includes(row.approval_status) && canManageProject(row)" link type="danger" @click="remove(row)">删除</el-button>
               <el-button v-if="row.all_tasks_completed && row.approval_status==='approved' && row.status!=='completed' && canManageProject(row)" link type="success" @click="finish(row)">确认完成</el-button>
             </template>
           </template>

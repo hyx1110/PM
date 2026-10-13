@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { confirmAction } from '@/utils/confirm'
 import {
@@ -19,7 +19,25 @@ const loading = ref(false)
 const rows = ref<AppNotification[]>([]), total = ref(0)
 const query = reactive({ page: 1, page_size: 20, status: '' })
 
-async function load() { loading.value = true; try { const page = await getNotifications(query); rows.value = page.items; total.value = page.total } finally { loading.value = false } }
+let loadSequence = 0
+async function load(silent = false) {
+  const sequence = ++loadSequence
+  if (!silent) loading.value = true
+  try {
+    const page = await getNotifications({ ...query })
+    if (sequence !== loadSequence) return
+    total.value = page.total
+    const lastPage = Math.max(1, Math.ceil(page.total / query.page_size))
+    if (query.page > lastPage) {
+      query.page = lastPage
+      await load(silent)
+      return
+    }
+    rows.value = page.items
+  } finally {
+    if (sequence === loadSequence) loading.value = false
+  }
+}
 async function read(item: AppNotification) {
   if (item.status !== 'unread') return
   await markNotificationRead(item.id)
@@ -46,8 +64,22 @@ async function remove(item: AppNotification) {
 }
 async function clearRead() { if (!(await confirmAction('确认清空全部已读通知吗？未读通知会保留。','清空已读通知','确认清空'))) return;const result=await deleteReadNotifications();ElMessage.success(`已清空 ${result.deleted} 条已读通知`);await load() }
 function levelClass(level: string) { return `level-${level}` }
+let refreshTimer: ReturnType<typeof setInterval> | undefined
+function refreshActiveNotifications() {
+  if (document.hidden || loading.value) return
+  void Promise.all([load(true), notificationStore.refreshUnreadCount()]).catch(() => {
+    // Keep the current page when background refresh fails; retry next time.
+  })
+}
 onMounted(async () => {
+  refreshTimer = setInterval(refreshActiveNotifications, 30_000)
+  window.addEventListener('focus', refreshActiveNotifications)
   await Promise.all([load(), notificationStore.refreshUnreadCount()])
+})
+onBeforeUnmount(() => {
+  ++loadSequence
+  clearInterval(refreshTimer)
+  window.removeEventListener('focus', refreshActiveNotifications)
 })
 </script>
 
@@ -60,7 +92,7 @@ onMounted(async () => {
         <span class="indicator"></span><span class="message"><strong>{{ item.title }}</strong><span>{{ item.content }}</span><small>{{ formatDateTime(item.created_at) }} · {{ (item.delivered_channels || []).join(' / ') || '站内通知' }} · 邮件：{{emailLabels[item.email_status] || '未启用'}}<template v-if="item.email_attempts">（已尝试 {{item.email_attempts}} 次）</template><span v-if="item.email_last_error"> · {{item.email_last_error}}</span></small></span><span class="notification-actions"><el-tag v-if="item.status==='unread'" size="small">未读</el-tag><el-button link type="danger" @click.stop="remove(item)">删除</el-button></span>
       </article>
       <el-empty v-if="!rows.length" description="暂无通知"/>
-      <div class="table-footer"><el-pagination v-model:current-page="query.page" :page-size="query.page_size" layout="total, prev, pager, next" :total="total" @change="load"/></div>
+      <div class="table-footer"><el-pagination v-model:current-page="query.page" :page-size="query.page_size" layout="total, prev, pager, next" :total="total" @change="load()"/></div>
     </section>
   </div>
 </template>

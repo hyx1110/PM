@@ -115,7 +115,7 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | GET/POST | `/projects` | `project:view/edit` | GET 按全局角色、管理链条及本人负责/参与关系返回；POST 使用 multipart，必填 `payload`（ProjectCreate JSON 字符串）及 `file`（立项报告），自动生成 `code`；创建者须为项目经理/职能主管/部门主管/超管并传至少一名 `member_ids` |
 | GET | `/projects/approvals/pending` | 当前审批人 | 独立返回本人待审批项目，不扩大常规项目列表 |
 | POST | `/projects/{id}/submit` | 项目创建人 | 先核对立项报告元数据及实际文件；所有项目统一提交给项目所属部门当前配置的部门主管，不自动通过 |
-| GET/PUT/DELETE | `/projects/{id}` | `project:view/edit` | 详情/更新/草稿逻辑删除 |
+| GET/PUT/DELETE | `/projects/{id}` | `project:view/edit` | 详情/更新/草稿、待审批或已驳回项目逻辑删除 |
 | POST | `/projects/{id}/complete` | 项目负责人/部门主管/超管 | 所有未取消任务完成且无待办依赖后，手动确认项目完成 |
 | POST | `/projects/{id}/approve` | `approver_id` 对应的部门主管 | 批准项目和初始工时额度 |
 | POST | `/projects/{id}/reject` | `approver_id` 对应的部门主管 | 驳回项目，必须填写 `note` |
@@ -148,6 +148,10 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 项目列表支持 `department_id/organization_id/employee_no/name`，任务列表支持同名四类人员筛选；组织、工号和姓名按当前有效项目成员或任务项目成员匹配。任务的 `owner_ids` 是完整任务项目成员集合，旧字段 `owner_id` 仅作为兼容主要项目成员保留。
 
 任务列表默认依次按计划开始日期、计划结束日期、创建时间和任务 ID 倒序返回；任务管理树中的同级任务沿用该顺序。
+
+`PUT /tasks/{id}` 对 `approval_status=approved` 的任务只接受 `description/remark` 字段；携带名称、成员、层级、日期或预计工时即拒绝，包括传入未变化的值。任务成员仍仅能更新 `remark`。已完成任务同样只允许修改描述/备注，未完成的免审批子任务继续按原规则维护。项目已确认完成时仍拒绝修改。创建子任务允许选择已完成父任务，继续校验剩余计划工时、成员、日期及项目状态，保存后递归汇总祖先状态。
+
+`DELETE /projects/{id}` 允许有项目管理权限者删除 `draft/pending/rejected` 项目，保留操作日志；与审批使用同一项目行锁，已审批项目仍拒绝删除。删除待审批项目或任务会在同一事务内移除其待审批通知。
 
 项目和任务的持久化状态都只有 `not_started/running/completed`，`delayed`（已逾期）按计划结束日期动态计算。项目审批状态继续独立使用 `draft/pending/approved/rejected`。任务计划起止日期和执行实际起止日期都使用 `YYYY-MM-DD`。任务支持任意层级，子任务成员必须是父任务成员的子集；子任务日期必须位于父任务日期内，同级子任务工时合计不能超过父任务工时，顶级任务工时合计不能超过项目工时。执行状态只有 `running/completed`，且创建或修改执行记录前必须存在同任务、同执行人、与实际日期重叠的已确认/进行中/已完成预约。
 
@@ -253,6 +257,10 @@ Excel 下载直接返回 `.xlsx` 文件流，不使用 JSON 包装。
 | DELETE | `/notifications/read` | `notification:view` | 软删除本人全部已读通知 |
 
 通知偏好功能已移除。临期阈值统一读取 `NOTIFICATION_UPCOMING_HOURS`；外部渠道由环境变量统一启用并由 Celery 异步投递。未配置渠道不会阻塞业务请求，站内通知始终保存。
+
+项目、父任务和项目资源申请的待审批通知与业务状态联动：删除、撤回或审批结束后移除待审批提醒，重新提交只保留本轮提醒。通知列表、分页总数、未读数和外部投递共用有效性判断，因此升级前遗留的失效提醒也不再返回或继续投递；审批结果通知保留。通知中心与角标在可见页面每 30 秒刷新，窗口重新获得焦点时刷新。
+
+首页 `risk_alerts`、项目健康度的工时超额判断和 `overview.overrun_tasks` 不再包含已完成任务；关联已完成或已删除任务的历史风险记录不进入首页关注列表。任务历史实际工时和偏差数据仍保留用于报表。
 
 ## 报表与数据交换
 

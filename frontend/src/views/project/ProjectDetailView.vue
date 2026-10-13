@@ -56,7 +56,7 @@ const resourceForm = reactive({
   reason: '',
 })
 const approvalLabel = { draft: '草稿', pending: '待部门主管审批', approved: '已通过', rejected: '已驳回' }
-const resourceStatusLabel = { pending: '待部门主管审批', approved: '已批准', rejected: '已驳回', withdrawn: '已撤回' }
+const resourceStatusLabel: Record<string, string> = { pending: '待部门主管审批', approved: '已批准', rejected: '已驳回', withdrawn: '已撤回' }
 const projectStatusLabel: Record<string, string> = { not_started: '未开始', running: '进行中', completed: '已完成', delayed: '已逾期' }
 interface MemberCascaderOption { value: string | number; label: string; children?: MemberCascaderOption[] }
 const memberCascaderProps = { multiple: true, emitPath: false }

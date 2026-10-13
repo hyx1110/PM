@@ -20,6 +20,7 @@ from app.schemas.task import TASK_APPROVAL_STATUSES, TASK_FILTER_STATUSES, TaskC
 from app.services.task_approval_policy import EXECUTABLE_TASK_APPROVALS, assert_task_approved
 from app.services.operation_log_service import log_operation
 from app.services.notification_service import create_notification
+from app.services.notification_lifecycle_service import retire_approval_notifications
 from app.services.project_service import (
     _assert_department_manager,
     get_department_manager,
@@ -91,6 +92,7 @@ def reviewable_task_project_ids(db: Session, user: User) -> set[int]:
 
 
 def _notify_task_approval(db: Session, task: Task, project: Project, user: User, approver: User) -> None:
+    retire_approval_notifications(db, "task", task.id)
     create_notification(
         db, approver.id, "task_approval_pending", "父任务待审批",
         f"{user.name} 在项目“{project.name}”中提交父任务“{task.name}”，"
@@ -178,6 +180,7 @@ def decide_task(db: Session, task_id: int, payload: TaskDecision, user: User, *,
     task.approver_id = task.approved_by = user.id
     task.approved_at = beijing_now()
     task.approval_note = note or None
+    retire_approval_notifications(db, "task", task.id)
     recipients = {task.created_by, project.manager_id, *owner_ids} - {None, user.id}
     result = "已通过" if approve else "已驳回"
     for recipient_id in recipients:
@@ -309,11 +312,10 @@ def _validate_parent(db: Session, project_id: int, parent_id: int | None, curren
     if not parent or parent.project_id != project_id:
         raise bad_request("parent task must belong to the same project")
     assert_task_approved(db, parent)
-    if parent.status == "completed":
-        raise bad_request("不能在已完成的任务下新增或移动子任务")
     if parent_id != (task_repository.get(db, current_task_id).parent_id if current_task_id else None):
         assert_no_unrecorded_overtime(db, task_id=parent.id)
-    # A running task may gain child tasks. Existing parent execution and
+    # A running or completed task may gain children within its remaining
+    # allocated hours. Existing parent execution and
     # booking history remains attached to the parent for audit and reporting;
     # subsequent progress is rolled up from the new child hierarchy.
     cursor = parent
@@ -462,6 +464,10 @@ def create_task(db: Session, payload: TaskCreate, user: User) -> Task:
             )
     if approver:
         _notify_task_approval(db, task, project, user, approver)
+    if parent is not None:
+        db.flush()
+        synchronize_parent_status(db, parent.id)
+        synchronize_project_status(db, project.id)
     log_operation(db, operator_id=user.id, module="task", action="create", object_type="task", object_id=task.id, after_data=model_to_dict(task))
     db.commit()
     db.refresh(task)
@@ -487,9 +493,22 @@ def update_task(db: Session, task_id: int, payload: TaskUpdate, user: User) -> T
         raise bad_request("父任务正在等待部门主管审批，不能修改；驳回后可修改并重新提交")
     if task.approval_status == "rejected" and not can_manage:
         raise forbidden("被驳回的父任务只能由有项目管理权限的人员修订")
-    if task.status == "completed":
-        raise bad_request("已完成的任务不能再修改")
+    text_fields = {"description", "remark"}
+    if task.approval_status == "approved" and set(values) - text_fields:
+        raise bad_request("已通过审批的任务只能修改描述和备注，不能修改任务名称、成员、层级、计划日期或预计工时")
+    if task.status == "completed" and set(values) - text_fields:
+        raise bad_request("已完成的任务只能修改描述和备注")
     before = model_to_dict(task)
+    if not (set(values) - text_fields):
+        # Text edits do not change the approved plan or execution state and
+        # must not revalidate historical members, dates or allocated hours.
+        for key, value in values.items():
+            setattr(task, key, value)
+        log_operation(db, operator_id=user.id, module="task", action="update", object_type="task",
+                      object_id=task.id, before_data=before, after_data=model_to_dict(task))
+        db.commit()
+        db.refresh(task)
+        return task
     previous_parent_id = task.parent_id
     values = payload.model_dump(exclude_unset=True)
     required_fields = {
@@ -664,6 +683,7 @@ def delete_task(db: Session, task_id: int, user: User) -> None:
     before = model_to_dict(task)
     parent_id = task.parent_id
     task.is_deleted = True
+    retire_approval_notifications(db, "task", task.id)
     db.flush()
     synchronize_parent_status(db, parent_id)
     synchronize_project_status(db, task.project_id)

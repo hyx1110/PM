@@ -14,8 +14,8 @@ const emit = defineEmits<{
 
 // Keep existing API fields and quick-date buttons in sync with the single picker.
 const range = computed<[string, string] | null>({
-  get: () => props.startDate && props.endDate ? [props.startDate, props.endDate] : null,
-  set: (value) => {
+  get: (): [string, string] | null => props.startDate && props.endDate ? [props.startDate, props.endDate] : null,
+  set: (value: [string, string] | null) => {
     emit('update:startDate', value?.[0] || '')
     emit('update:endDate', value?.[1] || '')
     emit('change')

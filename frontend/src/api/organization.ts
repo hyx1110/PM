@@ -7,7 +7,7 @@ export const updateDepartment = (id: number, payload: Partial<Department>) => ap
 export const deleteDepartment = (id: number) => api.delete<void>(`/departments/${id}`)
 export const getOrganizationTree = (department_id?: number) =>
   api.get<OrganizationNode[]>('/organizations/tree', { params: { department_id } })
-export const createOrganization = (payload: Omit<OrganizationNode, 'id' | 'children' | 'data_source'>) =>
+export const createOrganization = (payload: Omit<OrganizationNode, 'id' | 'children' | 'users' | 'data_source'>) =>
   api.post<OrganizationNode>('/organizations', payload)
 export const updateOrganization = (id: number, payload: Partial<OrganizationNode>) =>
   api.put<OrganizationNode>(`/organizations/${id}`, payload)

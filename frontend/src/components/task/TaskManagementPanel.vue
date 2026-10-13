@@ -41,6 +41,7 @@ const query = reactive({
 const dialogVisible = ref(false)
 const saving = ref(false)
 const editingId = ref<number>()
+const editingTextOnly = ref(false)
 const editingProjectName = ref('')
 const reviewTask = ref<Task>()
 const reviewVisible = ref(false)
@@ -83,6 +84,11 @@ const allocatedProjectHours = computed(() => projectTasks.value
   .filter((item) => item.project_id === form.project_id && !item.parent_id && item.id !== editingId.value)
   .reduce((total, item) => total + Number(item.estimated_hours), 0))
 const selectedParent = computed(() => projectTasks.value.find((item) => item.id === form.parent_id))
+const remainingParentHours = computed(() => selectedParent.value
+  ? Number(selectedParent.value.estimated_hours) - projectTasks.value
+    .filter(item => item.parent_id === selectedParent.value?.id && item.id !== editingId.value)
+    .reduce((hours, item) => hours + Number(item.estimated_hours), 0)
+  : 0)
 const descendantIds = computed(() => {
   const ids = new Set<number>()
   if (!editingId.value) return ids
@@ -96,8 +102,7 @@ const parentOptions = computed(() => projectTasks.value.filter(
   (item) =>
     item.id !== editingId.value
     && !descendantIds.value.has(item.id)
-    && isExecutable(item)
-    && item.status !== 'completed',
+    && isExecutable(item),
 ))
 const ownerOptions = computed(() => {
   if (!selectedParent.value) return projectMemberOptions.value
@@ -225,6 +230,7 @@ function changeParent(parentId?: number) {
 async function openCreate(parent?: Task) {
   if (!approvedProjects.value.length) return ElMessage.warning('只有自己负责且已通过审批的项目可以新增任务')
   editingId.value = undefined
+  editingTextOnly.value = false
   resetHours()
   editingProjectName.value = ''
   Object.assign(form, emptyForm(), parent
@@ -236,6 +242,7 @@ async function openCreate(parent?: Task) {
 
 async function openEdit(row: Task) {
   editingId.value = row.id
+  editingTextOnly.value = row.approval_status === 'approved' || row.status === 'completed'
   editingProjectName.value = row.project_name || `项目 #${row.project_id}`
   Object.assign(form, {
     project_id: row.project_id, parent_id: row.parent_id, name: row.name,
@@ -249,10 +256,13 @@ async function openEdit(row: Task) {
 
 async function save() {
   if (saving.value) return
-  if (!(await formRef.value?.validate().catch(() => false))) return
-  if (!editingId.value && !hoursManual.value && (hoursLoading.value || !hoursEstimate.value)) return ElMessage.warning('请等待默认工时计算完成，或手动填写工时')
-  if (!isPositiveHalfHour(form.estimated_hours)) return ElMessage.warning('任务计划工时必须为大于 0 的 0.5 小时整数倍')
-  if (form.planned_end < form.planned_start) return ElMessage.warning('计划结束时间不能早于开始时间')
+  if (!editingTextOnly.value) {
+    if (!(await formRef.value?.validate().catch(() => false))) return
+    if (!editingId.value && !hoursManual.value && (hoursLoading.value || !hoursEstimate.value)) return ElMessage.warning('请等待默认工时计算完成，或手动填写工时')
+    if (!isPositiveHalfHour(form.estimated_hours)) return ElMessage.warning('任务计划工时必须为大于 0 的 0.5 小时整数倍')
+    if (form.planned_end < form.planned_start) return ElMessage.warning('计划结束时间不能早于开始时间')
+    if (selectedParent.value && Number(form.estimated_hours) > remainingParentHours.value) return ElMessage.warning(`子任务计划工时不能超过父任务剩余额度 ${remainingParentHours.value}h`)
+  }
   saving.value = true
   try {
     const action = !editingId.value && !form.parent_id ? '提交部门主管审批' : '保存任务'
@@ -260,7 +270,9 @@ async function save() {
     const payload = { ...form }
     if (editingId.value) {
       const { project_id: _projectId, ...updatePayload } = payload
-      await updateTask(editingId.value, updatePayload)
+      await updateTask(editingId.value, editingTextOnly.value
+        ? { description: form.description, remark: form.remark }
+        : updatePayload)
     } else await createTask(payload)
     ElMessage.success(!editingId.value && !form.parent_id ? '父任务已提交部门主管审批，通过后可安排子任务和预约工时' : '任务已保存')
     dialogVisible.value = false
@@ -279,7 +291,7 @@ async function remove(row: Task) {
 }
 
 async function editRemark(row: Task) {
-  const result = await ElMessageBox.prompt('任务项目成员可以维护备注；项目成员、计划工时等核心字段由项目负责人维护。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '', confirmButtonText: '下一步' }).catch(() => null)
+  const result = await ElMessageBox.prompt('任务项目成员可以维护备注；已通过审批的任务不能修改成员、计划工时等核心字段。', '编辑任务备注', { inputType: 'textarea', inputValue: row.remark || '', confirmButtonText: '下一步' }).catch(() => null)
   if (!result || !(await confirmAction(`确认保存任务“${row.name}”的备注？`, '保存任务备注', '确认保存'))) return
   const { value } = result
   await updateTask(row.id, { remark: value || '' })
@@ -365,7 +377,7 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
         <el-table-column label="操作" fixed="right" min-width="230" align="center"><template #default="{row}">
           <el-button v-if="row.can_review" link type="primary" @click="openReview(row)">审批</el-button>
           <el-button v-if="row.can_manage && row.approval_status==='rejected'" link type="primary" :loading="submittingId===row.id" @click="resubmit(row)">重新提交</el-button>
-          <el-button v-if="row.status!=='completed' && row.can_manage && isExecutable(row)" link @click="openCreate(row)">添加子任务</el-button>
+          <el-button v-if="row.can_manage && isExecutable(row)" link @click="openCreate(row)">添加子任务</el-button>
           <el-button v-if="row.can_manage && row.can_edit" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-else-if="row.can_edit" link type="primary" @click="editRemark(row)">编辑备注</el-button>
           <el-button v-if="row.can_delete" link type="danger" @click="remove(row)">删除</el-button>
@@ -375,16 +387,18 @@ onMounted(async () => { try { await loadOptions(); await load() } catch { /* API
       <div class="table-footer"><el-pagination v-model:current-page="query.page" v-model:page-size="query.page_size" :total="total" :page-sizes="[50,100,200]" layout="total, sizes, prev, pager, next" @change="load"/></div>
     </section>
     <el-dialog v-model="dialogVisible" :title="editingId?'编辑任务':'新增任务'" width="720px" destroy-on-close>
-      <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+      <el-form ref="formRef" :model="form" :rules="editingTextOnly ? {} : rules" label-position="top">
+        <el-alert v-if="editingTextOnly" class="project-window" type="info" :closable="false" show-icon title="已审批或已完成的任务只能修改描述和备注。"/>
         <div class="form-grid">
           <el-form-item label="所属项目" prop="project_id"><el-input v-if="editingId" :model-value="editingProjectName" disabled/><el-select v-else v-model="form.project_id" filterable style="width:100%" @change="changeProject"><el-option v-for="item in approvedProjects" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
-          <el-form-item label="父任务"><el-select v-model="form.parent_id" :disabled="Boolean(editingId && !form.parent_id)" :clearable="!editingId" placeholder="不选择即新建顶层父任务" style="width:100%" @change="changeParent"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="父任务"><el-select v-model="form.parent_id" :disabled="editingTextOnly || Boolean(editingId && !form.parent_id)" :clearable="!editingId" placeholder="不选择即新建顶层父任务" style="width:100%" @change="changeParent"><el-option v-for="item in parentOptions" :key="item.id" :label="item.name" :value="item.id"/></el-select></el-form-item>
           <el-alert v-if="selectedProject" class="project-window" type="info" :closable="false" show-icon :title="`项目周期：${formatDate(selectedProject.planned_start)} 至 ${formatDate(selectedProject.planned_end)}；项目总工时：${selectedProject.budget_hours}h；顶级任务已分配：${allocatedProjectHours}h`"/>
-          <el-form-item label="任务名称" prop="name"><el-input v-model="form.name"/></el-form-item>
-          <el-form-item label="项目成员" prop="owner_ids"><el-select v-model="form.owner_ids" multiple filterable collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in ownerOptions" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
-          <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
-          <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
-          <el-form-item label="任务计划工时" prop="estimated_hours"><el-input-number v-model="hoursInput" :min="editingId?0.5:0" :step="0.5" step-strictly :precision="1" style="width:100%"/></el-form-item>
+          <el-alert v-if="selectedParent && !editingTextOnly" class="project-window" type="info" :closable="false" show-icon :title="`父任务预计工时：${selectedParent.estimated_hours}h；可分配额度：${remainingParentHours}h（已完成子任务仍占用已分配工时）`"/>
+          <el-form-item label="任务名称" prop="name"><el-input v-model="form.name" :disabled="editingTextOnly"/></el-form-item>
+          <el-form-item label="项目成员" prop="owner_ids"><el-select v-model="form.owner_ids" :disabled="editingTextOnly" multiple filterable collapse-tags collapse-tags-tooltip style="width:100%"><el-option v-for="item in ownerOptions" :key="item.id" :label="`${item.name} (${item.employee_no})`" :value="item.id"/></el-select></el-form-item>
+          <el-form-item label="计划开始" prop="planned_start"><el-date-picker v-model="form.planned_start" :disabled="editingTextOnly" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
+          <el-form-item label="计划结束" prop="planned_end"><el-date-picker v-model="form.planned_end" :disabled="editingTextOnly" type="date" value-format="YYYY-MM-DD" style="width:100%"/></el-form-item>
+          <el-form-item label="任务计划工时" prop="estimated_hours"><el-input-number v-model="hoursInput" :disabled="editingTextOnly" :min="editingId?0.5:0" :step="0.5" step-strictly :precision="1" style="width:100%"/></el-form-item>
         </div>
         <PlannedHoursHint v-if="!editingId" :estimate="hoursEstimate" :loading="hoursLoading" :manual="hoursManual" :error="hoursError" @reset="useDefaultHours"/>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" :rows="3"/></el-form-item>

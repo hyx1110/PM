@@ -405,7 +405,10 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         task_actual_ends = [item["actual_end"] for item in tasks if item["actual_end"]]
         project_status = _effective_status(project.status, project.planned_end, today)
         delayed_task_count = sum(item["status"] == "delayed" for item in tasks)
-        overrun_task_count = sum(item["variance"] in {"warning", "severe"} for item in tasks)
+        overrun_task_count = sum(
+            item["status"] != "completed" and item["variance"] in {"warning", "severe"}
+            for item in tasks
+        )
         days_to_due = (project.planned_end - today).days
         if project_status == "delayed":
             health_status, reason = "delayed", f"计划结束已超期 {abs(days_to_due)} 天"
@@ -443,7 +446,10 @@ def dashboard_workbench(db: Session, user: User) -> dict:
 
     pending_items = _pending_items(db, user, now)
 
-    risk_filters = [RiskRecord.status.in_({"open", "handling"})]
+    risk_filters = [
+        RiskRecord.status.in_({"open", "handling"}),
+        or_(RiskRecord.task_id.is_(None), and_(Task.is_deleted.is_(False), Task.status != "completed")),
+    ]
     if project_scope is not None:
         risk_filters.append(or_(
             RiskRecord.project_id.in_(project_scope or {-1}),
@@ -516,7 +522,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
                 "occurred_at": datetime.combine(item["planned_end"], datetime.min.time()),
             })
             existing_alert_keys.add(("delayed_task", item["id"]))
-        if item["variance"] in {"warning", "severe"} and ("overrun_task", item["id"]) not in existing_alert_keys:
+        if item["status"] != "completed" and item["variance"] in {"warning", "severe"} and ("overrun_task", item["id"]) not in existing_alert_keys:
             risk_alerts.append({
                 "id": f"overrun-task-{item['id']}",
                 "type": "overrun_task",
@@ -628,6 +634,7 @@ def dashboard_workbench(db: Session, user: User) -> dict:
         .where(
             *task_filters,
             func.coalesce(execution_agg.c.actual_hours, 0) > Task.estimated_hours,
+            Task.status != "completed",
         ).distinct()
     ).all()
     overrun_task_ids = {task_id for task_id, _ in overrun_task_rows}

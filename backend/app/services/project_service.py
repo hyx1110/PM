@@ -25,6 +25,7 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services.notification_service import create_notification
+from app.services.notification_lifecycle_service import retire_approval_notifications
 from app.services.operation_log_service import log_operation
 from app.services.schedule_lifecycle_service import synchronize_schedule_statuses
 from app.services.visibility_service import has_global_project_access, related_project_ids, related_user_ids
@@ -434,6 +435,7 @@ def submit_project(db: Session, project_id: int, user: User) -> Project:
     project.approval_status = "pending"
     project.status = "not_started"
     project.approver_id = approver.id
+    retire_approval_notifications(db, "project", project.id)
     create_notification(
         db,
         approver.id,
@@ -589,6 +591,7 @@ def decide_project(
     project.approved_by = user.id
     project.approved_at = beijing_now()
     project.approval_note = payload.note
+    retire_approval_notifications(db, "project", project.id)
     recipient_ids = {project.manager_id}
     if project.created_by:
         recipient_ids.add(project.created_by)
@@ -672,11 +675,18 @@ def complete_project(db: Session, project_id: int, user: User) -> Project:
 
 
 def delete_draft_project(db: Session, project_id: int, user: User) -> None:
+    # Use the same project lock as approval, so a concurrent approval cannot
+    # turn a deletable pending project into an approved project mid-delete.
+    project = db.scalar(select(Project).where(Project.id == project_id)
+                        .with_for_update().execution_options(populate_existing=True))
+    if not project or project.is_deleted:
+        raise not_found("project not found")
     project = assert_project_manageable(db, project_id, user)
-    if project.approval_status not in {"draft", "rejected"}:
-        raise bad_request("只有草稿或已驳回项目可以删除")
+    if project.approval_status not in {"draft", "pending", "rejected"}:
+        raise bad_request("只有草稿、待审批或已驳回项目可以删除")
     before = model_to_dict(project)
     project.is_deleted = True
+    retire_approval_notifications(db, "project", project.id)
     log_operation(
         db,
         operator_id=user.id,
@@ -956,6 +966,7 @@ def withdraw_resource_request(db: Session, project_id: int, request_id: int, use
         raise bad_request("申请已审批或已撤回，不能再次撤回，请刷新页面")
     before = model_to_dict(item)
     item.status = "withdrawn"
+    retire_approval_notifications(db, "project_resource_request", item.id)
     item.updated_at = beijing_now()
     department = db.get(Department, project.department_id) if project.department_id else None
     if department and department.manager_id and department.manager_id != user.id:
@@ -1075,6 +1086,7 @@ def decide_resource_request(
                 related_type="project",
                 related_id=project.id,
             )
+    retire_approval_notifications(db, "project_resource_request", item.id)
     if approved:
         log_operation(db, operator_id=user.id, module="project", action="apply_resources",
                       object_type="project", object_id=project.id,

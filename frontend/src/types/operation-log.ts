@@ -19,6 +19,7 @@ export interface OperationLog {
 
 export interface OperationLogQuery extends PageQuery {
   operator_id?: number
+  personnel_scope?: string
   module?: string
   start_date?: string
   end_date?: string

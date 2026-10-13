@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ArrowDown, Bell } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { confirmAction } from '@/utils/confirm'
@@ -73,9 +73,19 @@ async function savePassword() {
   } finally { saving.value = false }
 }
 
-onMounted(async () => {
-  if (!userStore.hasPermission('notification:view')) return
-  await notificationStore.refreshUnreadCount()
+let unreadRefreshTimer: ReturnType<typeof setInterval> | undefined
+function refreshUnread() {
+  if (document.hidden || !userStore.hasPermission('notification:view')) return
+  void notificationStore.refreshUnreadCount()
+}
+onMounted(() => {
+  refreshUnread()
+  unreadRefreshTimer = setInterval(refreshUnread, 30_000)
+  window.addEventListener('focus', refreshUnread)
+})
+onBeforeUnmount(() => {
+  clearInterval(unreadRefreshTimer)
+  window.removeEventListener('focus', refreshUnread)
 })
 </script>
 

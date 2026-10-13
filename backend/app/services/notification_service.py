@@ -9,6 +9,7 @@ from app.core.exceptions import not_found
 from app.models.notification import Notification
 from app.models.user import User
 from app.services.email_service import dispatch_email_pending
+from app.services.notification_lifecycle_service import active_notification_predicate
 from app.services.business_text_service import BOOKING_CONTEXT_PREFIXES, booking_contexts, numeric_id, readable_booking_notification
 from app.utils.model import model_to_dict
 from app.utils.time import beijing_now
@@ -56,6 +57,7 @@ def list_notifications(
     filters = [
         Notification.recipient_id == user_id,
         Notification.is_deleted.is_(False),
+        active_notification_predicate(),
     ]
     if status:
         filters.append(Notification.status == status)
@@ -89,6 +91,7 @@ def unread_count(db: Session, user_id: int) -> int:
             Notification.recipient_id == user_id,
             Notification.status == "unread",
             Notification.is_deleted.is_(False),
+            active_notification_predicate(),
         )
     ) or 0
 
@@ -99,6 +102,7 @@ def mark_read(db: Session, notification_id: int, user_id: int) -> Notification:
             Notification.id == notification_id,
             Notification.recipient_id == user_id,
             Notification.is_deleted.is_(False),
+            active_notification_predicate(),
         )
     )
     if not item:
@@ -118,6 +122,7 @@ def mark_all_read(db: Session, user_id: int) -> int:
             Notification.recipient_id == user_id,
             Notification.status == "unread",
             Notification.is_deleted.is_(False),
+            active_notification_predicate(),
         )
         .values(status="read", read_at=beijing_now())
     )
@@ -187,6 +192,7 @@ def dispatch_pending(db: Session, limit: int = 100) -> dict:
             .join(User, User.id == Notification.recipient_id)
             .where(
                 Notification.is_deleted.is_(False),
+                active_notification_predicate(),
                 User.status == "active",
                 User.is_deleted.is_(False),
             )

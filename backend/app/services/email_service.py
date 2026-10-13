@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.notification import Notification
 from app.models.user import User
+from app.services.notification_lifecycle_service import active_notification_predicate
 from app.utils.time import BEIJING_TIMEZONE, beijing_now
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def dispatch_email_pending(db: Session, limit: int = 100) -> dict:
         # by concurrent workers. SMTP cannot guarantee exactly-once after a crash.
         item = db.scalar(select(Notification).where(
             Notification.email_status == "pending", Notification.is_deleted.is_(False),
+            active_notification_predicate(),
             or_(Notification.email_next_attempt_at.is_(None), Notification.email_next_attempt_at <= beijing_now()),
         ).order_by(Notification.id).limit(1).with_for_update(skip_locked=True))
         if item is None:
